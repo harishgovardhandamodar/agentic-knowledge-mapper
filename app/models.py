@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from sqlalchemy import Column, Integer, String, Text, Float, DateTime, ForeignKey
+from sqlalchemy import Column, Integer, String, Text, Float, DateTime, ForeignKey, UniqueConstraint
 from sqlalchemy.orm import relationship
 
 from .database import Base
@@ -28,6 +28,9 @@ class Investigation(Base):
     schedule_rounds = Column(Integer, nullable=False, default=2)
     last_scheduled_at = Column(DateTime, nullable=True)
     next_run_at = Column(DateTime, nullable=True)
+    # Search tuning.
+    preferred_domains = Column(String(500), nullable=False, default="")  # comma-separated
+    auto_save_explanations = Column(Integer, nullable=False, default=1)  # 0|1
 
     artifacts = relationship("Artifact", back_populates="investigation",
                              cascade="all, delete-orphan")
@@ -136,3 +139,22 @@ class Explanation(Base):
     thread_id = Column(Integer, nullable=True, index=True)  # root explanation of the thread
     quiz = Column(Text, nullable=True)  # JSON: interactive quiz items
     bookmarked = Column(Integer, nullable=False, default=0)  # 0|1 saved to bookmarks
+    watched = Column(Integer, nullable=False, default=0)  # 0|1 auto re-answer on drift
+
+
+class CorpusPage(Base):
+    """Cached copy of a fetched web page, searchable across explanations."""
+    __tablename__ = "corpus_pages"
+    __table_args__ = (UniqueConstraint("investigation_id", "url",
+                                       name="uq_corpus_inv_url"),)
+
+    id = Column(Integer, primary_key=True, index=True)
+    investigation_id = Column(Integer, ForeignKey("investigations.id", ondelete="CASCADE"),
+                              nullable=False, index=True)
+    url = Column(String(1000), nullable=False)
+    title = Column(String(500), nullable=True)
+    domain = Column(String(200), nullable=True)
+    text = Column(Text, nullable=True)
+    published = Column(String(40), nullable=True)  # ISO-ish date string, best effort
+    images = Column(Text, nullable=True)  # JSON list
+    fetched_at = Column(DateTime, default=_now)

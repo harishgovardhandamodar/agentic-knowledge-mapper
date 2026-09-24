@@ -60,6 +60,9 @@ _MIGRATIONS = [
     ("explanations", "thread_id", "INTEGER"),
     ("explanations", "quiz", "TEXT"),
     ("explanations", "bookmarked", "INTEGER NOT NULL DEFAULT 0"),
+    ("explanations", "watched", "INTEGER NOT NULL DEFAULT 0"),
+    ("investigations", "preferred_domains", "VARCHAR(500)"),
+    ("investigations", "auto_save_explanations", "INTEGER NOT NULL DEFAULT 1"),
 ]
 
 

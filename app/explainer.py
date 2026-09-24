@@ -10,13 +10,13 @@ import time
 import traceback
 import urllib.parse
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import httpx
 from bs4 import BeautifulSoup
 
 from .database import SessionLocal
-from .models import Explanation, Artifact
+from .models import Explanation, Artifact, CorpusPage, Investigation, Relationship
 from . import llm
 from .search import search_web, UA
 
@@ -136,15 +136,44 @@ def _fetch_page(url: str) -> dict | None:
             images.append({"src": src, "alt": alt, "hero": False})
         if len(images) >= 6:
             break
-    return {"url": url, "title": title or url, "text": text, "images": images}
+    return {"url": url, "title": title or url, "text": text, "images": images,
+            "published": _page_date(soup, text)}
+
+
+def _page_date(soup, text: str) -> str | None:
+    """Best-effort publication date: meta tags, <time> elements, or an ISO-ish date
+    found early in the article text. Returns 'YYYY-MM-DD' or None."""
+    cands = []
+    for tag in ("meta[property='article:published_time']", "meta[itemprop='datePublished']",
+                "meta[name='date']", "meta[name='dc.date']", "meta[name='datePublished']",
+                "meta[name='citation_date']", "meta[property='og:article:published_time']",
+                "meta[property='article:modified_time']"):
+        m = soup.select_one(tag)
+        if m and m.get("content"):
+            cands.append(m.get("content"))
+    for t in soup.find_all("time"):
+        if t.get("datetime"):
+            cands.append(t.get("datetime"))
+        elif t.get_text(strip=True):
+            cands.append(t.get_text(strip=True))
+    for c in cands:
+        m = re.search(r"(20\d{2}-\d{2}-\d{2})|(20\d{2}/\d{1,2}/\d{1,2})", c)
+        if m:
+            d = m.group(1) or m.group(2)
+            d = d.replace("/", "-")
+            return d
+    m = re.search(r"\b(20\d{2}-\d{2}-\d{2})\b", text[:2000])
+    return m.group(1) if m else None
 
 
 MIN_PAGE_CHARS = 300
 
 
 def _research(question: str, max_pages: int = MAX_PAGES, trace: dict | None = None,
-              extra_queries: list | None = None) -> tuple[list, list]:
-    """Returns (pages, image_candidates)."""
+              extra_queries: list | None = None, preferred_domains: list | None = None,
+              corpus: dict | None = None, expand_terms: list | None = None
+              ) -> tuple[list, list, int]:
+    """Returns (pages, image_candidates, corpus_hits_used)."""
     trace = trace if trace is not None else {}
     if extra_queries:
         queries = extra_queries[:3]
@@ -161,7 +190,14 @@ def _research(question: str, max_pages: int = MAX_PAGES, trace: dict | None = No
             queries = [q for q in (plan.get("queries") or []) if isinstance(q, str)][:3]
         except Exception:
             queries = []
-    queries = queries or [question]
+    if expand_terms:
+        qq = []
+        for q in queries:
+            qq.append(q)
+            for t in expand_terms[:2]:
+                qq.append(f"{q} {t}")
+        queries = qq
+    queries = [q for q in (queries or [question]) if q][:6]
     trace.setdefault("queries", []).append(queries)
     seen, hits = set(), []
     t0 = time.time()
@@ -172,41 +208,72 @@ def _research(question: str, max_pages: int = MAX_PAGES, trace: dict | None = No
                 if key and key not in seen:
                     seen.add(key)
                     hits.append({**h, "query": queries[-1] if len(queries) == 1 else "multi"})
+    # Preferred-domain pinning (#13): keep only domains the user pinned when any are set.
+    if preferred_domains:
+        prefs = [d.strip().lower() for d in preferred_domains if d.strip()]
+        if prefs:
+            keep = [h for h in hits
+                    if any(_domain(h.get("url") or "").lower().endswith(d) or
+                           _domain(h.get("url") or "").lower() == d for d in prefs)]
+            if keep:
+                hits = keep
+            else:
+                hits = hits[:3]  # fall back to top hits rather than returning nothing
     trace.setdefault("timings_ms", {})["search"] = int((time.time() - t0) * 1000)
     trace.setdefault("hits", []).extend({
         "url": h.get("url"), "title": h.get("title"), "domain": _domain(h.get("url")),
         "source": h.get("source"), "rank": h.get("rank"), "query": h.get("query"),
     } for h in hits[:30])
     pages, rejected = [], []
+    cached = 0
+    corpus = corpus or {}
     t0 = time.time()
-    with ThreadPoolExecutor(max_workers=6) as pool:
-        for page in pool.map(_fetch_page, [h["url"] for h in hits[:max_pages * 2]]):
-            if page and page["text"] and len(page["text"]) >= MIN_PAGE_CHARS:
-                if len(pages) < max_pages:
-                    pages.append(page)
-            else:
-                rejected.append({"url": "", "reason": page is None and "fetch failed or non-HTML" or "no readable text"})
-    # fill rejected with urls we actually tried
     tried = [h["url"] for h in hits[:max_pages * 2]]
+    results = []
+    for url in tried:
+        cache = corpus.get(url.lower()) or corpus.get(url)
+        if cache and cache.get("text"):
+            results.append({"kind": "cache", "url": url, "page": cache})
+        else:
+            results.append({"kind": "fetch", "url": url})
+    to_fetch = [r["url"] for r in results if r["kind"] == "fetch"]
+    fetched_map = {}
+    if to_fetch:
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            for page in pool.map(_fetch_page, to_fetch):
+                if page and page.get("url"):
+                    fetched_map[page["url"].lower()] = page
+    for r in results:
+        if r["kind"] == "cache":
+            page = dict(r["page"])
+            page["cached"] = True
+            cached += 1
+            pages.append(page)
+        else:
+            page = fetched_map.get(r["url"].lower())
+            if page:
+                pages.append(page)
+    kept = [p for p in pages if p.get("text") and len(p.get("text") or "") >= MIN_PAGE_CHARS]
+    pages = kept[:max_pages]
     reject_urls = [u for u in tried if u.lower() not in {p["url"].lower() for p in pages}]
-    rejected = [{"url": u, "reason": "fetch failed, non-HTML, or no readable text"} for u in reject_urls]
     trace.setdefault("timings_ms", {})["fetch"] = int((time.time() - t0) * 1000)
     trace.setdefault("fetched", []).extend({
         "url": page["url"], "title": page["title"], "kept": True, "reason": "page",
         "chars": len(page["text"]), "images": len(page["images"]),
+        "cached": bool(page.get("cached")),
     } for page in pages)
     trace.setdefault("fetched", []).extend({
-        "url": url, "title": "", "kept": False, "reason": "unreadable",
+        "url": u, "title": "", "kept": False, "reason": "unreadable",
         "chars": 0, "images": 0,
-    } for url in reject_urls)
+    } for u in reject_urls)
     images = []
     for p in pages:
-        for img in p["images"]:
-            if all(i["src"] != img["src"] for i in images):
-                images.append({**img, "page": p["title"][:80], "page_url": p["url"]})
+        for img in p.get("images") or []:
+            if all(i["src"] != img.get("src") for i in images):
+                images.append({**img, "page": p.get("title", "")[:80], "page_url": p.get("url")})
             if len(images) >= 14:
                 break
-    return pages, images
+    return pages[:max_pages], images, cached
 
 
 MODES = {
@@ -284,9 +351,11 @@ def _quote_valid(text: str, quote: str) -> bool:
 
 
 def _verify_grounding(answer: dict, pages: list) -> dict:
-    """Drop invented citations/quotes; keep only ones found verbatim in sources."""
+    """Drop invented citations/quotes; keep only ones found verbatim in sources.
+    Also score each claim's confidence from how many DISTINCT sources back it."""
     stats = {"citations_total": 0, "citations_valid": 0, "citations_dropped": 0,
-             "claims_total": 0, "grounding_violations": []}
+             "claims_total": 0, "grounding_violations": [],
+             "corroboration": {"strong": 0, "moderate": 0, "weak": 0}}
     texts = [p["text"] for p in pages]
     for sec in (answer.get("sections") or []):
         new_claims = []
@@ -302,7 +371,13 @@ def _verify_grounding(answer: dict, pages: list) -> dict:
                 else:
                     stats["citations_dropped"] += 1
             if kept:
+                n_src = len({k["sourceIndex"] for k in kept})
+                confidence = "high" if n_src >= 3 else "medium" if n_src == 2 else "low"
                 c["citations"] = kept
+                c["confidence"] = confidence
+                c["n_sources"] = n_src
+                stats["corroboration"][
+                    "strong" if n_src >= 3 else "moderate" if n_src == 2 else "weak"] += 1
                 new_claims.append(c)
             else:
                 stats["grounding_violations"].append(
@@ -316,16 +391,26 @@ def _verify_grounding(answer: dict, pages: list) -> dict:
 
 def _compose(question: str, pages: list, images: list, mode: str = "explain",
              depth: str = "balanced", audience: str = "intermediate",
-             max_tokens: int = 4096) -> dict:
+             max_tokens: int = 4096, section_plan: list | None = None) -> dict:
     m = mode or "explain"
     ctx = []
     for i, p in enumerate(pages):
-        ctx.append(f"[{i}] {p['title']}\nURL: {p['url']}\n{p['text'][:2500]}")
+        line = f"[{i}] {p['title']}\nURL: {p['url']}"
+        if p.get("published"):
+            line += f"\nPublished: {p['published']}"
+        line += f"\n{p['text'][:2500]}"
+        ctx.append(line)
     img_list = "\n".join(
         f"- {img['src']} (from: {img['page']}; alt: {img['alt'][:100]})"
         for img in images)
     mode_rules = _mode_rules(m, depth)
     aud_hint = AUDIENCE_HINTS.get(audience, AUDIENCE_HINTS["intermediate"])
+    section_hint = ""
+    if section_plan:
+        topics = "; ".join(f"'{s.get('heading')}' (focus: {s.get('sub_question')})"
+                           for s in section_plan)
+        section_hint = (f"\nStructure the answer with sections in EXACTLY this order and topics: "
+                        f"{topics}. Keep each body on-topic.")
 
     # Repair ladder: on JSON failure, retry with progressively simpler schemas.
     schema_steps = [
@@ -351,13 +436,19 @@ def _compose(question: str, pages: list, images: list, mode: str = "explain",
                 {"role": "system",
                  "content": ("You are a technical explainer. Write a clear, accurate explanation "
                              "grounded ONLY in the provided sources (prefix graph:// = this project's "
-                             "own knowledge graph). Reply with STRICT, well-formed JSON only. "
+                             "own knowledge graph). When sources disagree on any point, say so in "
+                             "\"conflicts\". Reply with STRICT, well-formed JSON only. "
                              "Escape all quotes inside strings.")},
                 {"role": "user",
-                 "content": (f"Question: {question}\n\nAudience: {aud_hint}\n\n{mode_rules}\n\n"
+                 "content": (f"Question: {question}\n\nAudience: {aud_hint}\n\n{mode_rules}"
+                             f"{section_hint}\n\n"
                              f"Source budget: {len(pages)} sources.\n\nSources:\n" + "\n\n".join(ctx) +
                              f"\n\nCandidate images (reference EXACT URLs, don't invent):\n{img_list or '(none)'}\n\n"
                              "Reply JSON: {\"summary\": str (2-3 sentences), " + step["json"] + ", "
+                             "\"as_of\": str (today's date YYYY-MM-DD), "
+                             "\"conflicts\": [{\"topic\": str, \"view_a\": str, \"view_b\": str, "
+                             "\"sources_a\": [int], \"sources_b\": [int]}] (only include when sources "
+                             "disagree on a substantive point, max 3), "
                              "\"key_points\": [str x3-6], plus any additional keys your mode rules require. "
                              "\"sources\": [{\"title\": str, \"url\": str}] (only URLs from the sources above)}")}],
                 max_tokens=max_tokens)
@@ -376,6 +467,18 @@ def _compose(question: str, pages: list, images: list, mode: str = "explain",
                          if isinstance(s, dict) and s.get("url") in valid_srcs][: len(pages)]
     if not answer.get("sources"):
         answer["sources"] = [{"title": p["title"], "url": p["url"]} for p in pages]
+    n_src = len(answer["sources"])
+    conflicts = []
+    for c in (answer.get("conflicts") or [])[:3]:
+        if not isinstance(c, dict) or not c.get("topic") or not c.get("view_a") or not c.get("view_b"):
+            continue
+        sa = [i for i in (c.get("sources_a") or []) if isinstance(i, int) and 0 <= i < n_src][:3]
+        sb = [i for i in (c.get("sources_b") or []) if isinstance(i, int) and 0 <= i < n_src][:3]
+        if not sa and not sb:
+            continue
+        conflicts.append({"topic": str(c["topic"])[:200], "view_a": str(c["view_a"])[:600],
+                          "view_b": str(c["view_b"])[:600], "sources_a": sa, "sources_b": sb})
+    answer["conflicts"] = conflicts
     return answer
 
 
@@ -521,6 +624,337 @@ def _extract_concepts(question: str, answer: dict) -> dict:
         return {"concepts": [], "relations": []}
 
 
+def _set_meta(exp, meta: dict, db) -> None:
+    try:
+        exp.meta = json.dumps(meta)
+        db.commit()
+    except Exception:
+        db.rollback()
+
+
+def _expand_terms_for(inv, db) -> list:
+    """Domain vocabulary to append to search queries: keywords + artifact titles."""
+    if inv is None:
+        return []
+    terms = [t.strip() for t in (inv.keywords or "").split(",") if t.strip()]
+    try:
+        for a in db.query(Artifact).filter(Artifact.investigation_id == inv.id).all():
+            terms.append(a.title or "")
+    except Exception:
+        pass
+    return [t for t in terms if t][:6]
+
+
+def _source_affinity(db, inv_id: int) -> dict:
+    """Per-investigation learned source preference from feedback thumbs (#8)."""
+    fav = {}
+    for e in db.query(Explanation).filter(Explanation.investigation_id == inv_id).all():
+        try:
+            m = json.loads(e.meta or "{}")
+        except Exception:
+            m = {}
+        for fb in (m.get("feedback") or []):
+            url = fb.get("url")
+            if not url or fb.get("up") is None:
+                continue
+            fav[url] = fav.get(url, 0.0) + (0.25 if bool(fb.get("up")) else -0.25)
+    return {u: max(0.0, min(1.0, s)) for u, s in fav.items() if s}
+
+
+def _save_corpus(db, inv_id: int, page: dict) -> None:
+    try:
+        url = (page.get("url") or "").strip()
+        if not url or page.get("graph_id") or page.get("explanation_id"):
+            return
+        row = db.query(CorpusPage).filter(
+            CorpusPage.investigation_id == inv_id,
+            CorpusPage.url == url).first()
+        if row is None:
+            row = CorpusPage(investigation_id=inv_id, url=url)
+            db.add(row)
+        row.title = (page.get("title") or "")[:500]
+        row.text = (page.get("text") or "")[:30000]
+        row.domain = _domain(url)
+        row.published = page.get("published")
+        row.images = json.dumps(page.get("images") or [])[:8000]
+        row.fetched_at = datetime.now(timezone.utc)
+        db.commit()
+    except Exception:
+        db.rollback()
+
+
+def _corpus_images(row) -> list:
+    try:
+        if not row.images:
+            return []
+        imgs = json.loads(row.images)
+        return imgs if isinstance(imgs, list) else []
+    except Exception:
+        return []
+
+
+def _collect_corpus_context(db, inv_id: int, question: str, limit: int = 8,
+                            affinity: dict | None = None) -> list:
+    """Previously-fetched pages ranked against the question (corpus memory, #2)."""
+    qw = _tok(question)
+    ranked = []
+    for row in db.query(CorpusPage).filter(CorpusPage.investigation_id == inv_id).all():
+        text = row.text or ""
+        score = 0.4 * _jaccard(qw, _tok(row.title)) + 0.1 * _jaccard(qw, _tok(text))
+        score += 0.05 * sum(1 for t in qw if t in text)
+        if affinity and row.url in affinity:
+            score += 0.25 * affinity[row.url]
+        if score > 0:
+            ranked.append((score, row))
+    ranked.sort(key=lambda x: x[0], reverse=True)
+    return [{"url": row.url, "title": row.title or row.url, "text": (row.text or "")[:12000],
+             "images": _corpus_images(row), "published": row.published,
+             "corpus": True, "corpus_id": row.id}
+            for _, row in ranked[:limit]]
+
+
+def _plan_sections(question: str, mode: str) -> list | None:
+    """Outline sections + per-section researchable sub-questions (deep only, #5)."""
+    if (mode or "explain") in ("tldr", "glossary"):
+        return None
+    try:
+        r = llm.chat_json([
+            {"role": "system",
+             "content": "You outline an explanation into sections, each with a focused "
+                        "researchable sub-question. Reply JSON only."},
+            {"role": "user",
+             "content": f"Question: {question}\n\nReply {{\"sections\": [{{\"heading\": str, "
+                        "\"sub_question\": str (a specific question one web search could answer)"
+                        "}}]}} — 3 to 5 sections, non-overlapping."}],
+            max_tokens=700)
+        secs = [s for s in (r.get("sections") or []) if isinstance(s, dict)
+                and s.get("heading") and s.get("sub_question")][:5]
+        return secs if len(secs) >= 2 else None
+    except Exception:
+        return None
+
+
+def _critique_answer(question: str, answer: dict, pages: list) -> list | None:
+    """Second-pass reviewer: verdict per claim against sources (#12)."""
+    claims = []
+    for sec in (answer.get("sections") or []):
+        for c in (sec.get("claims") or []):
+            claims.append((sec.get("heading", ""), c.get("text", "")))
+            if len(claims) >= 6:
+                break
+        if len(claims) >= 6:
+            break
+    if not claims:
+        return None
+    brief = "\n".join(f"[{i}] {h}: {t[:200]}" for i, (h, t) in enumerate(claims))
+    try:
+        r = llm.chat_json([
+            {"role": "system",
+             "content": "You are a skeptical fact-checker. Judge each claim against the "
+                        "provided source excerpts. Reply JSON only."},
+            {"role": "user",
+             "content": f"Question: {question}\n\nClaim list:\n{brief}\n\nSources ({len(pages)}):\n"
+                        + "\n".join(f"- [{i}] {p['title']}: {p['text'][:900]}"
+                                    for i, p in enumerate(pages[:8])) +
+                        "\n\nReply {\"reviews\": [{\"index\": int, \"verdict\": "
+                        "\"supported|unsupported|uncertain\", \"note\": str (1 sentence, only real "
+                        "discrepancies — do not nitpick)}]} — one per claim."}],
+            max_tokens=2000)
+        reviews = [rv for rv in (r.get("reviews") or [])
+                   if isinstance(rv, dict) and isinstance(rv.get("index"), int)]
+        out = []
+        for rv in reviews:
+            if not (0 <= rv["index"] < len(claims)):
+                continue
+            h, t = claims[rv["index"]]
+            out.append({"heading": h, "claim": t[:200],
+                        "verdict": rv.get("verdict") if rv.get("verdict") in
+                        ("supported", "unsupported", "uncertain") else "uncertain",
+                        "note": (rv.get("note") or "")[:300]})
+        return out
+    except Exception:
+        return None
+
+
+def _drift(old: "Explanation", new: "Explanation") -> str:
+    try:
+        oa = json.loads(old.answer or "{}")
+        na = json.loads(new.answer or "{}")
+        ok = set(str(k) for k in (oa.get("key_points") or []))
+        nk = set(str(k) for k in (na.get("key_points") or []))
+        union = ok | nk
+        if not union:
+            return "same"
+        return "same" if len(ok & nk) / len(union) >= 0.5 else "changed"
+    except Exception:
+        return "changed"
+
+
+def _investigation_roadmap(db, inv_id: int) -> list:
+    """Aggregate open questions across an investigation's explanations (#4)."""
+    agg = {}
+    exps = db.query(Explanation).filter(Explanation.investigation_id == inv_id).all()
+    for e in exps:
+        try:
+            t = json.loads(e.trace or "{}")
+        except Exception:
+            t = {}
+        def push(q, kind):
+            q = (q or "").strip()
+            if not q or len(q) < 8:
+                return
+            item = agg.setdefault(q.lower(),
+                                  {"question": q, "kinds": set(), "exps": set()})
+            item["kinds"].add(kind)
+            item["exps"].add(e.id)
+        for q in (t.get("followup_queries") or []):
+            push(q, "gap")
+        for q in (t.get("gaps") or []):
+            push(q, "open")
+        hp = t.get("hop_plan") or []
+        if hp:
+            for q in hp[-1].get("missing_topics") or []:
+                push(q, "deepen")
+    items = sorted(agg.values(), key=lambda it: -len(it["exps"]))
+    for it in items:
+        it["kinds"] = sorted(it["kinds"])
+        it["exps"] = sorted(it["exps"])
+    return items[:30]
+
+
+def _save_explanation_to_graph(db, exp: "Explanation") -> dict:
+    """Persist an answer as essay + concepts + typed relations. Concept extraction is
+    cached on exp.meta so a second save (or auto-save + manual) is instant (#3, #9)."""
+    answer = json.loads(exp.answer or "{}")
+    meta = {}
+    try:
+        meta = json.loads(exp.meta or "{}")
+    except Exception:
+        pass
+    cached = meta.get("concepts")
+    if isinstance(cached, dict) and cached.get("concepts"):
+        extracted = cached
+    else:
+        extracted = _extract_concepts(exp.question, answer)
+        meta["concepts"] = {"concepts": extracted["concepts"],
+                            "relations": extracted["relations"]}
+        exp.meta = json.dumps(meta)
+        db.commit()
+    concepts, relations = extracted["concepts"], extracted["relations"]
+
+    def norm_title(s):
+        return re.sub(r"[^a-z0-9]+", " ", (s or "").lower()).strip()
+
+    def find_artifact(title, atype):
+        return db.query(Artifact).filter(
+            Artifact.investigation_id == exp.investigation_id,
+            Artifact.artifact_type == atype,
+            Artifact.title == title).first()
+
+    def find_artifact_by_url(url):
+        return db.query(Artifact).filter(
+            Artifact.investigation_id == exp.investigation_id,
+            Artifact.url == url).first()
+
+    root_text = (answer.get("summary") or "") + "\n\n" + "\n\n".join(
+        f"## {s.get('heading')}\n{s.get('body')}" for s in answer.get("sections") or [])
+    root = find_artifact(exp.question[:200], "essay")
+    if not root:
+        root = Artifact(investigation_id=exp.investigation_id, title=exp.question[:200],
+                        artifact_type="essay", description=(answer.get("summary") or "")[:2000],
+                        content=root_text[:6000], author="explainer",
+                        tags="explainer," + (exp.mode or "explain"),
+                        relevance=None, review="pending", origin="agent")
+        db.add(root)
+        db.flush()
+    elif not (root.content and len(root.content or "") > 100):
+        root.content = root_text[:6000]  # refresh stale/empty essay from a previous save
+
+    concept_ids = {}
+    matched = 0
+    for c in concepts:
+        t = c.get("name", "")[:200]
+        if not t.strip():
+            continue
+        existing = None
+        for art in db.query(Artifact).filter(
+                Artifact.investigation_id == exp.investigation_id,
+                Artifact.artifact_type == "concept").all():
+            if norm_title(art.title) == norm_title(t):
+                existing = art
+                break
+        if existing:
+            concept_ids[norm_title(t)] = existing.id
+            matched += 1
+        else:
+            a = Artifact(investigation_id=exp.investigation_id, title=t[:200],
+                         artifact_type="concept",
+                         description=(c.get("definition") or "")[:1000],
+                         author="explainer", tags="concept,explainer",
+                         review="pending", origin="agent")
+            db.add(a)
+            db.flush()
+            concept_ids[norm_title(t)] = a.id
+
+    def add_rel(src, dst, rtype, desc=None):
+        if src == dst:
+            return False
+        exists = (db.query(Relationship).filter(
+            Relationship.investigation_id == exp.investigation_id,
+            Relationship.source_id == src, Relationship.target_id == dst,
+            Relationship.relationship_type == rtype).first())
+        if exists:
+            return False
+        db.add(Relationship(investigation_id=exp.investigation_id, source_id=src,
+                            target_id=dst, relationship_type=rtype,
+                            description=desc, origin="agent"))
+        return True
+
+    n_rel = 0
+    for nid in concept_ids.values():
+        n_rel += add_rel(root.id, nid, "EXPLAINS")
+    for s in answer.get("sources") or []:
+        url = s.get("url") or ""
+        if not url.startswith("http"):
+            continue
+        art = find_artifact_by_url(url)
+        if not art:
+            art = Artifact(investigation_id=exp.investigation_id,
+                           title=(s.get("title") or url)[:200], artifact_type="source",
+                           url=url, author="explainer",
+                           tags="source,explainer", review="pending", origin="agent")
+            db.add(art)
+            db.flush()
+    for sec in answer.get("sections") or []:
+        for c in sec.get("claims") or []:
+            for cit in c.get("citations") or []:
+                idx = cit.get("sourceIndex")
+                if not isinstance(idx, int):
+                    continue
+                src = (answer.get("sources") or [])[idx] if idx < len(answer.get("sources") or []) else None
+                if not src or not (src.get("url") or "").startswith("http"):
+                    continue
+                art = db.query(Artifact).filter(Artifact.url == src["url"]).first()
+                if not art:
+                    continue
+                n_rel += add_rel(root.id, art.id, "CITES")
+    n2id = concept_ids
+    for r in relations:
+        f = n2id.get(norm_title(r.get("from")))
+        t = n2id.get(norm_title(r.get("to")))
+        if f and t:
+            n_rel += add_rel(f, t, r.get("type"))
+    db.commit()
+    # Record node ids (for entity-resolution pills, #9).
+    meta = json.loads(exp.meta or "{}")
+    meta["concepts"]["artifact_ids"] = [concept_ids[k] for k in concept_ids]
+    exp.meta = json.dumps(meta)
+    db.commit()
+    return {"created_artifacts": len(concept_ids) + 1,
+            "created_relationships": n_rel, "concepts": list(concept_ids.keys()),
+            "matched_concepts": matched}
+
+
 def run_explainer(exp_id: int, max_pages: int = MAX_PAGES, max_hops: int = 0):
     db = SessionLocal()
     trace = {}
@@ -544,6 +978,7 @@ def run_explainer(exp_id: int, max_pages: int = MAX_PAGES, max_hops: int = 0):
             "queries": [], "hits": [], "fetched": [], "timings_ms": {},
             "hops": 0, "pages_read": 0, "rejected_count": 0, "web_skipped": False,
             "graph_context_used": False, "graph_artifacts": [],
+            "corpus_hits": [], "corpus_cache_hits": 0,
             "coverage": None, "gaps": [], "web_fallback_reason": None,
         }
         # Follow-up context: reuse the parent's targeted excerpt as a synthetic source.
@@ -563,6 +998,36 @@ def run_explainer(exp_id: int, max_pages: int = MAX_PAGES, max_hops: int = 0):
         if graph:
             trace["graph_context_used"] = not graph_brief.get("needs_web")
 
+        inv = db.query(Investigation).filter(
+            Investigation.id == exp.investigation_id).first()
+        affinity = _source_affinity(db, exp.investigation_id) if inv else {}
+        corpus_map = {}
+        if inv:
+            for row in db.query(CorpusPage).filter(
+                    CorpusPage.investigation_id == inv.id).all():
+                corpus_map[row.url.lower()] = {"url": row.url, "title": row.title or row.url,
+                                               "text": row.text or "", "images": _corpus_images(row),
+                                               "published": row.published}
+        expand_terms = _expand_terms_for(inv, db) if inv else []
+        pref_domains = [d.strip() for d in (inv.preferred_domains or "").split(",")
+                        if d.strip()] if inv else []
+        section_plan = _plan_sections(exp.question, mode) if depth == "deep" else None
+        if section_plan:
+            trace["section_plan"] = [s.get("heading") for s in section_plan]
+        corpus_ctx = _collect_corpus_context(db, exp.investigation_id, exp.question,
+                                             affinity=affinity)
+        trace["corpus_hits"] = [{"url": c["url"], "title": c["title"], "cached": True}
+                                for c in corpus_ctx]
+
+        def set_phase(v):
+            try:
+                meta["phase"] = v
+                exp.meta = json.dumps(meta)
+                db.commit()
+            except Exception:
+                db.rollback()
+
+        set_phase("researching")
         pages, images, answer, grounding = [], [], None, None
         seen_urls = set()
         hop_list = []
@@ -572,13 +1037,26 @@ def run_explainer(exp_id: int, max_pages: int = MAX_PAGES, max_hops: int = 0):
                 if graph and not graph_brief.get("needs_web"):
                     trace["web_skipped"] = True
                     hop_pages = _graph_pages(graph)
+                    if corpus_ctx:
+                        have = {p["url"] for p in hop_pages}
+                        hop_pages += [c for c in corpus_ctx if c["url"] not in have][:4]
                 else:
                     if graph_brief.get("gaps") and not graph_brief.get("needs_web"):
                         trace["web_fallback_reason"] = "graph partial"
                     extra = (graph_brief.get("followup_queries")
                              if graph_brief.get("needs_web") else None)
-                    hop_pages, images = _research(exp.question, max_pages,
-                                                  trace=trace, extra_queries=extra)
+                    if depth == "deep" and section_plan:
+                        sq = [s.get("sub_question") for s in section_plan[:3]
+                              if s.get("sub_question")]
+                        extra = list(dict.fromkeys((extra or []) + sq))
+                    hop_pages, images, cached_n = _research(
+                        exp.question, max_pages, trace=trace, extra_queries=extra,
+                        corpus=corpus_map, expand_terms=expand_terms,
+                        preferred_domains=pref_domains)
+                    trace["corpus_cache_hits"] += cached_n
+                    if corpus_ctx:
+                        have = {p["url"] for p in hop_pages}
+                        hop_pages += [c for c in corpus_ctx if c["url"] not in have][:2]
                     if graph:
                         trace["web_fallback_reason"] = "hybrid: graph + web"
                         hop_pages = _graph_pages(graph[:4]) + hop_pages
@@ -586,10 +1064,12 @@ def run_explainer(exp_id: int, max_pages: int = MAX_PAGES, max_hops: int = 0):
                 missing = hop_list[-1].get("missing_topics", [])[:2]
                 if not missing:
                     break
-                hop_pages, new_img = _research(
+                hop_pages, new_img, cached_n = _research(
                     exp.question, max(int(max_pages * 0.4), 2), trace=trace,
-                    extra_queries=missing)
+                    extra_queries=missing, corpus=corpus_map, expand_terms=expand_terms,
+                    preferred_domains=pref_domains)
                 images += new_img
+                trace["corpus_cache_hits"] += cached_n
                 hop_list[-1]["new_pages"] = len(
                     [p for p in hop_pages if p["url"] not in seen_urls])
             # Dedupe pages by url (keep first seen).
@@ -608,18 +1088,32 @@ def run_explainer(exp_id: int, max_pages: int = MAX_PAGES, max_hops: int = 0):
                           "text": _parent_excerpt(parent) or parent.question[:800],
                           "images": [], "explanation_id": parent.id, "graph_id": None}] + pages
                 parent = None  # only once
+            set_phase("composing")
             answer = _compose(exp.question, pages[:12], images, mode=mode, depth=depth,
-                              audience=audience, max_tokens=max_tokens)
+                              audience=audience, max_tokens=max_tokens,
+                              section_plan=section_plan)
             grounding = _verify_grounding(answer, pages)
             eval_res = _eval_answer(exp.question, answer)
             if eval_res.get("needs_more") and (hop + 1) <= max_hops:
                 hop_list.append({"hop": hop + 1,
                                  "missing_topics": eval_res.get("missing_topics", []),
                                  "new_pages": 0})
+                set_phase("researching")
                 continue
             break
         trace["hops"] = len(hop_list)
         trace["hop_plan"] = hop_list
+        answer["as_of"] = datetime.now(timezone.utc).date().isoformat()
+        pubmap = {str(p.get("url")): p.get("published") for p in pages
+                  if p.get("url") and p.get("published")}
+        for s in answer.get("sources") or []:
+            if s.get("url") and not s.get("published") and s["url"] in pubmap:
+                s["published"] = pubmap[s["url"]]
+        set_phase("critique")
+        critique = _critique_answer(exp.question, answer, pages)
+        if critique:
+            answer["critique"] = critique
+            trace["critique"] = len(critique)
         trace["citations"] = {k: v for k, v in grounding.items()
                               if k != "grounding_violations"} if grounding else {}
         if grounding and grounding["grounding_violations"]:
@@ -627,6 +1121,41 @@ def run_explainer(exp_id: int, max_pages: int = MAX_PAGES, max_hops: int = 0):
         if grounding:
             answer["grounding"] = {k: v for k, v in grounding.items()
                                    if k != "grounding_violations"}
+        exp.answer = json.dumps(answer)  # persist before graph save so it extracts real content
+        if exp.parent_id is None and not meta.get("watch_of") and inv is not None:
+            auto = inv.auto_save_explanations
+            if auto is None:
+                auto = 1
+            if auto:
+                set_phase("saving")
+                try:
+                    save_result = _save_explanation_to_graph(db, exp)
+                    trace["save_to_graph"] = save_result
+                    try:
+                        meta = json.loads(exp.meta or "{}")
+                    except Exception:
+                        pass
+                except Exception as save_err:
+                    trace["save_to_graph"] = {"error": str(save_err)[:300]}
+        watch_id = meta.get("watch_of")
+        if watch_id:
+            old = db.query(Explanation).filter(Explanation.id == int(watch_id)).first()
+            if old:
+                try:
+                    drift = _drift(old, exp)
+                    meta["drift"] = drift
+                    trace["drift"] = drift
+                except Exception:
+                    pass
+        for p in pages:
+            if (p.get("url") and p.get("url").startswith("http")
+                    and p.get("text") and not p.get("graph_id")
+                    and not p.get("corpus")):
+                try:
+                    _save_corpus(db, exp.investigation_id, p)
+                except Exception:
+                    pass
+        set_phase("done")
         diagram = _gen_diagram(exp.question, pages, mode, depth)
         if diagram:
             answer["diagram"] = diagram
@@ -642,6 +1171,7 @@ def run_explainer(exp_id: int, max_pages: int = MAX_PAGES, max_hops: int = 0):
                            "hops": trace["hops"]}
         exp.answer = json.dumps(answer)
         exp.trace = json.dumps(trace)
+        exp.meta = json.dumps(meta)
         exp.status = "done"
         exp.hops = trace.get("hops", 0)
         exp.finished_at = datetime.now(timezone.utc)

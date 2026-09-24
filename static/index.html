@@ -141,6 +141,40 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .hist-row:hover { border-color: var(--accent); }
 .hist-row .q { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mode-pill { font-size: 10px; text-transform: uppercase; letter-spacing: 0.4px; padding: 2px 8px; border: 1px solid var(--border); border-radius: 20px; color: var(--accent); }
+.mode-pill.ok { color: var(--green); border-color: var(--green); }
+.mode-pill.warn { color: var(--orange); border-color: var(--orange); }
+.mode-pill.in-graph { color: var(--teal); border-color: var(--teal); }
+.prefs-row { display: flex; gap: 8px; align-items: center; font-size: 11px; color: var(--text2); flex-wrap: wrap; margin: 0 0 10px; }
+.prefs-row input[type=text], .prefs-row input:not([type=checkbox]) { background: var(--bg2); border: 1px solid var(--border); border-radius: 6px; color: var(--text); padding: 3px 8px; font-size: 11px; }
+.tiny-badge { font-size: 9px; color: var(--accent); border: 1px solid var(--accent); border-radius: 10px; padding: 0 6px; margin-left: 6px; }
+.concept-pill { font-size: 11px; padding: 2px 9px; border: 1px solid var(--teal); color: var(--teal); background: transparent; border-radius: 999px; cursor: pointer; }
+.concept-pill:hover { background: rgba(45,212,191,0.12); }
+.conf-pill { display: inline-block; font-size: 9px; text-transform: uppercase; letter-spacing: 0.4px; border-radius: 10px; padding: 1px 7px; margin: 2px 6px 2px 0; }
+.conf-pill.high { color: var(--green); border: 1px solid var(--green); }
+.conf-pill.medium { color: var(--orange); border: 1px solid var(--orange); }
+.conf-pill.low { color: var(--red); border: 1px solid var(--red); }
+.thumbs { margin-left: auto; display: inline-flex; gap: 4px; }
+.thumb { background: none; border: none; color: var(--text2); cursor: pointer; font-size: 11px; padding: 1px 4px; }
+.thumb:hover, .thumb.voted { color: var(--accent); }
+.conflict-box { background: var(--bg2); border: 1px solid var(--orange); border-radius: 8px; padding: 10px 12px; }
+.conflict-row { border-top: 1px solid var(--border); padding: 8px 2px; }
+.conflict-row .view-a, .conflict-row .view-b { font-size: 12px; margin-top: 3px; }
+.conflict-row .conf-src { color: var(--accent); font-size: 10px; }
+.crit-v { font-size: 10px; text-transform: uppercase; border-radius: 10px; padding: 1px 8px; margin-left: 6px; }
+.crit-v.supported { color: var(--green); border: 1px solid var(--green); }
+.crit-v.unsupported { color: var(--red); border: 1px solid var(--red); }
+.crit-v.uncertain { color: var(--orange); border: 1px solid var(--orange); }
+.stale-badge { color: var(--orange); font-size: 10px; }
+.watch-on .fa-eye { color: var(--orange); }
+.rq-row { display: flex; gap: 8px; align-items: center; background: var(--bg2); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; margin: 4px 0; font-size: 12px; cursor: pointer; }
+.rq-row:hover { border-color: var(--accent); }
+.readnext-row { display: flex; gap: 8px; align-items: center; background: var(--bg3); border: 1px dashed var(--accent); border-radius: 8px; padding: 8px 12px; margin: 12px 0 4px; font-size: 12px; }
+.flash-box { margin: 14px 0; }
+.flash-card { background: var(--bg2); border: 1px solid var(--border); border-radius: 10px; padding: 22px; cursor: pointer; min-height: 90px; font-size: 14px; font-weight: 600; text-align: center; transition: transform 0.15s; }
+.flash-card:active { transform: scale(0.99); }
+.flash-ctrl { display: flex; gap: 8px; justify-content: center; margin-top: 10px; }
+.article.condensed .sec-body, .article.condensed .diagram-wrap, .article.condensed figure,
+.article.condensed .claims-list { display: none !important; }
 .cmp-tbl { border-collapse: collapse; width: 100%; font-size: 12px; }
 .cmp-tbl th, .cmp-tbl td { border: 1px solid var(--border); padding: 6px 8px; text-align: left; vertical-align: top; }
 .cmp-tbl thead th { background: var(--bg3); font-size: 11px; text-transform: uppercase; }
@@ -359,6 +393,15 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
           </select>
           <button class="btn btn-primary" id="askBtn" onclick="askExplainer()"><i class="fas fa-wand-magic-sparkles"></i> Explain</button>
         </div>
+        <div class="prefs-row">
+          <label title="Only keep search hits from these domains (comma-separated)">Pin domains</label>
+          <input id="prefDomains" placeholder="en.wikipedia.org, arxiv.org"
+                 onchange="savePrefs()" onkeydown="if(event.key==='Enter')savePrefs()" />
+          <label title="Automatically save finished root explanations as concepts + relations"><input type="checkbox" id="prefAutoSave" onchange="savePrefs()" /> auto-save to graph</label>
+          <span style="flex:1"></span>
+          <button class="btn btn-ghost btn-sm" onclick="showRoadmap()" title="Open questions aggregated across this conversation's explanations"><i class="fas fa-map-signs"></i> Roadmap</button>
+        </div>
+        <div id="roadmapBox"></div>
         <div id="suggStrip" class="sugg-strip" style="display:none;"></div>
         <div id="askStatus" style="font-size:12px;color:var(--text2);margin-bottom:12px;"></div>
         <div id="articleBox"></div>
@@ -1155,8 +1198,10 @@ async function pollExplanation() {
       renderExplanation(exp);
       loadExplanations();
     } else {
+      const phase = exp.phase || 'researching';
+      const phaseLabel = { researching: 'Researching sources', composing: 'Composing the answer', critique: 'Reviewing claims', saving: 'Saving to the graph', done: 'Finishing' }[phase] || 'Working';
       document.getElementById('askStatus').innerHTML =
-        `<i class="fas fa-spinner spin"></i> Researching & writing… (${escHtml(exp.question.substring(0, 80))})`;
+        `<i class="fas fa-spinner spin"></i> ${phaseLabel}… (${escHtml(exp.question.substring(0, 80))})`;
       renderExplanationShell(exp);
     }
   } catch (e) {}
@@ -1186,20 +1231,46 @@ function renderExplanation(exp) {
         <h2 style="flex:1;">${escHtml(exp.question)}</h2>
         <div style="display:flex;gap:6px;flex-shrink:0;">
           <button class="btn btn-ghost btn-sm ${exp.bookmarked ? 'bkmk-on' : ''}" onclick="toggleBookmark(${exp.id}, this)" title="${exp.bookmarked ? 'Remove bookmark' : 'Bookmark this answer'}"><i class="fas fa-bookmark"></i></button>
+          <button class="btn btn-ghost btn-sm ${exp.watched ? 'watch-on' : ''}" onclick="toggleWatch(${exp.id}, this)" title="Re-answer automatically on source drift"><i class="fas fa-eye${exp.watched ? '' : 'slash'}"></i> ${exp.watched ? 'Watching' : 'Watch'}</button>
           <button class="btn btn-ghost btn-sm" ${exp.status === 'done' ? '' : 'disabled'} onclick="makeQuiz(${exp.id})" title="Turn this answer into a review quiz"><i class="fas fa-clipboard-question"></i> Quiz</button>
+          <button class="btn btn-ghost btn-sm" onclick="renderFlashcards(${exp.id})" title="Spaced-repetition flashcards from the quiz"><i class="fas fa-layer-group"></i> Cards</button>
+          <button class="btn btn-ghost btn-sm" onclick="toggleCondense()" title="Collapse to summary + key points only"><i class="fas fa-compress"></i> Condense</button>
           <button class="btn btn-ghost btn-sm" onclick="toggleTrace()" title="Show how the agent searched, read and chose sources"><i class="fas fa-magnifying-glass-chart"></i> Research trace</button>
           <button class="btn btn-ghost btn-sm" onclick="saveExplanationToGraph(${exp.id})" title="Save as structured knowledge (concepts + relations) in this investigation"><i class="fas fa-share-nodes"></i> Save to graph</button>
           <button class="btn btn-ghost btn-sm" onclick="investigateGaps(${exp.id})" title="Auto-investigate open questions as an agent run"><i class="fas fa-compass-drafting"></i> Investigate gaps</button>
           <button class="btn btn-danger btn-sm" onclick="deleteExplanation(${exp.id})"><i class="fas fa-trash"></i></button>
         </div>
       </div>
-      <div style="display:flex;gap:6px;margin-bottom:8px;">
+      <div style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap;align-items:center;">
         <span class="mode-pill">${escHtml(exp.mode || 'explain')}</span>
         <span class="mode-pill">${escHtml(exp.depth || 'balanced')}</span>
         <span class="mode-pill">${escHtml(exp.audience || 'intermediate')}</span>
+        <span class="mode-pill" title="Information ground-truth date">${escHtml(a.as_of || '')}</span>
+        ${(exp.trace && exp.trace.save_to_graph && !exp.trace.save_to_graph.error) ?
+          `<span class="mode-pill in-graph" title="${exp.trace.save_to_graph.created_artifacts} artifacts, ${exp.trace.save_to_graph.created_relationships} relationships"><i class="fas fa-diagram-project"></i> in graph</span>` : ''}
+        ${exp.drift === 'changed' ? `<span class="mode-pill warn" title="Sources moved on; a re-answer found material changes"><i class="fas fa-triangle-exclamation"></i> sources drifted</span>` :
+          exp.drift === 'same' ? `<span class="mode-pill ok" title="A scheduled re-answer confirmed the answer still holds">no drift</span>` : ''}
+        ${exp.watch_of ? `<span class="mode-pill" title="Automatic re-answer of explanation #${exp.watch_of}"><i class="fas fa-robot"></i> auto re-answer</span>` : ''}
       </div>
       <div id="traceBox" style="display:none;"></div>
+      ${a.critique && a.critique.length ? `<div class="critique-box" style="margin-bottom:10px;">
+        <strong style="font-size:11px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text2);"><i class="fas fa-user-check"></i> Critique pass</strong>
+        ${a.critique.map(r => `<div class="crit-row"><b>${escHtml(r.claim || '')}</b> <span class="crit-v ${escHtml(r.verdict)}">${escHtml(r.verdict)}</span>${r.note ? `<br/><span style="font-size:11px;color:var(--text2);">${escHtml(r.note)}</span>` : ''}</div>`).join('')}
+      </div>` : ''}
+      ${a.conflicts && a.conflicts.length ? `<div class="conflict-box" style="margin-bottom:10px;">
+        <strong style="font-size:11px;text-transform:uppercase;letter-spacing:0.5px;color:var(--orange);"><i class="fas fa-code-branch"></i> Conflicting views</strong>
+        ${a.conflicts.map(c => `<div class="conflict-row"><b>${escHtml(c.topic)}</b>
+          <div class="view-a">${escHtml(c.view_a)}${(c.sources_a || []).map(i => i < (a.sources || []).length ? ` <span class="conf-src">[${i + 1}]</span>` : '').join('')}</div>
+          <div class="view-b">${escHtml(c.view_b)}${(c.sources_b || []).map(i => i < (a.sources || []).length ? ` <span class="conf-src">[${i + 1}]</span>` : '').join('')}</div>
+          <div class="claim-cits">${[].concat(c.sources_a || [], c.sources_b || []).filter((v, i, arr) => arr.indexOf(v) === i).map(i => i < (a.sources || []).length ? `<button class="ev-btn" onclick="scrollToSource(${i})">source [${i + 1}]</button>` : '').join('')}</div>
+        </div>`).join('')}
+      </div>` : ''}
     <p style="color:var(--text2);font-style:italic;">${mdInline(a.summary || '')}</p>`;
+  const conceptNames = (exp.trace && exp.trace.save_to_graph && exp.trace.save_to_graph.concepts) || [];
+  if (conceptNames.length) {
+    html += `<div style="display:flex;gap:4px;flex-wrap:wrap;margin:8px 0;align-items:center;"><span style="font-size:11px;color:var(--text2);"><i class="fas fa-diagram-project"></i> Concepts:</span>
+      ${conceptNames.slice(0, 12).map(n => `<button class="concept-pill" onclick="highlightConcept(${JSON.stringify(n).replace(/"/g, '&quot;')})">${escHtml(n)}</button>`).join('')}</div>`;
+  }
   if (a.diagram && a.diagram.mermaid) {
     html += `<div class="diagram-wrap">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
@@ -1212,13 +1283,18 @@ function renderExplanation(exp) {
   }
   (a.sections || []).forEach((s, si) => {
     html += `<div style="display:flex;align-items:baseline;gap:8px;"><h3 style="flex:1;">${escHtml(s.heading || '')}</h3>
-      <button class="btn btn-ghost btn-sm" onclick="setFuScope(${exp.id}, ${si})" title="Ask a follow-up about this section"><i class="fas fa-reply"></i> Follow-up</button></div>${mdBlock(s.body || '')}`;
+      <button class="btn btn-ghost btn-sm" onclick="setFuScope(${exp.id}, ${si})" title="Ask a follow-up about this section"><i class="fas fa-reply"></i> Follow-up</button></div><div class="sec-body">${mdBlock(s.body || '')}</div>`;
     if (s.claims && s.claims.length) {
       html += `<div class="claims-list">` + s.claims.map((c, ci) => {
         cacheEv(`ev-${si}-${ci}`, c, a);
-        return `<div class="claim-row"><div class="claim-text">${mdInline(c.text)}</div><div class="claim-cits">
-        ${(c.citations || []).map((cit, ki) => `<button class="ev-btn" onclick="toggleEvidence('${si}', ${ci})" title="Show evidence">[${cit.sourceIndex + 1}]</button>`).join('')}
-        <a class="ev-q no-und" href="javascript:void(0)" onclick="toggleEvidence('${si}', ${ci})">Show evidence</a></div>
+        return `<div class="claim-row"><div class="claim-text">${mdInline(c.text)}</div>
+        <div class="conf-pill ${escHtml(c.confidence || 'low')}" title="Backed by ${c.n_sources || 0} distinct source(s)">${escHtml(c.confidence || 'low')}</div>
+        <div class="claim-cits">
+          ${(c.citations || []).map((cit, ki) => `<button class="ev-btn" onclick="toggleEvidence('${si}', ${ci})" title="Show evidence">[${cit.sourceIndex + 1}]</button>`).join('')}
+          <a class="ev-q no-und" href="javascript:void(0)" onclick="toggleEvidence('${si}', ${ci})">Show evidence</a>
+          <span class="thumbs"><button class="thumb" title="Helpful" onclick="sendFeedback(${exp.id}, ${si}, ${ci}, true, this)"><i class="fas fa-thumbs-up"></i></button>
+          <button class="thumb" title="Wrong or unsupported" onclick="sendFeedback(${exp.id}, ${si}, ${ci}, false, this)"><i class="fas fa-thumbs-down"></i></button></span>
+        </div>
         <div class="ev-drawer" id="ev-${si}-${ci}" style="display:none;"></div></div>`;
       }).join('') + `</div>`;
     }
@@ -1260,7 +1336,7 @@ function renderExplanation(exp) {
   }
   if (a.sources && a.sources.length) {
     html += `<h4 style="font-size:11px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text2);margin:12px 0 6px;">Sources</h4>` +
-      a.sources.map((s, i) => `<div class="src-row">[${i + 1}] ${srcLink(s)}</div>`).join('');
+      a.sources.map((s, i) => `<div class="src-row" id="src-${i}">[${i + 1}] ${srcLink(s)} ${srcMeta(s)}</div>`).join('');
   }
   html += `<div class="fu-row">
       <input id="fuInput" placeholder="Ask a follow-up (${fuScopeLabel()})…" onkeydown="if(event.key==='Enter')submitFollowup(${exp.id})" />
@@ -1276,6 +1352,7 @@ function renderExplanation(exp) {
   renderThread(exp);
   renderQuiz(exp);
   renderSuggestions(exp);
+  renderReadNext(exp);
 }
 
 function renderMermaidBlocks() {
@@ -1314,6 +1391,23 @@ function srcLink(s) {
     return `<span style="color:var(--teal);" title="Internal knowledge-graph source"><i class="fas fa-diagram-project"></i> ${escHtml(s.title || 'graph artifact #' + id)}</span>`;
   }
   return `<a href="${escHtml(s.url)}" target="_blank" rel="noopener">${escHtml(s.title || s.url)}</a>`;
+}
+
+let _staleYear = null;
+function srcMeta(s) {
+  const bits = [];
+  if (s.published) {
+    const yr = parseInt(s.published.substring(0, 4));
+    if (_staleYear == null) _staleYear = new Date().getFullYear() - 2;
+    if (yr && yr < _staleYear) bits.push(`<span class="stale-badge" title="Published ${escHtml(s.published)} — older than 2 years"><i class="fas fa-hourglass-half"></i> ${escHtml(s.published)} (possibly stale)</span>`);
+    else bits.push(`<span style="font-size:10px;color:var(--text2);"><i class="fas fa-calendar"></i> ${escHtml(s.published)}</span>`);
+  }
+  return bits.join(' ');
+}
+
+function scrollToSource(idx) {
+  const el = document.getElementById(`src-${idx}`);
+  if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); el.style.background = 'var(--bg4)'; setTimeout(() => { el.style.background = ''; }, 1800); }
 }
 
 let evCache = {};
@@ -1362,13 +1456,23 @@ function traceHtml(exp) {
     lines.push(`<div style="color:var(--teal);"><i class="fas fa-diagram-project"></i> Used existing knowledge graph</div>
       ${(t.graph_artifacts || []).map(a => `<span style="color:var(--text2);">· ${escHtml(a)}</span>`).join(' ')}`);
   }
+  const cch = t.corpus_hits || [];
+  if (cch.length) lines.push(`<div style="color:var(--teal);"><i class="fas fa-database"></i> Reused ${cch.length} previously-fetched page(s) from this conversation's corpus${t.corpus_cache_hits ? ` · ${t.corpus_cache_hits} cache hit(s)`: ''}</div>
+    ${cch.slice(0, 5).map(c => `<span style="color:var(--text2);">· <a href="${escHtml(c.url)}" target="_blank" rel="noopener" style="color:var(--accent);">${escHtml(c.title || c.url)}</a></span>`).join(' ')}`);
+  if (t.section_plan && t.section_plan.length) lines.push(`<div style="color:var(--text2);"><b>Section plan</b>: ${t.section_plan.map(escHtml).join(' → ')}</div>`);
   if (t.web_skipped) lines.push(`<div style="color:var(--teal);"><i class="fas fa-arrow-right-arrow-left"></i> Web search skipped (graph covered it)${t.coverage ? ' — coverage: ' + escHtml(t.coverage) : ''}</div>`);
   lines.push(`<div><b>Queries</b></div><ul style="margin:4px 0 0 18px;">${qs.flat().slice(0, 8).map(q => `<li>${escHtml(q)}</li>`).join('')}</ul>`);
   lines.push(`<div style="margin-top:8px;"><b>Search hits (${hits.length})</b></div>`);
   lines.push(`<table style="border-collapse:collapse;width:100%;margin:4px 0;">${hits.map(h => `<tr style="border-bottom:1px solid var(--border);"><td style="padding:3px 6px;color:var(--text2);">${h.rank != null ? '#' + h.rank : ''}</td><td style="padding:3px 6px;"><a href="${escHtml(h.url)}" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none;">${escHtml(h.title || h.url)}</a></td><td style="padding:3px 6px;color:var(--text2);">${escHtml(h.domain || '')}</td></tr>`).join('')}</table>`);
   lines.push(`<div style="margin-top:8px;"><b>Pages read (${fetched.filter(f => f.kept).length}/${fetched.length})</b></div>`);
-  lines.push(`<ul style="margin:4px 0 0 18px;">${fetched.map(f => `<li><span style="color:${f.kept ? 'var(--green)' : 'var(--red)'};">${f.kept ? '✔' : '✖'}</span> <a href="${escHtml(f.url)}" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none;">${escHtml(f.title || f.url)}</a> <span style="color:var(--text2);">${f.kept ? f.chars + ' chars · ' + f.images + ' imgs' : escHtml(f.reason)}</span></li>`).join('')}</ul>`);
+  lines.push(`<ul style="margin:4px 0 0 18px;">${fetched.map(f => `<li><span style="color:${f.kept ? 'var(--green)' : 'var(--red)'};">${f.kept ? '✔' : '✖'}</span> <a href="${escHtml(f.url)}" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none;">${escHtml(f.title || f.url)}</a> ${f.cached ? '<span style="color:var(--teal);">cached</span>' : `<span style="color:var(--text2);">${f.kept ? f.chars + ' chars · ' + f.images + ' imgs' : escHtml(f.reason)}</span>`}</li>`).join('')}</ul>`);
   if (t.gaps && t.gaps.length) lines.push(`<div style="margin-top:8px;"><b>Knowledge gaps</b>: ${t.gaps.map(escHtml).join(', ')}</div>`);
+  if (t.save_to_graph) {
+    const svg = t.save_to_graph;
+    lines.push(`<div style="margin-top:8px;color:var(--teal);"><i class="fas fa-share-nodes"></i> Auto-saved to graph: ${svg.error ? escHtml(svg.error) : `${svg.created_artifacts} artifacts · ${svg.created_relationships} relationships`}</div>`);
+  }
+  if (t.critique) lines.push(`<div style="margin-top:8px;color:var(--text2);"><i class="fas fa-user-check"></i> Critique pass reviewed ${t.critique} claim(s)</div>`);
+  if (t.drift) lines.push(`<div style="margin-top:8px;color:${t.drift === 'changed' ? 'var(--orange)' : 'var(--green)'};"><i class="fas fa-eye"></i> Watch re-answer: answer ${t.drift === 'changed' ? 'CHANGED vs previous' : 'still matches previous'}</div>`);
   if (Object.keys(timings).length) lines.push(`<div style="margin-top:8px;color:var(--text2);">Timings: ${Object.entries(timings).map(([k, v]) => `${k}=${v}ms`).join(' · ')}</div>`);
   if (t.hops > 0) lines.push(`<div style="color:var(--text2);">Hops: ${t.hops}</div>`);
   lines.push('</div>');
@@ -1394,10 +1498,12 @@ async function loadExplanations() {
   const hist = document.getElementById('explHistory');
   hist.innerHTML = items.map(e => `
     <div class="hist-row" style="cursor:default;">
-      <button class="star-btn ${e.bookmarked ? 'on' : ''}" title="${e.bookmarked ? 'Remove bookmark' : 'Bookmark'}" onclick="event.stopPropagation();setBookmark(${e.id}, ${e.bookmarked ? 'false' : 'true'}, this)"><i class="fas ${e.bookmarked ? 'fa-star' : 'fa-star'}" style="${e.bookmarked ? 'color:var(--orange);' : 'color:var(--text2);'}"></i></button>
+      <button class="star-btn ${e.bookmarked ? 'on' : ''}" title="${e.bookmarked ? 'Remove bookmark' : 'Bookmark'}" onclick="event.stopPropagation();setBookmark(${e.id}, ${e.bookmarked ? 'false' : 'true'}, this)"><i class="fas fa-star${e.watched ? '' : ''}" style="${e.bookmarked ? 'color:var(--orange);' : 'color:var(--text2);'}"></i></button>
       <span style="flex:1;cursor:pointer;" onclick="openExplanation(${e.id})">
         <i class="fas ${e.status === 'done' ? 'fa-circle-check' : e.status === 'running' ? 'fa-spinner spin' : 'fa-circle-exclamation'}" style="color:${e.status === 'done' ? 'var(--green)' : e.status === 'running' ? 'var(--accent)' : 'var(--red)'};"></i>
         <span class="q">${escHtml(e.question)}</span>
+        ${e.watched ? '<span class="tiny-badge" title="Re-answers automatically on drift"><i class="fas fa-eye"></i> watched</span>' : ''}
+        ${e.watch_of ? `<span class="tiny-badge" title="Automatic re-answer of #${e.watch_of}">${e.drift === 'changed' ? 'drift' : 're-answer'}</span>` : ''}
       </span>
       <span style="font-size:10px;color:var(--text2);">${e.created_at ? new Date(e.created_at).toLocaleString() : ''}</span>
     </div>`).join('') || '<div class="empty-state"><i class="fas fa-lightbulb"></i><br/>No explanations yet — ask above.</div>';
@@ -1554,6 +1660,214 @@ async function investigateGaps(expId) {
   const d = await res.json();
   showNotif(`Agent run #${d.run_id} launched to investigate gaps`, 'success');
   loadInvestigations(); loadTimeline();
+}
+
+/* ---------- watch / feedback / roadmap / prefs / flashcards / read-next (#6-#13) ---------- */
+
+async function toggleWatch(expId, btn) {
+  const exp = activeArticle;
+  const now = exp.watched ? false : true;
+  const res = await fetch(`${API}/explanations/${expId}/watch`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ watched: now }),
+  });
+  if (!res.ok) { let m = 'Watch failed'; try { m = (await res.json()).detail || m; } catch (e) {} showNotif(m, 'error'); return; }
+  exp.watched = now;
+  btn.classList.toggle('watch-on', now);
+  btn.innerHTML = now ? '<i class="fas fa-eye"></i> Watching' : '<i class="fas fa-eye-slash"></i> Watch';
+  showNotif(now ? 'Watching — re-answers automatically when sources drift' : 'Watch removed', 'success');
+  loadExplanations();
+}
+
+function sendFeedback(expId, si, ci, up, btn) {
+  const ans = activeArticle && activeArticle.answer;
+  const sec = ans && ans.sections && ans.sections[si];
+  const claim = sec && sec.claims && sec.claims[ci];
+  if (!claim) return;
+  const url = (ans.sources || [])[(claim.citations || [])[0]?.sourceIndex || 0]?.url || '';
+  fetch(`${API}/explanations/${expId}/feedback`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ claim: (claim.text || '').substring(0, 300), up, url }),
+  }).then(r => r.json()).then(() => {
+    btn.classList.add('voted');
+    btn.innerHTML = `<i class="fas fa-${up ? 'thumbs-up' : 'thumbs-down'}"></i>`;
+    showNotif(up ? 'Thanks — helpful feedback recorded' : 'Thanks — this will be down-weighted', 'success');
+  }).catch(() => showNotif('Feedback failed', 'error'));
+}
+
+async function showRoadmap() {
+  if (!currentInv) return;
+  const box = document.getElementById('roadmapBox');
+  const res = await fetch(`${API}/investigations/${currentInv}/roadmap`);
+  const data = await res.json();
+  const items = (data.items || []).filter(it => it.question);
+  if (!items.length) { box.innerHTML = ''; showNotif('No open questions yet', 'info'); return; }
+  box.style.display = box.style.display === 'block' ? 'none' : 'block';
+  if (box.style.display === 'none') return;
+  box.innerHTML = `<div style="display:flex;align-items:center;gap:8px;margin:8px 0;">
+      <strong style="font-size:12px;"><i class="fas fa-map-signs"></i> Open questions</strong>
+      <span style="flex:1"></span>
+      <button class="btn btn-ghost btn-sm" onclick="document.getElementById('roadmapBox').style.display='none'"><i class="fas fa-times"></i></button>
+    </div>` +
+    items.map((it, i) => `<div class="rq-row" onclick="useSuggestion(this.children[1].textContent.trim())">
+      <span style="font-size:10px;color:var(--text2);">${it.exps.length}x · ${escHtml((it.kinds || []).join('/'))}</span>
+      <span style="flex:1;">${escHtml(it.question)}</span></div>`).join('');
+}
+
+async function loadPrefs() {
+  if (!currentInv) return;
+  try {
+    const res = await fetch(`${API}/investigations/${currentInv}/prefs`);
+    const d = await res.json();
+    const din = document.getElementById('prefDomains');
+    if (din) din.value = d.preferred_domains || '';
+    const chk = document.getElementById('prefAutoSave');
+    if (chk) chk.checked = !!d.auto_save_explanations;
+  } catch (e) {}
+}
+
+async function savePrefs() {
+  if (!currentInv) return;
+  const din = document.getElementById('prefDomains');
+  const chk = document.getElementById('prefAutoSave');
+  if (!din || !chk) return;
+  const res = await fetch(`${API}/investigations/${currentInv}/prefs`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      preferred_domains: din.value.trim(),
+      auto_save_explanations: chk.checked ? 1 : 0,
+    }),
+  });
+  if (!res.ok) { let m = 'Prefs failed'; try { m = (await res.json()).detail || m; } catch (e) {} showNotif(m, 'error'); return; }
+  showNotif('Source preferences saved', 'success');
+}
+
+let condensed = false;
+function toggleCondense() {
+  condensed = !condensed;
+  const art = document.querySelector('#articleBox .article');
+  if (art) art.classList.toggle('condensed', condensed);
+}
+
+function highlightConcept(name) {
+  switchView('graph');
+  loadGraph().then(() => {
+    const hit = graphData.nodes.find(n =>
+      (n.label || '').toLowerCase() === name.toLowerCase() ||
+      (n.title || '').toLowerCase() === name.toLowerCase());
+    if (hit) {
+      network.focus(hit.id, { scale: 1.3, animation: true });
+      applyCompareHighlight([hit.id], []);
+      showNotif(`Found: ${hit.label}`, 'success');
+    } else {
+      showNotif(`No graph node for "${name}" yet — save the answer to graph first`, 'info');
+      switchView('explainer');
+    }
+  });
+}
+
+function renderReadNext(exp) {
+  if (!currentInv || !exp.answer) return;
+  fetch(`${API}/investigations/${currentInv}/explanations`).then(r => r.json()).then(data => {
+    const mine = new Set(String(exp.question).toLowerCase().split(/\W+/).filter(w => w.length > 3));
+    let best = null, bestScore = 0;
+    (data.items || []).forEach(e => {
+      if (e.id === exp.id || e.status !== 'done') return;
+      const words = new Set(String(e.question || '').toLowerCase().split(/\W+/).filter(w => w.length > 3));
+      let inter = 0;
+      words.forEach(w => { if (mine.has(w)) inter++; });
+      if (inter > bestScore) { bestScore = inter; best = e; }
+    });
+    if (!best || bestScore < 2) return;
+    const slot = document.createElement('div');
+    slot.className = 'readnext-row';
+    slot.innerHTML = `<span style="font-size:11px;color:var(--accent);"><i class="fas fa-arrow-right"></i></span>
+      <span>Read next: </span>
+      <a class="no-und" href="javascript:void(0)" onclick="openExplanation(${best.id})"><b>${escHtml(best.question)}</b></a>
+      <button class="btn btn-ghost btn-sm" onclick="openExplanation(${best.id})">Open</button>`;
+    const box = document.getElementById('threadBox');
+    if (box) box.insertAdjacentHTML('afterend', slot);
+  }).catch(() => {});
+}
+
+let flashIdx = 0, flashQueue = [], flashModel = {};
+const srsKey = (expId) => 'akm.srs.' + expId;
+
+function renderFlashcards(expId) {
+  const exp = activeArticle;
+  if (!exp || !exp.quiz || !exp.quiz.items || !exp.quiz.items.length) {
+    showNotif('No quiz exists yet — generate a quiz first', 'info'); return;
+  }
+  try { flashModel = JSON.parse(localStorage.getItem(srsKey(expId)) || '{}'); } catch (e) { flashModel = {}; }
+  const now = Date.now();
+  flashQueue = exp.quiz.items.map((it, i) => {
+    const st = flashModel[i] || { ease: 2.5, ivl: 0, due: 0, wrong: 0 };
+    return { i, card: it, st, due: st.due <= now };
+  });
+  flashQueue.sort((a, b) => (a.due === b.due) ? a.i - b.i : (a.due ? -1 : 1));
+  flashIdx = 0;
+  if (!flashQueue.length) { showNotif('All caught up — no cards to review', 'success'); return; }
+  let html = `<div class="flash-box" id="flashBox">
+    <h4 style="font-size:11px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text2);margin:16px 0 4px;">
+      <i class="fas fa-layer-group"></i> Flashcards <span class="quiz-score" id="flashStat"></span></h4>
+    <div class="flash-card" id="flashCard" onclick="flipFlash()">
+      <div class="flash-front" id="flashFront"></div>
+      <div class="flash-back" id="flashBack"></div>
+    </div>
+    <div class="flash-ctrl" id="flashCtrl" style="display:none;">
+      <button class="btn btn-ghost btn-sm" onclick="gradeFlash('again')">Again</button>
+      <button class="btn btn-ghost btn-sm" onclick="gradeFlash('good')">Good</button>
+      <button class="btn btn-ghost btn-sm" onclick="gradeFlash('easy')">Easy</button>
+    </div>
+  </div>`;
+  const box = document.getElementById('threadBox');
+  box.insertAdjacentHTML('afterend', html);
+  showFlashCard();
+}
+
+function showFlashCard() {
+  const el = flashQueue[flashIdx];
+  if (!el) return;
+  const front = document.getElementById('flashFront');
+  const back = document.getElementById('flashBack');
+  const card = document.getElementById('flashCard');
+  const ctrl = document.getElementById('flashCtrl');
+  if (!front || !card) return;
+  front.innerHTML = el.card.question;
+  back.innerHTML = `<b>${escHtml(el.card.options[el.card.correct_index])}</b><br/><span style="font-size:12px;color:var(--text2);">${escHtml(el.card.rationale || '')}</span>`;
+  card.style.transform = '';
+  back.style.opacity = '0';
+  ctrl.style.display = 'none';
+  document.getElementById('flashStat').textContent = `card ${flashIdx + 1} / ${flashQueue.length}`;
+}
+
+function flipFlash() {
+  const back = document.getElementById('flashBack');
+  const ctrl = document.getElementById('flashCtrl');
+  if (!back || !ctrl) return;
+  const shown = back.style.opacity === '1';
+  back.style.opacity = shown ? '0' : '1';
+  ctrl.style.display = shown ? 'none' : 'flex';
+}
+
+function gradeFlash(g) {
+  const el = flashQueue[flashIdx];
+  if (!el) return;
+  const st = el.st;
+  if (g === 'again') { st.ivl = 0; st.ease = Math.max(1.3, st.ease - 0.2); st.wrong++; }
+  else if (g === 'good') { st.ivl = st.ivl === 0 ? 1 : Math.round(st.ivl * st.ease); }
+  else { st.ivl = st.ivl === 0 ? 2 : Math.round(st.ivl * st.ease * 1.3); st.ease = Math.min(3.0, st.ease + 0.15); }
+  const days = st.ivl || (g === 'again' ? 0 : 1);
+  st.due = Date.now() + days * 86400000;
+  flashModel[el.i] = st;
+  localStorage.setItem(srsKey(activeArticle.id), JSON.stringify(flashModel));
+  flashIdx++;
+  if (flashIdx >= flashQueue.length) {
+    document.getElementById('flashCard').innerHTML = '<div style="text-align:center;padding:24px;"><i class="fas fa-check-circle" style="color:var(--green);"></i><br/>Session done.</div>';
+    document.getElementById('flashCtrl').style.display = 'none';
+    return;
+  }
+  showFlashCard();
 }
 
 /* ---------- suggestions / quiz / bookmarks (#9, #10) ---------- */
@@ -1719,6 +2033,7 @@ function switchView(view) {
   document.querySelectorAll('.view').forEach(v => v.classList.remove('visible'));
   document.getElementById(view + 'View').classList.add('visible');
   if (view === 'graph' && network) setTimeout(() => network.fit({ animation: true }), 100);
+  if (view === 'explainer') loadPrefs();
 }
 
 loadExplDefaults();

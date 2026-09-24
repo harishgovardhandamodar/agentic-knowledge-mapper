@@ -17,7 +17,8 @@ from . import llm, scheduler
 from .agent import launch_run, launch_run_with_goal
 from .explainer import (launch_explanation, _extract_concepts, MODES,
                         DEPTH_PLAN, AUDIENCE_HINTS, _question_suggestions,
-                        _quiz_from_answer)
+                        _quiz_from_answer, _save_explanation_to_graph,
+                        _investigation_roadmap)
 
 os.makedirs("data", exist_ok=True)
 
@@ -623,6 +624,10 @@ def _expl_json(e: Explanation) -> dict:
         "parent_id": e.parent_id, "thread_id": e.thread_id,
         "quiz": json.loads(e.quiz) if e.quiz else None,
         "bookmarked": bool(e.bookmarked),
+        "watched": bool(e.watched),
+        "watch_of": (json.loads(e.meta or "{}") or {}).get("watch_of"),
+        "drift": (json.loads(e.meta or "{}") or {}).get("drift"),
+        "phase": (json.loads(e.meta or "{}") or {}).get("phase"),
     }
 
 
@@ -760,119 +765,7 @@ def save_explanation_to_graph(exp_id: int, db: Session = Depends(get_db)):
         raise HTTPException(404, "Explanation not found")
     if e.status != "done" or not e.answer:
         raise HTTPException(409, "Explanation has no finished answer")
-    answer = json.loads(e.answer)
-    extracted = _extract_concepts(e.question, answer)
-    concepts, relations = extracted["concepts"], extracted["relations"]
-
-    # Dedup helpers.
-    def norm_title(s):
-        return re.sub(r"[^a-z0-9]+", " ", (s or "").lower()).strip()
-
-    def find_artifact(title, atype):
-        return (db.query(Artifact).filter(
-            Artifact.investigation_id == e.investigation_id,
-            Artifact.artifact_type == atype,
-            Artifact.title == title).first())
-
-    def find_artifact_by_url(url):
-        return (db.query(Artifact).filter(
-            Artifact.investigation_id == e.investigation_id,
-            Artifact.url == url).first())
-
-    root_text = (answer.get("summary") or "") + "\n\n" + "\n\n".join(
-        f"## {s.get('heading')}\n{s.get('body')}" for s in answer.get("sections") or [])
-    root = find_artifact(e.question[:200], "essay")
-    if not root:
-        root = Artifact(investigation_id=e.investigation_id, title=e.question[:200],
-                        artifact_type="essay", description=(answer.get("summary") or "")[:2000],
-                        content=root_text[:6000], author="explainer",
-                        tags="explainer," + (e.mode or "explain"),
-                        relevance=None, review="pending", origin="agent")
-        db.add(root)
-        db.flush()
-
-    # Concepts (dedup by normalized title) + Concept nodes.
-    concept_ids = {}
-    for c in concepts:
-        t = c.get("name", "")[:200]
-        if not t.strip():
-            continue
-        existing = None
-        for art in db.query(Artifact).filter(
-                Artifact.investigation_id == e.investigation_id,
-                Artifact.artifact_type == "concept").all():
-            if norm_title(art.title) == norm_title(t):
-                existing = art
-                break
-        if existing:
-            concept_ids[norm_title(t)] = existing.id
-        else:
-            a = Artifact(investigation_id=e.investigation_id, title=t[:200],
-                         artifact_type="concept",
-                         description=(c.get("definition") or "")[:1000],
-                         author="explainer", tags="concept,explainer",
-                         review="pending", origin="agent")
-            db.add(a)
-            db.flush()
-            concept_ids[norm_title(t)] = a.id
-
-    def add_rel(src, dst, rtype, desc=None):
-        if src == dst:
-            return False
-        exists = (db.query(Relationship).filter(
-            Relationship.investigation_id == e.investigation_id,
-            Relationship.source_id == src, Relationship.target_id == dst,
-            Relationship.relationship_type == rtype).first())
-        if exists:
-            return False
-        db.add(Relationship(investigation_id=e.investigation_id, source_id=src,
-                            target_id=dst, relationship_type=rtype,
-                            description=desc, origin="agent"))
-        return True
-
-    n_rel = 0
-    # Root EXPLAINS each concept.
-    for nid in concept_ids.values():
-        n_rel += add_rel(root.id, nid, "EXPLAINS")
-    # Source links: root/explanation cites the web sources as artifacts (url match or new).
-    for s in answer.get("sources") or []:
-        url = s.get("url") or ""
-        if not url.startswith("http"):
-            continue
-        art = find_artifact_by_url(url)
-        if not art:
-            art = Artifact(investigation_id=e.investigation_id,
-                           title=(s.get("title") or url)[:200], artifact_type="source",
-                           url=url, author="explainer",
-                           tags="source,explainer", review="pending", origin="agent")
-            db.add(art)
-            db.flush()
-    # Concept <-> source CITES edges where the answer used them.
-    for sec in answer.get("sections") or []:
-        for c in sec.get("claims") or []:
-            for cit in c.get("citations") or []:
-                idx = cit.get("sourceIndex")
-                if not isinstance(idx, int):
-                    continue
-                src = (answer.get("sources") or [])[idx] if idx < len(answer.get("sources") or []) else None
-                if not src or not (src.get("url") or "").startswith("http"):
-                    continue
-                art = db.query(Artifact).filter(
-                    Artifact.url == src["url"]).first()
-                if not art:
-                    continue
-                # link root EXPLAINS too
-                n_rel += add_rel(root.id, art.id, "CITES")
-    # Structured relations among concepts.
-    n2id = concept_ids
-    for r in relations:
-        f = n2id.get(norm_title(r.get("from")))
-        t = n2id.get(norm_title(r.get("to")))
-        if f and t:
-            n_rel += add_rel(f, t, r.get("type"))
-    db.commit()
-    return {"created_artifacts": len(concept_ids) + 1,
-            "created_relationships": n_rel, "concepts": list(concept_ids.keys())}
+    return _save_explanation_to_graph(db, e)
 
 
 @app.post("/api/explanations/{exp_id}/investigate_gaps")
@@ -929,6 +822,84 @@ def explanation_bookmark(exp_id: int, req: BookmarkRequest, db: Session = Depend
     e.bookmarked = 1 if req.bookmarked else 0
     db.commit()
     return {"id": e.id, "bookmarked": bool(e.bookmarked)}
+
+
+class WatchRequest(BaseModel):
+    watched: bool
+
+
+@app.post("/api/explanations/{exp_id}/watch")
+def explanation_watch(exp_id: int, req: WatchRequest, db: Session = Depends(get_db)):
+    """Watch a root explanation: the scheduler re-answers it periodically and
+    marks drift when the new answer diverges."""
+    e = db.query(Explanation).filter(Explanation.id == exp_id).first()
+    if not e:
+        raise HTTPException(404, "Explanation not found")
+    if req.watched and e.parent_id is not None:
+        raise HTTPException(409, "Only root explanations can be watched")
+    e.watched = 1 if req.watched else 0
+    db.commit()
+    return {"id": e.id, "watched": bool(e.watched), "drift": json.loads(e.meta or "{}").get("drift")}
+
+
+class FeedbackRequest(BaseModel):
+    claim: str = ""
+    up: bool
+    url: str = ""
+
+
+@app.post("/api/explanations/{exp_id}/feedback")
+def explanation_feedback(exp_id: int, req: FeedbackRequest, db: Session = Depends(get_db)):
+    """Thumbs up/down on a claim; feeds the learned source-affinity ranking."""
+    e = db.query(Explanation).filter(Explanation.id == exp_id).first()
+    if not e:
+        raise HTTPException(404, "Explanation not found")
+    meta = json.loads(e.meta or "{}")
+    fb = meta.get("feedback") or []
+    fb.append({"claim": req.claim[:300], "up": bool(req.up), "url": req.url[:500],
+               "at": datetime.now(timezone.utc).isoformat()})
+    meta["feedback"] = fb[-200:]
+    e.meta = json.dumps(meta)
+    db.commit()
+    return {"id": e.id, "feedback_count": len(fb)}
+
+
+@app.get("/api/investigations/{inv_id}/roadmap")
+def investigation_roadmap(inv_id: int, db: Session = Depends(get_db)):
+    inv = db.query(Investigation).filter(Investigation.id == inv_id).first()
+    if not inv:
+        raise HTTPException(404, "Investigation not found")
+    return {"items": _investigation_roadmap(db, inv_id)}
+
+
+class PrefsRequest(BaseModel):
+    preferred_domains: Optional[str] = None
+    auto_save_explanations: Optional[int] = None
+
+
+@app.get("/api/investigations/{inv_id}/prefs")
+def get_investigation_prefs(inv_id: int, db: Session = Depends(get_db)):
+    inv = db.query(Investigation).filter(Investigation.id == inv_id).first()
+    if not inv:
+        raise HTTPException(404, "Investigation not found")
+    return {"preferred_domains": inv.preferred_domains or "",
+            "auto_save_explanations": 1 if inv.auto_save_explanations is None
+            else inv.auto_save_explanations}
+
+
+@app.put("/api/investigations/{inv_id}/prefs")
+def put_investigation_prefs(inv_id: int, req: PrefsRequest,
+                            db: Session = Depends(get_db)):
+    inv = db.query(Investigation).filter(Investigation.id == inv_id).first()
+    if not inv:
+        raise HTTPException(404, "Investigation not found")
+    if req.preferred_domains is not None:
+        inv.preferred_domains = req.preferred_domains.strip()[:500]
+    if req.auto_save_explanations is not None:
+        inv.auto_save_explanations = 1 if req.auto_save_explanations else 0
+    db.commit()
+    return {"preferred_domains": inv.preferred_domains or "",
+            "auto_save_explanations": inv.auto_save_explanations}
 
 
 # ---------- graph ----------

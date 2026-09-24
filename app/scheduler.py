@@ -13,7 +13,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from croniter import croniter
 
 from .database import SessionLocal
-from .models import Investigation, AgentRun
+from .models import Investigation, AgentRun, Explanation
 
 log = logging.getLogger("akm.scheduler")
 _lock = threading.Lock()
@@ -76,6 +76,51 @@ def _tick():
         _lock.release()
 
 
+def _tick_watched():
+    """Re-answer watched explanations on a slow cadence; store drift verdict."""
+    if not _lock.acquire(blocking=False):
+        return
+    db = SessionLocal()
+    try:
+        now = datetime.now(timezone.utc)
+        cutoff = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        for exp in (db.query(Explanation)
+                    .filter(Explanation.watched == 1,
+                            Explanation.status == "done").all()):
+            busy = (db.query(Explanation)
+                    .filter(Explanation.investigation_id == exp.investigation_id,
+                            Explanation.status == "running").first())
+            if busy:
+                continue
+            # Dedupe: one watch re-answer per day per watched explanation.
+            recent = (db.query(Explanation)
+                      .filter(Explanation.investigation_id == exp.investigation_id,
+                              Explanation.created_at >= cutoff).all())
+            already = any(f'"watch_of": {exp.id}' in (c.meta or "")
+                          for c in recent)
+            if already:
+                continue
+            child = Explanation(
+                investigation_id=exp.investigation_id,
+                question=exp.question,
+                mode=exp.mode or "explain", depth=exp.depth or "balanced",
+                audience=exp.audience or "intermediate",
+                max_pages=exp.max_pages or 6,
+                meta='{"watch_of": %d}' % exp.id)
+            db.add(child)
+            db.commit()
+            db.refresh(child)
+            from .explainer import launch_explanation
+            launch_explanation(child.id, max_pages=child.max_pages or 6)
+            log.info("watch re-answer launched for explanation %s", exp.id)
+    except Exception:
+        log.exception("watch tick failed")
+        db.rollback()
+    finally:
+        db.close()
+        _lock.release()
+
+
 _scheduler: BackgroundScheduler | None = None
 
 
@@ -85,5 +130,7 @@ def start():
         return
     _scheduler = BackgroundScheduler()
     _scheduler.add_job(_tick, "interval", minutes=1, id="akm-timetables")
+    _scheduler.add_job(_tick_watched, "interval", minutes=10,
+                       id="akm-watch", max_instances=1, coalesce=True)
     _scheduler.start()
     atexit.register(lambda: _scheduler.shutdown(wait=False) if _scheduler else None)
