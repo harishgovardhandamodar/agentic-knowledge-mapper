@@ -137,12 +137,13 @@ def _analyze_batch(inv: Investigation, batch: list, existing: list) -> list:
     return verdicts if isinstance(verdicts, list) else []
 
 
-def _persist(db: Session, inv_id: int, kept: list) -> list:
+def _persist(db: Session, inv_id: int, kept: list, run_id: int | None = None) -> list:
     """Insert kept candidates, return [{id, title, tags}]."""
     rows = []
     for cand, v in kept:
         a = Artifact(
             investigation_id=inv_id,
+            run_id=run_id,
             title=(cand["title"] or "(untitled)")[:500],
             artifact_type=v.get("artifact_type") or cand.get("artifact_type") or "news",
             url=(cand.get("url") or "")[:1000] or None,
@@ -166,7 +167,7 @@ def _persist(db: Session, inv_id: int, kept: list) -> list:
 
 
 def _map_relationships(db: Session, inv_id: int, rows: list,
-                       pre_existing_ids: set) -> int:
+                       pre_existing_ids: set, run_id: int | None = None) -> int:
     valid = pre_existing_ids | {r["id"] for r in rows}
     made, pairs = 0, set()
     allowed = {"references", "supports", "contradicts", "builds_upon",
@@ -184,7 +185,7 @@ def _map_relationships(db: Session, inv_id: int, rows: list,
             db.add(Relationship(investigation_id=inv_id, source_id=r["id"],
                                 target_id=tid, relationship_type=rtype,
                                 description=(rel.get("description") or "")[:500],
-                                origin="agent"))
+                                origin="agent", run_id=run_id))
             made += 1
     # Tag-overlap fallback between newly added artifacts (capped).
     tagsets = {r["id"]: set(t.strip().lower() for t in (r["tags"] or "").split(",") if t.strip())
@@ -198,22 +199,34 @@ def _map_relationships(db: Session, inv_id: int, rows: list,
                 pairs.add((ids[i], ids[j]))
                 db.add(Relationship(investigation_id=inv_id, source_id=ids[i],
                                     target_id=ids[j], relationship_type="similar_to",
-                                    description="shared tags", origin="agent"))
+                                    description="shared tags", origin="agent",
+                                    run_id=run_id))
                 made += 1
     db.commit()
     return made
 
 
 def run_investigation_agent(investigation_id: int, max_items: int = 25,
-                            max_rounds: int = 2):
+                            max_rounds: int = 2, trigger: str = "manual",
+                            run_id: int | None = None, goal: str | None = None):
     db = SessionLocal()
     try:
         inv = db.query(Investigation).filter(Investigation.id == investigation_id).first()
         if not inv:
             return
-        run = AgentRun(investigation_id=inv.id, status="running")
-        db.add(run)
-        db.commit()
+        if run_id is None:
+            run = AgentRun(investigation_id=inv.id, status="running", trigger=trigger)
+            db.add(run)
+            db.commit()
+        else:
+            run = db.query(AgentRun).filter(AgentRun.id == run_id).first()
+            if not run:
+                return
+            run.trigger = trigger
+            if run.plan is None and goal:
+                run.plan = json.dumps({"goal": goal})
+            db.commit()
+        run_id = run.id
         inv.status = "running"
         db.commit()
 
@@ -222,6 +235,8 @@ def run_investigation_agent(investigation_id: int, max_items: int = 25,
             plan = _plan_queries(inv)
         except Exception as e:
             raise RuntimeError(f"planner failed: {e}")
+        if goal:
+            plan["goal"] = plan.get("goal") or goal
         run.plan = json.dumps(plan)
         db.commit()
         _event(db, run.id, "plan",
@@ -282,8 +297,8 @@ def run_investigation_agent(investigation_id: int, max_items: int = 25,
                 _event(db, run.id, "analyze", f"Round {rounds}: nothing worth keeping.")
                 break
 
-            rows = _persist(db, inv.id, kept)
-            rels = _map_relationships(db, inv.id, rows, pre_ids)
+            rows = _persist(db, inv.id, kept, run_id=run.id)
+            rels = _map_relationships(db, inv.id, rows, pre_ids, run_id=run.id)
             total_kept += len(rows)
             total_rels += rels
             _event(db, run.id, "map",
@@ -343,8 +358,33 @@ def run_investigation_agent(investigation_id: int, max_items: int = 25,
         db.close()
 
 
-def launch_run(investigation_id: int, max_items: int = 25, max_rounds: int = 2):
+def launch_run(investigation_id: int, max_items: int = 25, max_rounds: int = 2,
+               trigger: str = "manual"):
     t = threading.Thread(target=run_investigation_agent,
-                         args=(investigation_id, max_items, max_rounds), daemon=True)
+                         args=(investigation_id, max_items, max_rounds, trigger),
+                         daemon=True)
     t.start()
     return t
+
+
+def launch_run_with_goal(investigation_id: int, goal: str, max_items: int = 12,
+                         max_rounds: int = 1, trigger: str = "explainer_gap"):
+    db = SessionLocal()
+    try:
+        run = AgentRun(investigation_id=investigation_id, status="running",
+                       trigger=trigger, plan=json.dumps({"goal": goal}))
+        db.add(run)
+        db.commit()
+        db.refresh(run)
+        _event(db, run.id, "plan", f"Auto-investigate (from explanation): {goal[:120]}")
+        run_id = run.id
+    finally:
+        db.close()
+    t = threading.Thread(target=run_investigation_agent,
+                         kwargs=dict(investigation_id=investigation_id,
+                                     run_id=run_id, goal=goal,
+                                     max_items=max_items, max_rounds=max_rounds,
+                                     trigger=trigger),
+                         daemon=True)
+    t.start()
+    return run_id

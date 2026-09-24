@@ -109,6 +109,120 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .run-bar input[type=number] { width: 64px; padding: 5px 8px; background: var(--bg3); border: 1px solid var(--border); border-radius: 4px; color: var(--text); font-size: 12px; }
 .spin { animation: spin 1s linear infinite; display: inline-block; }
 @keyframes spin { to { transform: rotate(360deg); } }
+/* Timeline + compare */
+#timelineView { overflow-y: auto; padding: 20px 24px; height: 100%; background: var(--bg); }
+.compare-bar { display: flex; gap: 8px; align-items: center; margin-bottom: 14px; flex-wrap: wrap; background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; }
+.compare-bar label { font-size: 11px; color: var(--text2); font-weight: 600; }
+.compare-bar select { background: var(--bg3); border: 1px solid var(--border); border-radius: 4px; color: var(--text); font-size: 12px; padding: 5px 8px; max-width: 220px; }
+.tl-entry { background: var(--bg2); border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 6px; padding: 10px 14px; margin-bottom: 8px; font-size: 12px; }
+.tl-entry .meta { font-size: 11px; color: var(--text2); margin-top: 4px; display: flex; gap: 10px; flex-wrap: wrap; }
+.trig-pill { display: inline-block; padding: 1px 8px; border-radius: 9px; font-size: 10px; font-weight: 600; background: var(--bg3); color: var(--text2); }
+.trig-schedule { background: #2d1f3d; color: var(--purple); }
+.hl-banner { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); z-index: 11; display: flex; gap: 10px; align-items: center; background: var(--bg2); border: 1px solid var(--orange); border-radius: 8px; padding: 6px 12px; font-size: 12px; box-shadow: 0 2px 12px rgba(0,0,0,0.4); }
+/* Explainer */
+#explainerView { overflow-y: auto; padding: 20px 24px; height: 100%; background: var(--bg); }
+.ask-row { display: flex; gap: 8px; margin-bottom: 8px; }
+.ask-row input { flex: 1; padding: 9px 14px; background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-size: 13px; }
+.ask-row select { padding: 8px 8px; background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-size: 12px; }
+.ask-row input:focus, .ask-row select:focus { outline: none; border-color: var(--accent); }
+.article { background: var(--bg2); border: 1px solid var(--border); border-radius: 10px; padding: 20px 22px; margin-bottom: 12px; }
+.article h2 { font-size: 17px; margin-bottom: 10px; line-height: 1.35; }
+.article h3 { font-size: 14px; margin: 16px 0 6px; color: var(--accent); }
+.article h4 { font-size: 13px; margin: 12px 0 4px; }
+.article p { font-size: 13px; line-height: 1.65; margin-bottom: 8px; }
+.article ul, .article ol { font-size: 13px; line-height: 1.6; margin: 6px 0 10px 20px; }
+.article figure { margin: 12px auto; text-align: center; max-width: 100%; }
+.article figure img { max-width: 100% !important; height: auto !important; max-height: 55vh; border-radius: 8px; object-fit: contain; }
+.article figcaption { font-size: 11px; color: var(--text2); margin-top: 4px; }
+.kp-box { background: var(--bg3); border-left: 3px solid var(--teal); border-radius: 6px; padding: 10px 14px; margin: 14px 0; font-size: 12px; }
+.src-row { font-size: 11px; padding: 3px 0; color: var(--text2); }
+.src-row a { color: var(--accent); text-decoration: none; }
+.hist-row { display: flex; gap: 8px; align-items: center; background: var(--bg2); border: 1px solid var(--border); border-radius: 7px; padding: 8px 12px; margin-bottom: 6px; font-size: 12px; cursor: pointer; }
+.hist-row:hover { border-color: var(--accent); }
+.hist-row .q { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mode-pill { font-size: 10px; text-transform: uppercase; letter-spacing: 0.4px; padding: 2px 8px; border: 1px solid var(--border); border-radius: 20px; color: var(--accent); }
+.cmp-tbl { border-collapse: collapse; width: 100%; font-size: 12px; }
+.cmp-tbl th, .cmp-tbl td { border: 1px solid var(--border); padding: 6px 8px; text-align: left; vertical-align: top; }
+.cmp-tbl thead th { background: var(--bg3); font-size: 11px; text-transform: uppercase; }
+.tbl-scroll { overflow-x: auto; border-radius: 6px; }
+.crit-row { border-left: 3px solid var(--orange); background: var(--bg3); border-radius: 6px; padding: 8px 12px; margin: 6px 0; font-size: 12px; }
+/* Claims + evidence */
+.claims-list { margin: 6px 0 12px; background: var(--bg3); border-radius: 7px; padding: 8px 12px; }
+.claim-row { border-bottom: 1px solid var(--border); padding: 6px 0; }
+.claim-row:last-child { border-bottom: none; }
+.claim-text { font-size: 12px; line-height: 1.55; }
+.claim-cits { margin-top: 3px; display: flex; gap: 5px; align-items: center; }
+.ev-btn { background: transparent; border: 1px solid var(--accent); color: var(--accent); font-size: 10px; border-radius: 10px; padding: 1px 6px; cursor: pointer; }
+.ev-q { font-size: 10px; color: var(--text2); text-decoration: none; }
+.no-und { text-decoration: none; }
+.ev-drawer { font-size: 12px; }
+.ev-block { background: var(--bg2); border-left: 3px solid var(--accent); border-radius: 6px; padding: 8px 10px; margin: 6px 0; }
+.ev-quote { font-style: italic; color: var(--text); line-height: 1.5; }
+.ev-src { margin-top: 3px; font-size: 11px; color: var(--text2); }
+.ev-src a { color: var(--accent); text-decoration: none; }
+/* Mermaid diagrams */
+.diagram-wrap { background: var(--bg3); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; margin: 12px 0; }
+.diagram-wrap .mermaid, .diagram-wrap pre.mermaid { background: transparent; text-align: center; }
+.diagram-wrap pre.mermaid svg { max-width: 100%; height: auto; }
+/* Follow-ups + threads */
+.fu-row { display: flex; gap: 6px; margin: 14px 0 4px; }
+.fu-row input { flex: 1; padding: 7px 12px; background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-size: 12px; }
+.fu-card { background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin: 8px 0; }
+.fu-article { margin-top: 6px; border-color: var(--border); }
+/* Suggestions strip */
+.sugg-strip { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 10px; }
+.sugg-chip { font-size: 11px; padding: 4px 10px; background: var(--bg2); border: 1px solid var(--border); border-radius: 999px; color: var(--text); cursor: pointer; }
+.sugg-chip:hover { border-color: var(--accent); color: var(--accent); }
+.sugg-chip.kind-gap:before { content: '⟳ '; color: var(--text2); }
+.sugg-chip.kind-deepen:before { content: '↧ '; color: var(--text2); }
+.sugg-chip.kind-open:before { content: '? '; color: var(--text2); }
+.sugg-chip.kind-graph:before { content: '⛁ '; color: var(--text2); }
+/* Quiz */
+.quiz-box { margin: 14px 0; }
+.quiz-q { background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin: 8px 0; }
+.quiz-q .qnum { font-size: 10px; color: var(--text2); text-transform: uppercase; letter-spacing: 0.5px; }
+.quiz-opt { display: flex; align-items: center; gap: 8px; padding: 5px 8px; margin: 3px 0; border-radius: 6px; border: 1px solid transparent; cursor: pointer; font-size: 12px; }
+.quiz-opt:hover { background: var(--bg3); }
+.quiz-opt.correct { background: rgba(46, 204, 113, 0.12); border-color: var(--green); }
+.quiz-opt.wrong { background: rgba(231, 76, 60, 0.10); border-color: var(--red); }
+.quiz-rationale { font-size: 11px; color: var(--text2); margin-top: 6px; display: none; }
+.quiz-score { font-size: 12px; font-weight: 600; margin: 8px 0; }
+.quiz-reset { font-size: 11px; color: var(--accent); cursor: pointer; margin-left: 8px; }
+/* Bookmarks */
+.star-btn { color: var(--text2); background: none; border: none; cursor: pointer; font-size: 14px; padding: 2px 4px; }
+.star-btn.on { color: var(--orange); }
+.bkmk-on .fa-bookmark { color: var(--orange); }
+/* Detail overlay (node click) */
+.overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 100; display: none; align-items: center; justify-content: center; padding: 40px; }
+.overlay.visible { display: flex; }
+.overlay-panel { background: var(--bg2); border: 1px solid var(--border); border-radius: 12px; max-width: 720px; width: 100%; max-height: 85vh; overflow-y: auto; padding: 0; position: relative; }
+.overlay-header { padding: 20px 24px 16px; border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--bg2); z-index: 2; }
+.overlay-close { position: absolute; top: 16px; right: 16px; background: transparent; border: none; color: var(--text2); cursor: pointer; font-size: 18px; padding: 4px 8px; border-radius: 4px; }
+.overlay-close:hover { background: var(--bg3); color: var(--text); }
+.overlay-body { padding: 16px 24px 20px; }
+.overlay-section { margin-bottom: 16px; }
+.overlay-section:last-child { margin-bottom: 0; }
+.overlay-section h4 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text2); margin-bottom: 6px; font-weight: 600; }
+.overlay-section p { font-size: 13px; line-height: 1.5; color: var(--text); }
+.overlay-section .url-link { font-size: 12px; color: var(--accent); word-break: break-all; }
+.overlay-body .rel-item { font-size: 12px; padding: 4px 0; display: flex; gap: 6px; align-items: baseline; }
+.overlay-body .rel-type { font-size: 10px; padding: 1px 6px; border-radius: 8px; background: var(--bg3); color: var(--text2); white-space: nowrap; }
+.relevance-bar { display: flex; align-items: center; gap: 8px; }
+.relevance-bar .bar-track { flex: 1; height: 6px; background: var(--bg3); border-radius: 3px; position: relative; }
+.relevance-bar .bar-fill { height: 6px; border-radius: 3px; position: absolute; top: 0; }
+.source-btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px; border-radius: 6px; font-size: 12px; font-weight: 500; background: var(--bg3); border: 1px solid var(--border); color: var(--accent); cursor: pointer; text-decoration: none; }
+.source-btn:hover { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+.similar-item { padding: 8px 10px; background: var(--bg3); border-radius: 6px; margin-bottom: 4px; cursor: pointer; border: 1px solid transparent; font-size: 12px; }
+.similar-item:hover { border-color: var(--accent); }
+.sim-item-row { display: flex; align-items: center; gap: 10px; }
+.sim-score-ring { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: 50%; font-size: 10px; font-weight: 700; flex-shrink: 0; }
+.sim-reasons { font-size: 10px; color: var(--text2); margin-top: 2px; }
+/* Media scale-to-fit: collected pages may embed full-size images */
+.overlay-body img { max-width: 100% !important; height: auto !important; max-height: 60vh; display: block; margin: 8px auto; border-radius: 8px; object-fit: contain; }
+.overlay-body video, .overlay-body iframe { max-width: 100% !important; display: block; margin: 8px auto; border-radius: 8px; }
+.overlay-body figure { max-width: 100%; margin: 8px auto; text-align: center; }
+.overlay-body table { display: block; max-width: 100%; overflow-x: auto; }
+.overlay-section p { overflow-wrap: anywhere; }
 </style>
 </head>
 <body>
@@ -148,6 +262,28 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
         <button class="btn btn-primary" id="runBtn" onclick="startRun()" style="width:100%;"><i class="fas fa-robot"></i> Run agent</button>
         <div style="font-size:10px;color:var(--text2);margin-top:4px;" id="runHint">Plans queries → searches → analyzes → maps graph.</div>
       </div>
+      <div style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px;">
+        <h3 style="margin-bottom:8px;"><i class="fas fa-clock"></i> Schedule</h3>
+        <div class="form-group" style="display:flex;gap:8px;align-items:center;">
+          <label style="display:flex;gap:5px;align-items:center;cursor:pointer;font-size:12px;color:var(--text);"><input type="checkbox" id="schedEnabled" style="width:auto;" /> Enabled</label>
+        </div>
+        <div class="form-group"><label>Timetable</label>
+          <select id="schedPreset" onchange="onSchedPreset()">
+            <option value="0 4 * * *">Daily 04:00</option>
+            <option value="0 */12 * * *">Every 12 hours</option>
+            <option value="0 * * * *">Hourly</option>
+            <option value="0 4 * * 1">Weekly (Mon 04:00)</option>
+            <option value="custom">Custom cron…</option>
+          </select>
+        </div>
+        <div class="form-group"><label>Cron expression</label><input id="schedCron" value="0 4 * * *" placeholder="e.g. 0 4 * * *" /></div>
+        <div style="display:flex;gap:8px;">
+          <div class="form-group" style="flex:1;"><label>Items</label><input type="number" id="schedItems" value="25" min="1" max="100" /></div>
+          <div class="form-group" style="flex:1;"><label>Rounds</label><input type="number" id="schedRounds" value="2" min="1" max="3" /></div>
+        </div>
+        <button class="btn btn-ghost btn-sm" onclick="saveSchedule()" style="width:100%;"><i class="fas fa-save"></i> Save schedule</button>
+        <div style="font-size:10px;color:var(--text2);margin-top:4px;" id="schedNext"></div>
+      </div>
       <div id="runHistory" style="margin-top:10px;"></div>
     </div>
   </div>
@@ -156,11 +292,16 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
     <div class="main-tabs">
       <div class="main-tab active" data-view="graph" onclick="switchView('graph')"><i class="fas fa-project-diagram"></i> Knowledge graph</div>
       <div class="main-tab" data-view="artifacts" onclick="switchView('artifacts')"><i class="fas fa-list-check"></i> Review <span id="pendingCount"></span></div>
+      <div class="main-tab" data-view="timeline" onclick="switchView('timeline')"><i class="fas fa-timeline"></i> Timeline</div>
+      <div class="main-tab" data-view="explainer" onclick="switchView('explainer')"><i class="fas fa-lightbulb"></i> Explainer</div>
       <div class="main-tab" data-view="console" onclick="switchView('console')"><i class="fas fa-terminal"></i> Agent console</div>
     </div>
     <div class="main-content">
       <div class="view visible" id="graphView">
-        <div class="cluster-bar" title="Cluster graph nodes; centroid = group label">
+        <div id="hlBanner" class="hl-banner" style="display:none;">
+          <span id="hlText"></span>
+          <button class="btn btn-ghost btn-sm" onclick="clearHighlight()">Clear</button>
+        </div>        <div class="cluster-bar" title="Cluster graph nodes; centroid = group label">
           <button class="cluster-btn active" data-cluster="off" onclick="setClusterMode('off')"><i class="fas fa-circle"></i> Off</button>
           <button class="cluster-btn" data-cluster="category" onclick="setClusterMode('category')"><i class="fas fa-layer-group"></i> Category</button>
           <button class="cluster-btn" data-cluster="similarity" onclick="setClusterMode('similarity')"><i class="fas fa-hubspot"></i> Similarity</button>
@@ -181,6 +322,53 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
         </div>
         <div id="artList"></div>
       </div>
+      <div class="view" id="timelineView">
+        <div class="compare-bar">
+          <label>Baseline</label><select id="cmpFrom"></select>
+          <label>Target</label><select id="cmpTo"></select>
+          <button class="btn btn-primary btn-sm" onclick="compareRuns()"><i class="fas fa-code-compare"></i> Compare</button>
+          <button class="btn btn-ghost btn-sm" id="hlBtn" onclick="highlightInGraph()" disabled><i class="fas fa-highlighter"></i> Highlight in graph</button>
+          <span id="cmpSummary" style="font-size:12px;color:var(--text2);"></span>
+        </div>
+        <div id="cmpNewList"></div>
+        <div id="timelineList"></div>
+      </div>
+      <div class="view" id="explainerView">
+        <div class="ask-row">
+          <input id="askInput" list="explRecall" placeholder='Ask anything, e.g. How does typesafe&#39;s JEV work?' onkeydown="if(event.key==='Enter')askExplainer()" />
+          <datalist id="explRecall"></datalist>
+          <select id="modeSel" onchange="saveExplDefaults()" title="Explanation mode">
+            <option value="explain">Explain</option>
+            <option value="deep_dive">Deep dive</option>
+            <option value="compare">Compare</option>
+            <option value="tutor">Tutor</option>
+            <option value="critique">Critique</option>
+            <option value="tldr">TL;DR</option>
+            <option value="glossary">Glossary</option>
+            <option value="api_ref">API ref</option>
+          </select>
+          <select id="depthSel" onchange="saveExplDefaults()" title="Depth">
+            <option value="shallow">Shallow</option>
+            <option value="balanced">Balanced</option>
+            <option value="deep">Deep</option>
+          </select>
+          <select id="audSel" onchange="saveExplDefaults()" title="Audience">
+            <option value="beginner">Beginner</option>
+            <option value="intermediate">Intermediate</option>
+            <option value="advanced">Advanced</option>
+          </select>
+          <button class="btn btn-primary" id="askBtn" onclick="askExplainer()"><i class="fas fa-wand-magic-sparkles"></i> Explain</button>
+        </div>
+        <div id="suggStrip" class="sugg-strip" style="display:none;"></div>
+        <div id="askStatus" style="font-size:12px;color:var(--text2);margin-bottom:12px;"></div>
+        <div id="articleBox"></div>
+        <div style="display:flex;align-items:center;gap:8px;margin:18px 0 8px;">
+          <h3 style="font-size:12px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text2);margin:0;">Past explanations</h3>
+          <span style="flex:1"></span>
+          <label style="font-size:11px;color:var(--text2);cursor:pointer;"><input type="checkbox" id="bkmkOnly" onchange="loadExplanationsMarked()" /> bookmarked only</label>
+        </div>
+        <div id="explHistory"></div>
+      </div>
       <div class="view" id="consoleView">
         <div class="run-bar">
           <label style="font-size:11px;color:var(--text2);">Max items</label>
@@ -197,6 +385,14 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
   </div>
 </div>
 
+<div class="overlay" id="detailOverlay">
+  <div class="overlay-panel">
+    <button class="overlay-close" onclick="closeOverlay()"><i class="fas fa-times"></i></button>
+    <div class="overlay-header" id="overlayHeader"></div>
+    <div class="overlay-body" id="overlayBody"></div>
+  </div>
+</div>
+
 <div class="notif" id="notif"></div>
 
 <script>
@@ -208,6 +404,7 @@ let physicsEnabled = true;
 let clusterMode = 'off', clusterIds = [], clusterCache = { category: null, similarity: null };
 let activeRunId = null, lastEventId = 0, pollTimer = null;
 let revFilter = 'pending';
+let overlayOpen = false;
 
 const TYPE_COLORS = {
   news: '#58a6ff', paper: '#3fb950', book: '#f0b429', essay: '#bc8cff',
@@ -316,7 +513,8 @@ async function selectInvestigation(id) {
   currentInv = id;
   clusterCache = { category: null, similarity: null };
   clusterMode = 'off'; updateClusterButtons();
-  stopPolling();
+  stopPolling(); stopExpPoll();
+  document.getElementById('articleBox').innerHTML = '';
   const res = await fetch(`${API}/investigations/${id}`);
   const inv = await res.json();
   document.getElementById('briefPanel').style.display = 'block';
@@ -332,13 +530,15 @@ async function selectInvestigation(id) {
       <div style="font-size:11px;color:var(--text2);padding:4px 0;border-top:1px solid var(--border);cursor:pointer;"
            onclick="watchRun(${r.id})">
         <i class="fas fa-robot"></i> run #${r.id} · ${r.status}
+        <span class="trig-pill ${r.trigger === 'schedule' ? 'trig-schedule' : ''}">${r.trigger || 'manual'}</span>
         ${r.stats.artifacts_kept != null ? ` · ${r.stats.artifacts_kept} items` : ''}
       </div>`).join('');
+  fillSchedule(inv.schedule);
   document.querySelectorAll('.inv-item').forEach((el, ix) => {
     el.classList.toggle('active', investigations[ix] && investigations[ix].id === id);
   });
   setRunButtons(inv.status === 'running', inv.status === 'running' ? 'Agent running…' : null);
-  await Promise.all([loadGraph(), loadArtifacts()]);
+  await Promise.all([loadGraph(), loadArtifacts(), loadTimeline(), loadExplanations()]);
   updatePendingCount();
 }
 
@@ -439,7 +639,7 @@ async function pollRun() {
       setRunButtons(false);
       if (data.status === 'done') {
         showNotif('Agent run finished', 'success');
-        loadGraph(); loadArtifacts(); loadInvestigations(); updatePendingCount();
+        loadGraph(); loadArtifacts(); loadInvestigations(); updatePendingCount(); loadTimeline();
       } else showNotif('Agent run failed — see console', 'error');
       const full = await (await fetch(`${API}/runs/${activeRunId}`)).json().catch(() => null);
       if (full && full.plan) {
@@ -462,6 +662,9 @@ async function loadGraph() {
 }
 
 function renderGraph() {
+  highlightOn = false;
+  const banner = document.getElementById('hlBanner');
+  if (banner) banner.style.display = 'none';
   const container = document.getElementById('graph');
   const isLight = document.documentElement.className === 'light';
   const fontColor = isLight ? '#1f2328' : '#ffffff';
@@ -505,10 +708,141 @@ function renderGraph() {
       network.openCluster(c);
       clusterIds = clusterIds.filter(x => x !== c);
       updateClusterCount(clusterIds.length);
+    } else {
+      openDetailOverlay(c);
     }
   });
   if (clusterMode !== 'off') { const p = clusterMode; clusterMode = 'off'; setClusterMode(p); }
 }
+
+function focusNode(id) {
+  if (!network) return;
+  for (const cid of [...clusterIds]) {
+    try {
+      if (network.isCluster(cid) && network.getNodesInCluster(cid).includes(id)) {
+        network.openCluster(cid);
+        clusterIds = clusterIds.filter(c => c !== cid);
+      }
+    } catch (e) {}
+  }
+  updateClusterCount(clusterIds.length);
+  switchView('graph');
+  network.focus(id, { scale: 1.5, animation: true });
+  network.selectNodes([id]);
+  openDetailOverlay(id);
+}
+
+async function openDetailOverlay(id) {
+  overlayOpen = true;
+  document.getElementById('detailOverlay').classList.add('visible');
+  const header = document.getElementById('overlayHeader');
+  const body = document.getElementById('overlayBody');
+  header.innerHTML = '<div style="display:flex;align-items:center;gap:12px;"><i class="fas fa-spinner fa-spin" style="color:var(--text2)"></i><span style="color:var(--text2);font-size:13px;">Loading...</span></div>';
+  body.innerHTML = '';
+  try {
+    const [detailRes, similarRes] = await Promise.all([
+      fetch(`${API}/artifacts/${id}`),
+      fetch(`${API}/artifacts/${id}/similar`),
+    ]);
+    if (!detailRes.ok) throw new Error('not found');
+    const detail = await detailRes.json();
+    const similar = await similarRes.json();
+    const rel = detail.relevance || 0;
+    const relColor = rel >= 0.7 ? 'var(--green)' : rel >= 0.45 ? 'var(--orange)' : 'var(--text2)';
+    const sent = detail.sentiment || 0;
+    const sentColor = sent > 0.2 ? 'var(--green)' : sent < -0.2 ? 'var(--red)' : 'var(--text2)';
+
+    header.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:start;gap:16px;flex-wrap:wrap;">
+        <div style="flex:1;min-width:0;">
+          <div style="display:flex;gap:8px;align-items:center;margin-bottom:4px;flex-wrap:wrap;">
+            <span class="type-badge" style="background:var(--bg3);color:var(--text2);">${detail.artifact_type}</span>
+            <span class="status-pill st-${detail.review === 'accepted' ? 'ready' : detail.review === 'rejected' ? 'draft' : 'running'}">${detail.review}</span>
+            <span style="font-size:11px;color:var(--text2);">${detail.author || ''}${detail.date_published ? ' · ' + new Date(detail.date_published).toLocaleDateString() : ''}</span>
+          </div>
+          <h2 style="font-size:16px;font-weight:600;line-height:1.3;">${detail.title}</h2>
+        </div>
+        <div style="flex-shrink:0;">
+          <div class="relevance-bar" style="margin-bottom:4px;">
+            <span style="font-size:11px;color:var(--text2);">Relevance</span>
+            <div class="bar-track" style="width:80px;">
+              <div class="bar-fill" style="width:${rel * 100}%;background:${relColor};"></div>
+            </div>
+            <span style="font-size:12px;color:${relColor};font-weight:600;">${Math.round(rel * 100)}%</span>
+          </div>
+          <div style="font-size:11px;color:var(--text2);">Sentiment <span style="color:${sentColor};font-weight:600;">${sent.toFixed(2)}</span></div>
+        </div>
+      </div>`;
+
+    let html = '';
+    if (detail.relevance_reason) {
+      html += `<div class="overlay-section"><h4><i class="fas fa-robot"></i> Why collected</h4><p style="font-style:italic;">“${detail.relevance_reason}”</p></div>`;
+    }
+    if (detail.description) {
+      html += `<div class="overlay-section"><h4><i class="fas fa-align-left"></i> Description</h4><p>${detail.description}</p></div>`;
+    }
+    if (detail.url) {
+      html += `<div class="overlay-section"><h4><i class="fas fa-link"></i> Source</h4>
+        <a class="source-btn" href="${detail.url}" target="_blank" rel="noopener">
+          <i class="fas fa-external-link-alt"></i> Open Source
+          <span style="font-weight:400;font-size:11px;color:var(--text2);max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${detail.url}</span>
+        </a>
+        ${detail.source ? `<span style="display:inline-block;margin-left:8px;font-size:11px;color:var(--text2);">via ${detail.source}</span>` : ''}</div>`;
+    }
+    if (detail.content) {
+      html += `<div class="overlay-section"><h4><i class="fas fa-file-alt"></i> Full Summary</h4><p style="font-size:12px;white-space:pre-wrap;">${detail.content}</p></div>`;
+    }
+    if (detail.tags) {
+      html += `<div class="overlay-section"><h4><i class="fas fa-tags"></i> Tags</h4><div>${detail.tags.split(',').map(t => `<span class="tag">${t.trim()}</span>`).join('')}</div></div>`;
+    }
+    if (detail.relationships && detail.relationships.length) {
+      html += `<div class="overlay-section"><h4><i class="fas fa-project-diagram"></i> Graph Connections (${detail.relationships.length})</h4>`;
+      detail.relationships.forEach(r => {
+        const linkedId = r.direction === 'outgoing' ? r.target_id : r.source_id;
+        const label = r.direction === 'outgoing' ? r.target_title : r.source_title;
+        const tag = r.direction === 'outgoing' ? `→ ${r.type}` : `${r.type} ←`;
+        const icon = r.direction === 'outgoing' ? 'fa-arrow-right' : 'fa-arrow-left';
+        html += `<div class="rel-item" style="cursor:pointer;" onclick="closeOverlay();focusNode(${linkedId})">
+          <i class="fas ${icon}" style="color:var(--text2);font-size:10px;"></i>
+          <span class="rel-type">${tag}</span><span>${label}</span>
+          ${r.description ? `<span style="color:var(--text2);font-size:10px;">— ${r.description}</span>` : ''}</div>`;
+      });
+      html += `</div>`;
+    }
+    if (similar.items && similar.items.length) {
+      html += `<div class="overlay-section"><h4><i class="fas fa-search"></i> Similar Artifacts (${similar.items.length})</h4>`;
+      similar.items.forEach(s => {
+        const pct = Math.round(s.similarity * 100);
+        const col = pct >= 60 ? 'var(--green)' : pct >= 35 ? 'var(--orange)' : 'var(--text2)';
+        html += `<div class="similar-item" onclick="closeOverlay();focusNode(${s.id})">
+          <div class="sim-item-row">
+            <div class="sim-score-ring" style="background:${col}20;color:${col};border:2px solid ${col};">${pct}%</div>
+            <div style="flex:1;min-width:0;">
+              <div><span class="type-badge" style="background:var(--bg3);color:var(--text2);">${s.artifact_type}</span> ${s.title}</div>
+              <div class="sim-reasons">${s.reasons.join(' · ')}</div>
+            </div></div></div>`;
+      });
+      html += `</div>`;
+    }
+    html += `<div class="overlay-section"><h4><i class="fas fa-list-check"></i> Review</h4>
+      <div style="display:flex;gap:6px;">
+        <button class="btn btn-primary btn-sm" onclick="setReview(${detail.id},'accepted');closeOverlay();"><i class="fas fa-check"></i> Accept</button>
+        <button class="btn btn-ghost btn-sm" onclick="setReview(${detail.id},'rejected');closeOverlay();"><i class="fas fa-times"></i> Reject</button>
+      </div></div>`;
+    body.innerHTML = html;
+  } catch (e) {
+    body.innerHTML = `<div class="empty-state"><i class="fas fa-exclamation-triangle"></i><br/>Failed to load details</div>`;
+  }
+}
+
+function closeOverlay() {
+  overlayOpen = false;
+  document.getElementById('detailOverlay').classList.remove('visible');
+}
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && overlayOpen) closeOverlay();
+});
 
 function fitGraph() { network?.fit({ animation: true }); }
 function togglePhysics() { physicsEnabled = !physicsEnabled; network?.setOptions({ physics: { enabled: physicsEnabled } }); }
@@ -598,6 +932,7 @@ async function loadArtifacts() {
         ${a.url ? `<a href="${a.url}" target="_blank" rel="noopener" style="color:var(--accent);font-size:11px;"><i class="fas fa-external-link-alt"></i> source</a>` : ''}
       </div>
       <div class="actions">
+        <button class="btn btn-ghost btn-sm" onclick="focusNode(${a.id})" title="Show in graph"><i class="fas fa-project-diagram"></i></button>
         ${a.review !== 'accepted' ? `<button class="btn btn-primary btn-sm" onclick="setReview(${a.id},'accepted')"><i class="fas fa-check"></i> Accept</button>` : ''}
         ${a.review !== 'rejected' ? `<button class="btn btn-ghost btn-sm" onclick="setReview(${a.id},'rejected')"><i class="fas fa-times"></i> Reject</button>` : ''}
         ${a.review !== 'pending' ? `<button class="btn btn-ghost btn-sm" onclick="setReview(${a.id},'pending')">Unreview</button>` : ''}
@@ -628,6 +963,755 @@ async function updatePendingCount() {
   document.getElementById('pendingCount').textContent = data.total ? `(${data.total})` : '';
 }
 
+let timelineData = null, compareResult = null, highlightOn = false;
+
+async function loadTimeline() {
+  if (!currentInv) return;
+  const res = await fetch(`${API}/investigations/${currentInv}/timeline`);
+  timelineData = await res.json();
+  const runs = timelineData.runs || [];
+  const opts = runs.map(r =>
+    `<option value="${r.id}">#${r.id} · ${r.trigger} · ${r.status} · +${r.added_artifacts}</option>`).join('');
+  document.getElementById('cmpFrom').innerHTML = opts || '<option value="">—</option>';
+  document.getElementById('cmpTo').innerHTML = opts || '<option value="">—</option>';
+  if (runs.length >= 2) {
+    document.getElementById('cmpFrom').value = runs[runs.length - 2].id;
+    document.getElementById('cmpTo').value = runs[runs.length - 1].id;
+  }
+  document.getElementById('hlBtn').disabled = true;
+  document.getElementById('cmpSummary').textContent = '';
+  document.getElementById('cmpNewList').innerHTML = '';
+  compareResult = null;
+  const list = document.getElementById('timelineList');
+  const fmt = ts => ts ? new Date(ts).toLocaleString() : '—';
+  list.innerHTML = runs.slice().reverse().map(r => `
+    <div class="tl-entry">
+      <div><strong>Run #${r.id}</strong>
+        <span class="trig-pill ${r.trigger === 'schedule' ? 'trig-schedule' : ''}">${r.trigger}</span>
+        <span class="status-pill st-${r.status === 'done' ? 'ready' : r.status === 'running' ? 'running' : 'draft'}">${r.status}</span></div>
+      <div class="meta"><span><i class="fas fa-play"></i> ${fmt(r.started_at)}</span>
+        <span><i class="fas fa-flag-checkered"></i> ${fmt(r.finished_at)}</span>
+        <span><i class="fas fa-database"></i> +${r.added_artifacts} items</span>
+        <span><i class="fas fa-share-nodes"></i> +${r.added_relationships} edges</span>
+        <a href="#" style="color:var(--accent);" onclick="watchRun(${r.id});return false;">view log</a></div>
+    </div>`).join('') || '<div class="empty-state"><i class="fas fa-timeline"></i><br/>No runs yet.</div>';
+  const manual = timelineData.manual || [];
+  if (manual.length) {
+    list.insertAdjacentHTML('beforeend',
+      `<div class="tl-entry" style="border-left-color:var(--green);"><div><strong>${manual.length} manual addition${manual.length === 1 ? '' : 's'}</strong></div>
+       <div class="meta"><span>${manual.slice(0, 6).map(a => a.title.substring(0, 50)).join(' · ')}${manual.length > 6 ? ' …' : ''}</span></div></div>`);
+  }
+}
+
+async function compareRuns() {
+  const from = document.getElementById('cmpFrom').value;
+  const to = document.getElementById('cmpTo').value;
+  if (!from || !to) { showNotif('Pick two runs to compare', 'error'); return; }
+  const res = await fetch(`${API}/investigations/${currentInv}/compare?from_run=${from}&to_run=${to}`);
+  if (!res.ok) { showNotif('Compare failed', 'error'); return; }
+  compareResult = await res.json();
+  const n = compareResult.new_node_ids.length, e = compareResult.new_edge_ids.length;
+  document.getElementById('cmpSummary').textContent =
+    `Run #${from} → #${to}: ${n} new node${n === 1 ? '' : 's'}, ${e} new edge${e === 1 ? '' : 's'}`;
+  document.getElementById('hlBtn').disabled = !n;
+  document.getElementById('cmpNewList').innerHTML = (compareResult.new_nodes || []).map(a =>
+    `<div class="art-card" style="padding:8px 12px;"><div class="ttl" style="font-size:12px;">
+      <span class="type-badge" style="background:var(--bg3);color:var(--text2);">${a.artifact_type}</span>
+      ${a.title} <span style="color:var(--text2);">(${(a.relevance || 0).toFixed(2)})</span></div></div>`
+  ).join('');
+}
+
+async function highlightInGraph() {
+  if (!compareResult || !compareResult.new_node_ids.length) {
+    showNotif('Nothing new to highlight', 'error'); return;
+  }
+  switchView('graph');
+  await loadGraph();
+  openAllClusters();
+  applyCompareHighlight(compareResult.new_node_ids, compareResult.new_edge_ids);
+  highlightOn = true;
+  document.getElementById('hlText').textContent =
+    `${compareResult.new_node_ids.length} new · run #${compareResult.from_run.id} → #${compareResult.to_run.id}`;
+  document.getElementById('hlBanner').style.display = 'flex';
+  network.focus(compareResult.new_node_ids[0], { scale: 1.2, animation: true });
+}
+
+function applyCompareHighlight(nodeIds, edgeIds) {
+  if (!network || !nodes) return;
+  const nset = new Set(nodeIds), eset = new Set(edgeIds);
+  const isLight = document.documentElement.className === 'light';
+  const nu = [];
+  nodes.forEach(n => {
+    const g = graphData.nodes.find(x => x.id === n.id);
+    const bg = TYPE_COLORS[g?.type] || '#666';
+    nu.push(nset.has(n.id)
+      ? { id: n.id, opacity: 1, borderWidth: 4,
+          color: { background: bg, border: '#f0b429', highlight: { background: bg, border: '#f0b429' }, hover: { background: bg, border: '#f0b429' } },
+          shadow: { enabled: true, color: 'rgba(240,180,41,0.7)', size: 24, x: 0, y: 0 } }
+      : { id: n.id, opacity: 0.22, borderWidth: 1,
+          color: { background: bg, border: bg, highlight: { background: '#fff', border: '#fff' }, hover: { background: bg, border: '#fff' } },
+          shadow: { enabled: false } });
+  });
+  nodes.update(nu);
+  const eu = [];
+  edges.forEach(e => eu.push(eset.has(e.id)
+    ? { id: e.id, width: 3.5, color: { color: '#f0b429', highlight: '#f0b429', hover: '#f0b429' } }
+    : { id: e.id, width: 1, color: { color: isLight ? '#0969da22' : '#58a6ff33', highlight: '#58a6ff', hover: '#58a6ff' } }));
+  edges.update(eu);
+}
+
+function clearHighlight() {
+  highlightOn = false;
+  document.getElementById('hlBanner').style.display = 'none';
+  renderGraph();
+}
+
+/* ---------- explainer ---------- */
+let activeExpId = null, pollExpTimer = null, activeArticle = null;
+
+function escHtml(s) {
+  return (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+function mdInline(s) {
+  s = escHtml(s);
+  s = s.replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g,
+    '<a href="$2" target="_blank" rel="noopener" style="color:var(--accent);">$1</a>');
+  s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  s = s.replace(/(^|\W)\*([^*\n]+)\*/g, '$1<em>$2</em>');
+  s = s.replace(/`([^`]+)`/g, '<code style="background:var(--bg3);padding:1px 5px;border-radius:4px;font-size:11px;">$1</code>');
+  return s;
+}
+function mdBlock(text) {
+  const lines = (text || '').split('\n');
+  let html = '', list = null;
+  const close = () => { if (list) { html += list === 'ul' ? '</ul>' : '</ol>'; list = null; } };
+  for (const ln of lines) {
+    const t = ln.trim();
+    let m;
+    if (m = t.match(/^###\s+(.*)/)) { close(); html += `<h4>${mdInline(m[1])}</h4>`; }
+    else if (m = t.match(/^##\s+(.*)/)) { close(); html += `<h3>${mdInline(m[1])}</h3>`; }
+    else if (m = t.match(/^[-*]\s+(.*)/)) { if (list !== 'ul') { close(); html += '<ul>'; list = 'ul'; } html += `<li>${mdInline(m[1])}</li>`; }
+    else if (m = t.match(/^\d+[.)]\s+(.*)/)) { if (list !== 'ol') { close(); html += '<ol>'; list = 'ol'; } html += `<li>${mdInline(m[1])}</li>`; }
+    else if (!t) close();
+    else { close(); html += `<p>${mdInline(t)}</p>`; }
+  }
+  close();
+  return html;
+}
+
+async function askExplainer() {
+  if (!currentInv) { showNotif('Select an investigation first', 'error'); return; }
+  const q = document.getElementById('askInput').value.trim();
+  if (!q) return;
+  const res = await fetch(`${API}/investigations/${currentInv}/explain`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      question: q,
+      mode: document.getElementById('modeSel').value,
+      depth: document.getElementById('depthSel').value,
+      audience: document.getElementById('audSel').value,
+    }),
+  });
+  if (res.status === 429) { showNotif('An explanation is already running', 'error'); return; }
+  if (!res.ok) { showNotif('Failed to start explainer', 'error'); return; }
+  const exp = await res.json();
+  document.getElementById('askInput').value = '';
+  watchExplanation(exp.id);
+  loadExplanations();
+}
+
+function saveExplDefaults() {
+  localStorage.setItem('explMode', document.getElementById('modeSel').value);
+  localStorage.setItem('explDepth', document.getElementById('depthSel').value);
+  localStorage.setItem('explAud', document.getElementById('audSel').value);
+}
+
+function loadExplDefaults() {
+  const lst = localStorage;
+  if (lst.explMode) document.getElementById('modeSel').value = lst.explMode;
+  if (lst.explDepth) document.getElementById('depthSel').value = lst.explDepth;
+  if (lst.explAud) document.getElementById('audSel').value = lst.explAud;
+}
+
+function watchExplanation(id) {
+  if (pollExpTimer) clearInterval(pollExpTimer);
+  activeExpId = id;
+  pollExpTimer = setInterval(pollExplanation, 3000);
+  pollExplanation();
+}
+
+function stopExpPoll() {
+  if (pollExpTimer) clearInterval(pollExpTimer);
+  pollExpTimer = null;
+}
+
+async function pollExplanation() {
+  if (!activeExpId) return;
+  try {
+    const res = await fetch(`${API}/explanations/${activeExpId}`);
+    const exp = await res.json();
+    if (exp.status === 'done' || exp.status === 'error') {
+      stopExpPoll();
+      renderExplanation(exp);
+      loadExplanations();
+    } else {
+      document.getElementById('askStatus').innerHTML =
+        `<i class="fas fa-spinner spin"></i> Researching & writing… (${escHtml(exp.question.substring(0, 80))})`;
+      renderExplanationShell(exp);
+    }
+  } catch (e) {}
+}
+
+function renderExplanationShell(exp) {
+  document.getElementById('articleBox').innerHTML = `
+    <div class="article"><h2>${escHtml(exp.question)}</h2>
+    <div style="color:var(--text2);font-size:12px;"><i class="fas fa-spinner spin"></i> Searching the web, reading sources, composing…</div></div>`;
+}
+
+function renderExplanation(exp) {
+  stopExpPoll();
+  activeExpId = exp.id;
+  activeArticle = exp;
+  const box = document.getElementById('articleBox');
+  document.getElementById('askStatus').textContent =
+    exp.status === 'done' ? '' : `Failed: ${(exp.error || '').split('\n')[0]}`;
+  if (exp.status !== 'done' || !exp.answer) {
+    if (exp.status !== 'error') box.innerHTML = '';
+    else box.innerHTML = `<div class="empty-state"><i class="fas fa-exclamation-triangle"></i><br/>Explanation failed</div>`;
+    return;
+  }
+  const a = exp.answer;
+  let html = `<div class="article">
+<div style="display:flex;justify-content:space-between;align-items:start;gap:12px;">
+        <h2 style="flex:1;">${escHtml(exp.question)}</h2>
+        <div style="display:flex;gap:6px;flex-shrink:0;">
+          <button class="btn btn-ghost btn-sm ${exp.bookmarked ? 'bkmk-on' : ''}" onclick="toggleBookmark(${exp.id}, this)" title="${exp.bookmarked ? 'Remove bookmark' : 'Bookmark this answer'}"><i class="fas fa-bookmark"></i></button>
+          <button class="btn btn-ghost btn-sm" ${exp.status === 'done' ? '' : 'disabled'} onclick="makeQuiz(${exp.id})" title="Turn this answer into a review quiz"><i class="fas fa-clipboard-question"></i> Quiz</button>
+          <button class="btn btn-ghost btn-sm" onclick="toggleTrace()" title="Show how the agent searched, read and chose sources"><i class="fas fa-magnifying-glass-chart"></i> Research trace</button>
+          <button class="btn btn-ghost btn-sm" onclick="saveExplanationToGraph(${exp.id})" title="Save as structured knowledge (concepts + relations) in this investigation"><i class="fas fa-share-nodes"></i> Save to graph</button>
+          <button class="btn btn-ghost btn-sm" onclick="investigateGaps(${exp.id})" title="Auto-investigate open questions as an agent run"><i class="fas fa-compass-drafting"></i> Investigate gaps</button>
+          <button class="btn btn-danger btn-sm" onclick="deleteExplanation(${exp.id})"><i class="fas fa-trash"></i></button>
+        </div>
+      </div>
+      <div style="display:flex;gap:6px;margin-bottom:8px;">
+        <span class="mode-pill">${escHtml(exp.mode || 'explain')}</span>
+        <span class="mode-pill">${escHtml(exp.depth || 'balanced')}</span>
+        <span class="mode-pill">${escHtml(exp.audience || 'intermediate')}</span>
+      </div>
+      <div id="traceBox" style="display:none;"></div>
+    <p style="color:var(--text2);font-style:italic;">${mdInline(a.summary || '')}</p>`;
+  if (a.diagram && a.diagram.mermaid) {
+    html += `<div class="diagram-wrap">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+        <strong style="font-size:12px;">${escHtml(a.diagram.title || 'Diagram')}</strong>
+        <button class="btn btn-ghost btn-sm" onclick="copyMermaid(this)" title="Copy Mermaid source"><i class="fas fa-copy"></i> Mermaid</button>
+      </div>
+      <div class="mermaid" data-src="${escHtml(a.diagram.mermaid)}">${escHtml(a.diagram.mermaid)}</div>
+      ${a.diagram.caption ? `<div style="font-size:11px;color:var(--text2);margin-top:4px;">${escHtml(a.diagram.caption)}</div>` : ''}
+    </div>`;
+  }
+  (a.sections || []).forEach((s, si) => {
+    html += `<div style="display:flex;align-items:baseline;gap:8px;"><h3 style="flex:1;">${escHtml(s.heading || '')}</h3>
+      <button class="btn btn-ghost btn-sm" onclick="setFuScope(${exp.id}, ${si})" title="Ask a follow-up about this section"><i class="fas fa-reply"></i> Follow-up</button></div>${mdBlock(s.body || '')}`;
+    if (s.claims && s.claims.length) {
+      html += `<div class="claims-list">` + s.claims.map((c, ci) => {
+        cacheEv(`ev-${si}-${ci}`, c, a);
+        return `<div class="claim-row"><div class="claim-text">${mdInline(c.text)}</div><div class="claim-cits">
+        ${(c.citations || []).map((cit, ki) => `<button class="ev-btn" onclick="toggleEvidence('${si}', ${ci})" title="Show evidence">[${cit.sourceIndex + 1}]</button>`).join('')}
+        <a class="ev-q no-und" href="javascript:void(0)" onclick="toggleEvidence('${si}', ${ci})">Show evidence</a></div>
+        <div class="ev-drawer" id="ev-${si}-${ci}" style="display:none;"></div></div>`;
+      }).join('') + `</div>`;
+    }
+    if (s.image) {
+      let host = '';
+      try { host = new URL(s.image).hostname; } catch (e) {}
+      html += `<figure><img src="${escHtml(s.image)}" loading="lazy" alt="${escHtml(s.heading || 'illustration')}" onerror="this.closest('figure').remove()" /><figcaption>Illustration · ${escHtml(host)}</figcaption></figure>`;
+    }
+  });
+  if (a.comparison && a.comparison.length) {
+    html += `<h4 style="font-size:11px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text2);margin:12px 0 6px;">Comparison</h4><div class="tbl-scroll"><table class="cmp-tbl"><thead><tr><th>Aspect</th><th>Option</th><th>Notes</th></tr></thead><tbody>` +
+      a.comparison.map(row => `<tr>${(row || []).map((c, j) => j === 0 ? `<th>${mdInline(c)}</th>` : `<td>${mdInline(c)}</td>`).join('')}</tr>`).join('') +
+      `</tbody></table></div>`;
+  }
+  if (a.tradeoffs && a.tradeoffs.length) {
+    html += `<div style="margin:10px 0;"><strong><i class="fas fa-scale-balanced"></i> Tradeoffs</strong><ul style="margin:6px 0 0 18px;">${a.tradeoffs.map(r => `<li>${escHtml(Array.isArray(r) ? r.join(' — ') : r)}</li>`).join('')}</ul></div>`;
+  }
+  if (a.recommendation) html += `<div style="margin:10px 0;"><strong>Recommendation:</strong> ${mdInline(a.recommendation)}</div>`;
+  if (a.risk_level) html += `<div style="margin:10px 0;"><strong>Risk level:</strong> <span style="color:${a.risk_level === 'high' ? 'var(--red)' : a.risk_level === 'medium' ? 'var(--orange)' : 'var(--green)'};">${escHtml(a.risk_level)}</span></div>`;
+  if (a.critiques && a.critiques.length) {
+    html += `<h4 style="font-size:11px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text2);margin:12px 0 6px;">Critiques</h4>` +
+      a.critiques.map(c => `<div class="crit-row"><b>${escHtml(c.claim || 'Claim')}</b><br/><span style="font-size:12px;">Support: ${mdInline(c.support || '')}</span><br/><span style="font-size:12px;color:var(--orange);">Weakness: ${mdInline(c.weakness || '')}</span><br/><span style="font-size:11px;color:var(--text2);">Verdict: ${escHtml(c.verdict || '')}</span></div>`).join('');
+  }
+  if (a.mechanism_steps && a.mechanism_steps.length) {
+    html += `<div style="margin:10px 0;"><strong><i class="fas fa-list-ol"></i> Mechanism</strong><ol style="margin:6px 0 0 20px;">${a.mechanism_steps.map(s => `<li>${mdInline(s)}</li>`).join('')}</ol></div>`;
+  }
+  if (a.terms && a.terms.length) {
+    html += `<h4 style="font-size:11px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text2);margin:12px 0 6px;">Terms</h4>` +
+      a.terms.map(t => `<div class="src-row"><b>${escHtml(t.term)}</b> — ${escHtml(t.definition || '')} ${escHtml((t.citations || []).join(', '))}</div>`).join('');
+  }
+  if (a.endpoints && a.endpoints.length) {
+    html += `<h4 style="font-size:11px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text2);margin:12px 0 6px;">Endpoints</h4><div class="tbl-scroll"><table class="cmp-tbl"><thead><tr><th>Method</th><th>Path</th><th>Purpose</th></tr></thead><tbody>` +
+      a.endpoints.map(e => `<tr><td><code>${escHtml(e.method || '')}</code></td><td><code>${escHtml(e.path || '')}</code></td><td>${escHtml(e.purpose || '')}</td></tr>`).join('') +
+      `</tbody></table></div>`;
+  }
+  if (a.practice) html += `<div style="margin:10px 0;background:var(--bg3);border-radius:6px;padding:10px 12px;"><b><i class="fas fa-pen-nib"></i> Practice</b><br/>${mdInline(a.practice)}</div>`;
+  if (a.key_points && a.key_points.length) {
+    html += `<div class="kp-box"><strong><i class="fas fa-key"></i> Key points</strong><ul style="margin:6px 0 0 18px;">${a.key_points.map(k => `<li>${mdInline(k)}</li>`).join('')}</ul></div>`;
+  }
+  if (a.sources && a.sources.length) {
+    html += `<h4 style="font-size:11px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text2);margin:12px 0 6px;">Sources</h4>` +
+      a.sources.map((s, i) => `<div class="src-row">[${i + 1}] ${srcLink(s)}</div>`).join('');
+  }
+  html += `<div class="fu-row">
+      <input id="fuInput" placeholder="Ask a follow-up (${fuScopeLabel()})…" onkeydown="if(event.key==='Enter')submitFollowup(${exp.id})" />
+      <button class="btn btn-ghost btn-sm" onclick="submitFollowup(${exp.id})"><i class="fas fa-reply"></i> Ask</button>
+      <button class="btn btn-ghost btn-sm" onclick="fuScope=null;fuIdx=null;refreshFuPlaceholder(document.getElementById('fuInput'))" title="Reset to whole-explanation scope">Reset scope</button>
+    </div>
+    <div class="sugg-strip" id="suggStrip" style="display:none;"></div>
+    <div id="threadBox"></div>`;
+  html += `</div>`;
+  box.innerHTML = html;
+  renderTrace(exp);
+  renderMermaidBlocks();
+  renderThread(exp);
+  renderQuiz(exp);
+  renderSuggestions(exp);
+}
+
+function renderMermaidBlocks() {
+  const el = document.querySelector('#articleBox .mermaid');
+  if (!el) return;
+  const scr = document.getElementById('mermaid-lib');
+  const run = () => {
+    try {
+      window.mermaid.initialize({ startOnLoad: false, theme: 'dark', securityLevel: 'strict' });
+      document.querySelectorAll('#articleBox pre.mermaid, #articleBox .mermaid')
+        .forEach(node => window.mermaid.run({ nodes: [node] }));
+    } catch (e) { console.warn('mermaid render failed', e); }
+  };
+  if (window.mermaid) { run(); return; }
+  if (scr) { scr.onload = run; return; }
+  const s = document.createElement('script');
+  s.id = 'mermaid-lib';
+  s.src = 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js';
+  s.onload = run;
+  document.head.appendChild(s);
+}
+
+function copyMermaid(btn) {
+  const wrap = btn.closest('.diagram-wrap');
+  const code = wrap ? wrap.querySelector('.mermaid').getAttribute('data-src') : '';
+  if (!code) return;
+  navigator.clipboard.writeText(code).then(() => {
+    btn.innerHTML = '<i class="fas fa-check"></i> Copied';
+    setTimeout(() => { btn.innerHTML = '<i class="fas fa-copy"></i> Mermaid'; }, 1500);
+  });
+}
+
+function srcLink(s) {
+  if (s.url && s.url.startsWith('graph://')) {
+    const id = s.url.split('/').pop();
+    return `<span style="color:var(--teal);" title="Internal knowledge-graph source"><i class="fas fa-diagram-project"></i> ${escHtml(s.title || 'graph artifact #' + id)}</span>`;
+  }
+  return `<a href="${escHtml(s.url)}" target="_blank" rel="noopener">${escHtml(s.title || s.url)}</a>`;
+}
+
+let evCache = {};
+function cacheEv(id, claim, ans) { evCache[id] = { claim, sources: ans.sources || [] }; }
+
+function toggleEvidence(si, ci, pf) {
+  const key = (pf || '') + `ev-${si}-${ci}`;
+  const el = document.getElementById(key);
+  if (!el) return;
+  if (el.style.display === 'none') {
+    const meta = evCache[key];
+    if (!meta) return;
+    let html = `<div style="font-size:11px;">`;
+    (meta.claim.citations || []).forEach((cit) => {
+      const src = (meta.sources[cit.sourceIndex] || {});
+      html += `<div class="ev-block">
+        <div class="ev-quote"><i class="fas fa-quote-left" style="color:var(--accent);"></i> ${escHtml(cit.quote || '')}</div>
+        <div class="ev-src">— ${srcLink(src)}${src.url && src.url.startsWith('http') ? ` · <a href="${escHtml(src.url)}" target="_blank" rel="noopener">Open source ↗</a>` : ''}</div>
+      </div>`;
+    });
+    html += `</div>`;
+    el.innerHTML = html;
+    el.style.display = 'block';
+  } else {
+    el.style.display = 'none';
+    el.innerHTML = '';
+  }
+}
+
+function toggleTrace() {
+  const box = document.getElementById('traceBox');
+  if (!box) return;
+  box.style.display = box.style.display === 'none' ? 'block' : 'none';
+}
+
+function traceHtml(exp) {
+  const t = exp.trace || {};
+  const qs = t.queries || [];
+  const hits = t.hits || [];
+  const fetched = t.fetched || [];
+  const timings = t.timings_ms || {};
+  const lines = [];
+  lines.push(`<div style="background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:12px 14px;margin:10px 0 4px;font-size:11px;">
+    <div style="font-weight:600;margin-bottom:4px;">Research trace</div>`);
+  if (t.graph_context_used) {
+    lines.push(`<div style="color:var(--teal);"><i class="fas fa-diagram-project"></i> Used existing knowledge graph</div>
+      ${(t.graph_artifacts || []).map(a => `<span style="color:var(--text2);">· ${escHtml(a)}</span>`).join(' ')}`);
+  }
+  if (t.web_skipped) lines.push(`<div style="color:var(--teal);"><i class="fas fa-arrow-right-arrow-left"></i> Web search skipped (graph covered it)${t.coverage ? ' — coverage: ' + escHtml(t.coverage) : ''}</div>`);
+  lines.push(`<div><b>Queries</b></div><ul style="margin:4px 0 0 18px;">${qs.flat().slice(0, 8).map(q => `<li>${escHtml(q)}</li>`).join('')}</ul>`);
+  lines.push(`<div style="margin-top:8px;"><b>Search hits (${hits.length})</b></div>`);
+  lines.push(`<table style="border-collapse:collapse;width:100%;margin:4px 0;">${hits.map(h => `<tr style="border-bottom:1px solid var(--border);"><td style="padding:3px 6px;color:var(--text2);">${h.rank != null ? '#' + h.rank : ''}</td><td style="padding:3px 6px;"><a href="${escHtml(h.url)}" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none;">${escHtml(h.title || h.url)}</a></td><td style="padding:3px 6px;color:var(--text2);">${escHtml(h.domain || '')}</td></tr>`).join('')}</table>`);
+  lines.push(`<div style="margin-top:8px;"><b>Pages read (${fetched.filter(f => f.kept).length}/${fetched.length})</b></div>`);
+  lines.push(`<ul style="margin:4px 0 0 18px;">${fetched.map(f => `<li><span style="color:${f.kept ? 'var(--green)' : 'var(--red)'};">${f.kept ? '✔' : '✖'}</span> <a href="${escHtml(f.url)}" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none;">${escHtml(f.title || f.url)}</a> <span style="color:var(--text2);">${f.kept ? f.chars + ' chars · ' + f.images + ' imgs' : escHtml(f.reason)}</span></li>`).join('')}</ul>`);
+  if (t.gaps && t.gaps.length) lines.push(`<div style="margin-top:8px;"><b>Knowledge gaps</b>: ${t.gaps.map(escHtml).join(', ')}</div>`);
+  if (Object.keys(timings).length) lines.push(`<div style="margin-top:8px;color:var(--text2);">Timings: ${Object.entries(timings).map(([k, v]) => `${k}=${v}ms`).join(' · ')}</div>`);
+  if (t.hops > 0) lines.push(`<div style="color:var(--text2);">Hops: ${t.hops}</div>`);
+  lines.push('</div>');
+  return lines.join('');
+}
+
+function renderTrace(exp) {
+  const box = document.getElementById('traceBox');
+  if (!box) return;
+  box.innerHTML = exp.trace ? traceHtml(exp) :
+    '<div style="font-size:11px;color:var(--text2);margin:10px 0;">No research trace available for this explanation.</div>';
+}
+
+async function loadExplanations() {
+  if (!currentInv) return;
+  const bkmk = document.getElementById('bkmkOnly');
+  const qs = bkmk && bkmk.checked ? '?bookmarked=true' : '';
+  const res = await fetch(`${API}/investigations/${currentInv}/explanations${qs}`);
+  const data = await res.json();
+  const items = data.items || [];
+  const dls = document.getElementById('explRecall');
+  dls.innerHTML = items.map(e => `<option value="${escHtml(e.question).replace(/"/g, '&quot;')}"></option>`).join('');
+  const hist = document.getElementById('explHistory');
+  hist.innerHTML = items.map(e => `
+    <div class="hist-row" style="cursor:default;">
+      <button class="star-btn ${e.bookmarked ? 'on' : ''}" title="${e.bookmarked ? 'Remove bookmark' : 'Bookmark'}" onclick="event.stopPropagation();setBookmark(${e.id}, ${e.bookmarked ? 'false' : 'true'}, this)"><i class="fas ${e.bookmarked ? 'fa-star' : 'fa-star'}" style="${e.bookmarked ? 'color:var(--orange);' : 'color:var(--text2);'}"></i></button>
+      <span style="flex:1;cursor:pointer;" onclick="openExplanation(${e.id})">
+        <i class="fas ${e.status === 'done' ? 'fa-circle-check' : e.status === 'running' ? 'fa-spinner spin' : 'fa-circle-exclamation'}" style="color:${e.status === 'done' ? 'var(--green)' : e.status === 'running' ? 'var(--accent)' : 'var(--red)'};"></i>
+        <span class="q">${escHtml(e.question)}</span>
+      </span>
+      <span style="font-size:10px;color:var(--text2);">${e.created_at ? new Date(e.created_at).toLocaleString() : ''}</span>
+    </div>`).join('') || '<div class="empty-state"><i class="fas fa-lightbulb"></i><br/>No explanations yet — ask above.</div>';
+}
+
+async function setBookmark(expId, now, btn) {
+  await fetch(`${API}/explanations/${expId}/bookmark`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ bookmarked: now }),
+  });
+  showNotif(now ? 'Bookmarked' : 'Bookmark removed', 'success');
+  loadExplanations();
+}
+
+async function openExplanation(id) {
+  switchView('explainer');
+  const res = await fetch(`${API}/explanations/${id}`);
+  const exp = await res.json();
+  if (exp.status === 'running') watchExplanation(id);
+  else renderExplanation(exp);
+}
+
+async function deleteExplanation(id) {
+  if (!confirm('Delete this explanation?')) return;
+  await fetch(`${API}/explanations/${id}`, { method: 'DELETE' });
+  document.getElementById('articleBox').innerHTML = '';
+  loadExplanations();
+}
+
+async function saveExplanationToGraph(expId) {
+  const r = await fetch(`${API}/explanations/${expId}/save_to_graph`, { method: 'POST' });
+  if (!r.ok) {
+    let msg = 'Save failed';
+    try { msg = (await r.json()).detail || msg; } catch (e) {}
+    showNotif(msg, 'error');
+    return;
+  }
+  const d = await r.json();
+  showNotif(`Saved: ${d.created_artifacts} artifacts, ${d.created_relationships} relationships`, 'success');
+  loadGraph(); loadArtifacts(); updatePendingCount();
+}
+
+/* ---------- follow-ups / threads / gaps ---------- */
+let fuScope = null, fuIdx = null;
+
+function fuScopeLabel() {
+  if (fuScope === 'section' && fuIdx != null) return `scope: section #${fuIdx}`;
+  return 'whole explanation';
+}
+
+function refreshFuPlaceholder(input) {
+  if (input) input.placeholder = 'Ask a follow-up (' + fuScopeLabel() + ')…';
+}
+
+function setFuScope(expId, idx) {
+  fuScope = 'section'; fuIdx = idx;
+  const inp = document.getElementById('fuInput');
+  if (inp) { inp.focus(); refreshFuPlaceholder(inp); }
+}
+
+async function submitFollowup(expId) {
+  const inp = document.getElementById('fuInput');
+  const q = (inp && inp.value.trim());
+  if (!q) return;
+  const body = fuScope && fuIdx != null
+    ? { question: q, scope: 'section', target_index: fuIdx }
+    : { question: q, scope: 'whole' };
+  fuScope = null; fuIdx = null;
+  const res = await fetch(`${API}/explanations/${expId}/followup`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  });
+  if (!res.ok) { let m = 'Follow-up failed'; try { m = (await res.json()).detail || m; } catch (e) {} showNotif(m, 'error'); return; }
+  const child = await res.json();
+  if (child.status === 'running') watchExplanation(child.id);
+  refreshThread(expId);
+}
+
+async function renderThread(exp) {
+  const box = document.getElementById('threadBox');
+  if (!box) return;
+  box.innerHTML = '';
+  let data = null;
+  try {
+    const res = await fetch(`${API}/explanations/${exp.id}/thread`);
+    data = await res.json();
+  } catch (e) { return; }
+  const items = (data.items || []).filter(i => i.id !== exp.id);
+  if (!items.length) return;
+  let html = `<h4 style="font-size:11px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text2);margin:16px 0 8px;"><i class="fas fa-reply-all"></i> Follow-ups (${items.length})</h4>`;
+  items.forEach(c => {
+    html += `<div class="fu-card">
+      <div style="display:flex;gap:8px;align-items:center;">
+        <span style="font-size:11px;color:var(--accent);"><i class="fas fa-reply"></i></span>
+        <div style="flex:1;"><b style="font-size:12px;">${escHtml(c.question)}</b></div>
+        <span class="mode-pill">${escHtml(c.status)}</span>
+      </div>
+      <div id="fu-body-${c.id}"></div>
+      <button class="btn btn-ghost btn-sm" onclick="loadFuArticle(${c.id})"><i class="fas fa-angle-down"></i> Expand</button>
+    </div>`;
+  });
+  box.innerHTML = html;
+}
+
+async function refreshThread(expId) {
+  if (!activeArticle) return;
+  const res = await fetch(`${API}/explanations/${expId}`);
+  const exp = await res.json();
+  renderThread(exp);
+}
+
+async function loadFuArticle(expId) {
+  const el = document.getElementById(`fu-body-${expId}`);
+  if (!el) return;
+  const res = await fetch(`${API}/explanations/${expId}`);
+  const exp = await res.json();
+  if (exp.status !== 'done' || !exp.answer) {
+    el.innerHTML = `<div style="font-size:11px;color:var(--text2);">${exp.status === 'running' ? 'Researching follow-up…' : 'Failed follow-up.'}</div>`;
+    return;
+  }
+  activeArticle = exp;
+  const a = exp.answer;
+  let html = `<div class="article fu-article">`;
+  if (a.summary) html += `<p style="color:var(--text2);font-style:italic;font-size:12px;">${mdInline(a.summary)}</p>`;
+  (a.sections || []).forEach((s, si) => {
+    html += `<h3 style="font-size:13px;">${escHtml(s.heading || '')}</h3>${mdBlock(s.body || '')}`;
+    if (s.claims && s.claims.length) {
+      html += `<div class="claims-list">` + s.claims.map((c, ci) => {
+        cacheEv(`${expId}-ev-${si}-${ci}`, c, a);
+        return `<div class="claim-row"><div class="claim-text">${mdInline(c.text)}</div><div class="claim-cits">
+          ${(c.citations || []).map((cit, ki) => `<button class="ev-btn" onclick="toggleEvidence('${si}', ${ci}, '${expId}-')">[${cit.sourceIndex + 1}]</button>`).join('')}
+          <a class="ev-q no-und" href="javascript:void(0)" onclick="toggleEvidence('${si}', ${ci}, '${expId}-')">Show evidence</a></div>
+        <div class="ev-drawer" id="${expId}-ev-${si}-${ci}" style="display:none;"></div></div>`;
+      }).join('') + `</div>`;
+    }
+  });
+  if (a.key_points && a.key_points.length) {
+    html += `<div class="kp-box"><strong>Key points</strong><ul style="margin:6px 0 0 18px;">${a.key_points.map(k => `<li>${mdInline(k)}</li>`).join('')}</ul></div>`;
+  }
+  if (a.sources && a.sources.length) {
+    html += `<h4 style="font-size:11px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text2);margin:10px 0 6px;">Sources</h4>${a.sources.map((s, i) => `<div class="src-row">[${i + 1}] ${srcLink(s)}</div>`).join('')}`;
+  }
+  html += `</div>`;
+  el.innerHTML = html;
+}
+
+async function investigateGaps(expId) {
+  const res = await fetch(`${API}/explanations/${expId}/investigate_gaps`, { method: 'POST' });
+  if (!res.ok) {
+    let m = 'No open gaps to investigate';
+    try { m = (await res.json()).detail || m; } catch (e) {}
+    showNotif(m, 'info');
+    return;
+  }
+  const d = await res.json();
+  showNotif(`Agent run #${d.run_id} launched to investigate gaps`, 'success');
+  loadInvestigations(); loadTimeline();
+}
+
+/* ---------- suggestions / quiz / bookmarks (#9, #10) ---------- */
+
+async function renderSuggestions(exp) {
+  const strip = document.getElementById('suggStrip');
+  if (!strip || exp.status !== 'done') return;
+  let data = null;
+  try {
+    const res = await fetch(`${API}/explanations/${exp.id}/suggestions`);
+    data = await res.json();
+  } catch (e) { return; }
+  const items = (data.items || []).filter(it => it.text);
+  if (!items.length) return;
+  strip.style.display = 'flex';
+  strip.innerHTML =
+    `<span style="font-size:11px;color:var(--text2);align-self:center;">Next questions:</span>` +
+    items.map(it => `<button class="sugg-chip kind-${escHtml(it.kind)}" title="${escHtml(it.kind)}"
+      onclick="useSuggestion(this.textContent.trim())">${escHtml(it.text)}</button>`).join('');
+}
+
+function useSuggestion(text) {
+  document.getElementById('fuInput').value = text;
+  document.getElementById('fuInput').focus();
+}
+
+async function makeQuiz(expId) {
+  const res = await fetch(`${API}/explanations/${expId}/quiz`, { method: 'POST' });
+  if (!res.ok) {
+    let m = 'Quiz generation failed';
+    try { m = (await res.json()).detail || m; } catch (e) {}
+    showNotif(m, 'error');
+    return;
+  }
+  showNotif('Quiz ready', 'success');
+  const d = await res.json();
+  const expRes = await fetch(`${API}/explanations/${expId}`);
+  renderExplanation(await expRes.json());
+}
+
+function renderQuiz(exp) {
+  if (!exp.quiz || !exp.quiz.items || !exp.quiz.items.length) return;
+  const qz = exp.quiz;
+  let score = 0;
+  const html = `<div class="quiz-box">
+    <h4 style="font-size:11px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text2);margin:16px 0 4px;"><i class="fas fa-clipboard-question"></i> Review quiz · <span class="quiz-score" id="quizScore">0 / ${qz.items.length}</span><span class="quiz-reset" onclick="resetQuiz('${exp.id}')">Retry</span></h4>
+    ${qz.items.map((it, qi) => `
+      <div class="quiz-q">
+        <div class="qnum">Q${qi + 1}</div>
+        <div style="font-weight:600;margin:2px 0 6px;">${escHtml(it.question)}</div>
+        ${it.options.map((o, oi) => `
+          <div class="quiz-opt" id="qo-${exp.id}-${qi}-${oi}" onclick="pickOpt(${exp.id}, ${qi}, ${oi}, ${it.correct_index})">
+            <span>${String.fromCharCode(65 + oi)}.</span><span>${escHtml(o)}</span>
+          </div>`).join('')}
+        <div class="quiz-rationale" id="qr-${exp.id}-${qi}"><i class="fas fa-lightbulb" style="color:var(--orange);"></i> ${escHtml(it.rationale)}</div>
+      </div>`).join('')}
+  </div>`;
+  const box = document.getElementById('threadBox');
+  box.insertAdjacentHTML('afterend', html);
+}
+
+const quizState = {};
+
+function pickOpt(expId, qi, oi, correct) {
+  if (quizState[expId] && quizState[expId][qi] != null) return;
+  quizState[expId] = quizState[expId] || {};
+  const q = document.querySelectorAll(`[id^="qo-${expId}-${qi}-"]`);
+  q.forEach(el => {
+    el.classList.add('picked');
+    el.style.pointerEvents = 'none';
+  });
+  const chosen = document.getElementById(`qo-${expId}-${qi}-${oi}`);
+  const right = document.getElementById(`qo-${expId}-${qi}-${correct}`);
+  if (oi === correct) {
+    chosen.classList.add('correct');
+    quizState[expId][qi] = true;
+  } else {
+    chosen.classList.add('wrong');
+    right.classList.add('correct');
+    quizState[expId][qi] = false;
+  }
+  document.getElementById(`qr-${expId}-${qi}`).style.display = 'block';
+  const keys = Object.keys(quizState[expId]);
+  const score = keys.filter(k => quizState[expId][k]).length;
+  const el = document.getElementById('quizScore');
+  if (el) el.textContent = `${score} / ${keys.length}`;
+}
+
+function resetQuiz(expId) {
+  delete quizState[expId];
+  document.querySelectorAll(`[id^="qo-${expId}-"]`).forEach(el => {
+    el.classList.remove('correct', 'wrong', 'picked');
+    el.style.removeProperty('pointer-events');
+  });
+  document.querySelectorAll(`[id^="qr-${expId}-"]`).forEach(el => el.style.display = 'none');
+  const total = document.querySelectorAll('.quiz-q').length;
+  const el = document.getElementById('quizScore');
+  if (el) el.textContent = `0 / ${total}`;
+}
+
+async function toggleBookmark(expId, btn) {
+  const exp = activeArticle;
+  const now = exp.bookmarked ? false : true;
+  try {
+    await fetch(`${API}/explanations/${expId}/bookmark`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ bookmarked: now }),
+    });
+    exp.bookmarked = now;
+    btn.classList.toggle('bkmk-on', now);
+    showNotif(now ? 'Bookmarked' : 'Bookmark removed', 'success');
+    loadExplanationsMarked();
+  } catch (e) { showNotif('Bookmark failed', 'error'); }
+}
+
+function loadExplanationsMarked() {
+  loadExplanations();
+}
+
+/* ---------- scheduler ---------- */
+function onSchedPreset() {
+  const v = document.getElementById('schedPreset').value;
+  if (v !== 'custom') document.getElementById('schedCron').value = v;
+}
+
+async function saveSchedule() {
+  if (!currentInv) return;
+  const res = await fetch(`${API}/investigations/${currentInv}/schedule`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      enabled: document.getElementById('schedEnabled').checked,
+      cron: document.getElementById('schedCron').value.trim() || '0 4 * * *',
+      max_items: parseInt(document.getElementById('schedItems').value) || 25,
+      max_rounds: parseInt(document.getElementById('schedRounds').value) || 2,
+    }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    showNotif(err.detail || 'Invalid schedule', 'error');
+    return;
+  }
+  showNotif('Schedule saved', 'success');
+  selectInvestigation(currentInv);
+}
+
+function fillSchedule(sched) {
+  const s = sched || {};
+  document.getElementById('schedEnabled').checked = !!s.enabled;
+  document.getElementById('schedCron').value = s.cron || '0 4 * * *';
+  document.getElementById('schedItems').value = s.max_items || 25;
+  document.getElementById('schedRounds').value = s.max_rounds || 2;
+  const presets = [...document.getElementById('schedPreset').options].map(o => o.value);
+  document.getElementById('schedPreset').value = presets.includes(s.cron) ? s.cron : 'custom';
+  document.getElementById('schedNext').textContent = s.enabled && s.next_run_at
+    ? `Next run: ${new Date(s.next_run_at).toLocaleString()}`
+    : s.enabled ? 'Enabled — next run computes shortly' : 'Scheduling off';
+}
+
 function onSearch() { if (currentInv) loadArtifacts(); }
 
 function switchView(view) {
@@ -636,6 +1720,8 @@ function switchView(view) {
   document.getElementById(view + 'View').classList.add('visible');
   if (view === 'graph' && network) setTimeout(() => network.fit({ animation: true }), 100);
 }
+
+loadExplDefaults();
 
 window.addEventListener('resize', () => { if (network) network.fit({ animation: false }); });
 </script>

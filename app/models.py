@@ -21,6 +21,13 @@ class Investigation(Base):
     status = Column(String(30), nullable=False, default="draft")  # draft|running|ready
     created_at = Column(DateTime, default=_now)
     updated_at = Column(DateTime, default=_now, onupdate=_now)
+    # Scheduler: run the agent on a cron timetable.
+    schedule_enabled = Column(Integer, nullable=False, default=0)  # 0|1
+    schedule_cron = Column(String(100), nullable=True)  # e.g. "0 4 * * *"
+    schedule_max_items = Column(Integer, nullable=False, default=25)
+    schedule_rounds = Column(Integer, nullable=False, default=2)
+    last_scheduled_at = Column(DateTime, nullable=True)
+    next_run_at = Column(DateTime, nullable=True)
 
     artifacts = relationship("Artifact", back_populates="investigation",
                              cascade="all, delete-orphan")
@@ -49,6 +56,8 @@ class Artifact(Base):
     relevance_reason = Column(String(500), nullable=True)
     review = Column(String(20), nullable=False, default="pending")  # pending|accepted|rejected
     origin = Column(String(20), nullable=False, default="agent")  # agent|manual
+    run_id = Column(Integer, ForeignKey("agent_runs.id", ondelete="SET NULL"),
+                    nullable=True, index=True)  # collecting run, if any
     created_at = Column(DateTime, default=_now)
 
     investigation = relationship("Investigation", back_populates="artifacts")
@@ -65,6 +74,9 @@ class Relationship(Base):
     relationship_type = Column(String(50), nullable=False, default="similar_to")
     description = Column(String(500), nullable=True)
     origin = Column(String(20), nullable=False, default="agent")  # agent|manual
+    run_id = Column(Integer, ForeignKey("agent_runs.id", ondelete="SET NULL"),
+                    nullable=True, index=True)
+    created_at = Column(DateTime, default=_now)
 
 
 class AgentRun(Base):
@@ -74,6 +86,7 @@ class AgentRun(Base):
     investigation_id = Column(Integer, ForeignKey("investigations.id", ondelete="CASCADE"),
                               nullable=False, index=True)
     status = Column(String(20), nullable=False, default="running")  # running|done|error
+    trigger = Column(String(20), nullable=False, default="manual")  # manual|schedule
     plan = Column(Text, nullable=True)  # JSON
     stats = Column(Text, nullable=True)  # JSON
     error = Column(Text, nullable=True)
@@ -96,3 +109,30 @@ class AgentEvent(Base):
     created_at = Column(DateTime, default=_now)
 
     run = relationship("AgentRun", back_populates="events")
+
+
+class Explanation(Base):
+    """Agentic explainer output: researched, illustrated answer to a question."""
+    __tablename__ = "explanations"
+
+    id = Column(Integer, primary_key=True, index=True)
+    investigation_id = Column(Integer, ForeignKey("investigations.id", ondelete="CASCADE"),
+                              nullable=False, index=True)
+    question = Column(String(1000), nullable=False)
+    answer = Column(Text, nullable=True)  # JSON: summary/sections/key_points/sources
+    status = Column(String(20), nullable=False, default="running")  # running|done|error
+    error = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=_now)
+    finished_at = Column(DateTime, nullable=True)
+    trace = Column(Text, nullable=True)  # JSON research provenance
+    mode = Column(String(20), nullable=True, default="explain")
+    depth = Column(String(20), nullable=True, default="balanced")
+    audience = Column(String(20), nullable=True, default="intermediate")
+    max_pages = Column(Integer, nullable=True, default=6)
+    hops = Column(Integer, nullable=True, default=0)
+    meta = Column(Text, nullable=True)  # JSON misc
+    parent_id = Column(Integer, ForeignKey("explanations.id", ondelete="SET NULL"),
+                       nullable=True, index=True)  # follow-up thread parent
+    thread_id = Column(Integer, nullable=True, index=True)  # root explanation of the thread
+    quiz = Column(Text, nullable=True)  # JSON: interactive quiz items
+    bookmarked = Column(Integer, nullable=False, default=0)  # 0|1 saved to bookmarks
