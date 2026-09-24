@@ -1,0 +1,643 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agentic Knowledge Mapper</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/vis-network/9.1.6/standalone/umd/vis-network.min.js"></script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css">
+<style>
+:root {
+  --bg: #0d1117; --bg2: #161b22; --bg3: #21262d; --border: #30363d;
+  --text: #f0f6fc; --text2: #8b949e; --accent: #58a6ff;
+  --green: #3fb950; --orange: #d29922; --red: #f85149; --purple: #bc8cff; --teal: #56d4dd;
+  --graph-bg: #0a0e14;
+}
+html.light {
+  --bg: #f6f8fa; --bg2: #ffffff; --bg3: #eaeef2; --border: #d0d7de;
+  --text: #1f2328; --text2: #656d76; --accent: #0969da;
+  --green: #1a7f37; --orange: #bd561d; --red: #cf222e; --purple: #8250df; --teal: #096b7a;
+  --graph-bg: #f0f2f5;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+.layout { display: grid; grid-template-columns: 340px 1fr; grid-template-rows: auto 1fr; height: 100vh; }
+.header { grid-column: 1 / -1; padding: 14px 24px; background: var(--bg2); border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
+.header h1 { font-size: 19px; font-weight: 600; display: flex; align-items: center; gap: 10px; }
+.header h1 i { color: var(--teal); }
+.header-right { display: flex; gap: 12px; align-items: center; }
+.llm-dot { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text2); }
+.llm-dot .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--orange); }
+.llm-dot.ok .dot { background: var(--green); }
+.llm-dot.bad .dot { background: var(--red); }
+.search-box { background: var(--bg3); border: 1px solid var(--border); border-radius: 6px; padding: 6px 12px; color: var(--text); width: 220px; font-size: 13px; }
+.search-box:focus { outline: none; border-color: var(--accent); }
+.sidebar { background: var(--bg2); border-right: 1px solid var(--border); padding: 16px; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; }
+.sidebar h3 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text2); margin-bottom: 8px; font-weight: 600; }
+.inv-item { padding: 9px 11px; background: var(--bg3); border-radius: 7px; cursor: pointer; border: 1px solid transparent; margin-bottom: 6px; font-size: 12px; }
+.inv-item:hover { border-color: var(--accent); }
+.inv-item.active { border-color: var(--accent); background: var(--bg3); box-shadow: 0 0 0 1px var(--accent); }
+.inv-item .t { font-weight: 600; margin-bottom: 3px; }
+.inv-item .m { font-size: 11px; color: var(--text2); display: flex; gap: 8px; flex-wrap: wrap; }
+.status-pill { display: inline-block; padding: 1px 8px; border-radius: 9px; font-size: 10px; font-weight: 600; }
+.st-draft { background: var(--bg3); color: var(--text2); }
+.st-running { background: #1f3a5f; color: var(--accent); }
+.st-ready { background: #1a3d2a; color: var(--green); }
+.form-group { margin-bottom: 10px; }
+.form-group label { display: block; font-size: 11px; color: var(--text2); margin-bottom: 3px; }
+.form-group input, .form-group select, .form-group textarea { width: 100%; padding: 6px 10px; background: var(--bg3); border: 1px solid var(--border); border-radius: 4px; color: var(--text); font-size: 12px; }
+.form-group textarea { resize: vertical; min-height: 90px; line-height: 1.5; }
+.form-group input:focus, .form-group textarea:focus { outline: none; border-color: var(--accent); }
+.src-checks { display: flex; gap: 10px; font-size: 12px; color: var(--text2); }
+.src-checks label { display: flex; gap: 4px; align-items: center; cursor: pointer; }
+.btn { padding: 7px 14px; border-radius: 6px; border: none; cursor: pointer; font-size: 12px; font-weight: 600; display: inline-flex; align-items: center; gap: 6px; justify-content: center; }
+.btn-primary { background: var(--accent); color: var(--bg); }
+.btn-primary:hover { opacity: 0.9; }
+.btn-ghost { background: var(--bg3); border: 1px solid var(--border); color: var(--text); }
+.btn-ghost:hover { border-color: var(--accent); }
+.btn-danger { background: transparent; border: 1px solid var(--red); color: var(--red); }
+.btn-sm { padding: 4px 10px; font-size: 11px; }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.main { overflow: hidden; position: relative; background: var(--graph-bg); display: flex; flex-direction: column; }
+.main-tabs { display: flex; gap: 0; background: var(--bg2); border-bottom: 1px solid var(--border); flex-shrink: 0; }
+.main-tab { padding: 10px 20px; font-size: 13px; cursor: pointer; color: var(--text2); border-bottom: 2px solid transparent; user-select: none; }
+.main-tab:hover { color: var(--text); background: var(--bg3); }
+.main-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+.main-content { flex: 1; min-height: 0; position: relative; }
+.view { display: none; height: 100%; }
+.view.visible { display: block; }
+#graphView { position: relative; }
+#graph { height: 100%; }
+.graph-controls { position: absolute; top: 12px; right: 12px; z-index: 10; display: flex; flex-direction: column; gap: 4px; }
+.graph-controls button { width: 32px; height: 32px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg2); color: var(--text); cursor: pointer; font-size: 13px; }
+.graph-controls button:hover { background: var(--bg3); }
+.cluster-bar { position: absolute; top: 12px; left: 12px; z-index: 10; display: flex; gap: 0; background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; padding: 2px; align-items: center; }
+.cluster-btn { padding: 5px 12px; border-radius: 6px; border: none; background: transparent; color: var(--text2); cursor: pointer; font-size: 11px; font-weight: 500; display: flex; align-items: center; gap: 5px; white-space: nowrap; }
+.cluster-btn:hover { color: var(--text); background: var(--bg3); }
+.cluster-btn.active { background: var(--accent); color: var(--bg); }
+.cluster-count { font-size: 10px; color: var(--text2); padding: 0 8px 0 4px; white-space: nowrap; }
+#artifactsView, #consoleView { overflow-y: auto; padding: 20px 24px; height: 100%; background: var(--bg); }
+.rev-filters { display: flex; gap: 6px; margin-bottom: 14px; flex-wrap: wrap; align-items: center; }
+.filter-btn { padding: 4px 12px; border-radius: 12px; font-size: 11px; cursor: pointer; border: 1px solid var(--border); background: transparent; color: var(--text2); }
+.filter-btn:hover { border-color: var(--accent); color: var(--text); }
+.filter-btn.active { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+.art-card { background: var(--bg2); border: 1px solid var(--border); border-radius: 9px; padding: 13px 15px; margin-bottom: 10px; }
+.art-card .row1 { display: flex; gap: 10px; align-items: center; }
+.rel-ring { display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; border-radius: 50%; font-size: 10px; font-weight: 700; flex-shrink: 0; }
+.art-card .ttl { font-size: 13px; font-weight: 600; flex: 1; min-width: 0; }
+.art-card .reason { font-size: 11px; color: var(--text2); margin-top: 6px; font-style: italic; }
+.art-card .meta { font-size: 11px; color: var(--text2); margin-top: 6px; display: flex; gap: 8px; flex-wrap: wrap; }
+.art-card .actions { display: flex; gap: 6px; margin-top: 8px; }
+.type-badge { display: inline-block; padding: 1px 7px; border-radius: 8px; font-size: 10px; }
+.tag { display: inline-block; padding: 1px 6px; border-radius: 8px; font-size: 10px; background: var(--bg3); color: var(--text2); margin: 1px; }
+.console-log { display: flex; flex-direction: column; gap: 6px; }
+.ev { background: var(--bg2); border: 1px solid var(--border); border-left: 3px solid var(--text2); border-radius: 6px; padding: 8px 12px; font-size: 12px; }
+.ev .stage { font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 700; margin-bottom: 2px; }
+.ev-plan { border-left-color: var(--purple); } .ev-plan .stage { color: var(--purple); }
+.ev-search { border-left-color: var(--accent); } .ev-search .stage { color: var(--accent); }
+.ev-analyze { border-left-color: var(--orange); } .ev-analyze .stage { color: var(--orange); }
+.ev-map { border-left-color: var(--green); } .ev-map .stage { color: var(--green); }
+.ev-summary { border-left-color: var(--teal); } .ev-summary .stage { color: var(--teal); }
+.ev .detail { font-size: 11px; color: var(--text2); margin-top: 4px; }
+.plan-box { background: var(--bg2); border: 1px solid var(--purple); border-radius: 8px; padding: 12px 14px; margin-bottom: 14px; font-size: 12px; }
+.empty-state { text-align: center; padding: 50px 20px; color: var(--text2); font-size: 13px; }
+.empty-state i { font-size: 30px; margin-bottom: 10px; color: var(--border); }
+.notif { position: fixed; bottom: 20px; right: 20px; padding: 10px 18px; border-radius: 8px; font-size: 13px; z-index: 1000; display: none; }
+.notif.success { display: block; background: #1a3d2a; border: 1px solid var(--green); color: var(--green); }
+.notif.error { display: block; background: #3d1a1a; border: 1px solid var(--red); color: var(--red); }
+.run-bar { display: flex; gap: 8px; align-items: center; margin-bottom: 14px; flex-wrap: wrap; }
+.run-bar input[type=number] { width: 64px; padding: 5px 8px; background: var(--bg3); border: 1px solid var(--border); border-radius: 4px; color: var(--text); font-size: 12px; }
+.spin { animation: spin 1s linear infinite; display: inline-block; }
+@keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<div class="layout">
+  <div class="header">
+    <h1><i class="fas fa-diagram-project"></i> Agentic Knowledge Mapper</h1>
+    <div class="header-right">
+      <span class="llm-dot" id="llmDot" title="LLM gateway status"><span class="dot"></span><span id="llmLabel">llm: …</span></span>
+      <input class="search-box" id="searchInput" placeholder="Search this investigation..." />
+      <button onclick="toggleTheme()" class="btn btn-ghost btn-sm"><i id="themeIcon" class="fas fa-moon"></i></button>
+    </div>
+  </div>
+
+  <div class="sidebar">
+    <div>
+      <h3><i class="fas fa-folder-open"></i> Investigations</h3>
+      <div id="invList"></div>
+      <button class="btn btn-ghost btn-sm" onclick="newInvestigation()" style="width:100%;"><i class="fas fa-plus"></i> New investigation</button>
+    </div>
+    <div id="briefPanel" style="display:none;">
+      <h3><i class="fas fa-file-lines"></i> Collection brief</h3>
+      <div class="form-group"><label>Title</label><input id="bTitle" placeholder="e.g. Post-quantum migration" /></div>
+      <div class="form-group"><label>Keywords (comma-separated)</label><input id="bKeywords" placeholder="pqc, kyber, migration, tls" /></div>
+      <div class="form-group"><label>Description — what should the agent collect?</label><textarea id="bDesc" placeholder="Describe the topic, scope, what counts as relevant, timeframe..."></textarea></div>
+      <div class="form-group"><label>Sources (agent picks per query)</label>
+        <div class="src-checks">
+          <label><input type="checkbox" id="srcRss" checked> RSS</label>
+          <label><input type="checkbox" id="srcArxiv" checked> arXiv</label>
+          <label><input type="checkbox" id="srcWeb" checked> Web</label>
+        </div>
+      </div>
+      <div style="display:flex;gap:6px;">
+        <button class="btn btn-ghost btn-sm" onclick="saveBrief()" style="flex:1;"><i class="fas fa-save"></i> Save</button>
+        <button class="btn btn-danger btn-sm" onclick="deleteInvestigation()" title="Delete investigation"><i class="fas fa-trash"></i></button>
+      </div>
+      <div style="margin-top:10px;">
+        <button class="btn btn-primary" id="runBtn" onclick="startRun()" style="width:100%;"><i class="fas fa-robot"></i> Run agent</button>
+        <div style="font-size:10px;color:var(--text2);margin-top:4px;" id="runHint">Plans queries → searches → analyzes → maps graph.</div>
+      </div>
+      <div id="runHistory" style="margin-top:10px;"></div>
+    </div>
+  </div>
+
+  <div class="main">
+    <div class="main-tabs">
+      <div class="main-tab active" data-view="graph" onclick="switchView('graph')"><i class="fas fa-project-diagram"></i> Knowledge graph</div>
+      <div class="main-tab" data-view="artifacts" onclick="switchView('artifacts')"><i class="fas fa-list-check"></i> Review <span id="pendingCount"></span></div>
+      <div class="main-tab" data-view="console" onclick="switchView('console')"><i class="fas fa-terminal"></i> Agent console</div>
+    </div>
+    <div class="main-content">
+      <div class="view visible" id="graphView">
+        <div class="cluster-bar" title="Cluster graph nodes; centroid = group label">
+          <button class="cluster-btn active" data-cluster="off" onclick="setClusterMode('off')"><i class="fas fa-circle"></i> Off</button>
+          <button class="cluster-btn" data-cluster="category" onclick="setClusterMode('category')"><i class="fas fa-layer-group"></i> Category</button>
+          <button class="cluster-btn" data-cluster="similarity" onclick="setClusterMode('similarity')"><i class="fas fa-hubspot"></i> Similarity</button>
+          <span class="cluster-count" id="clusterCount"></span>
+        </div>
+        <div class="graph-controls">
+          <button onclick="fitGraph()" title="Fit view"><i class="fas fa-expand"></i></button>
+          <button onclick="togglePhysics()" title="Toggle physics"><i class="fas fa-arrows-alt"></i></button>
+        </div>
+        <div id="graph"></div>
+      </div>
+      <div class="view" id="artifactsView">
+        <div class="rev-filters" id="revFilters">
+          <button class="filter-btn active" data-rev="pending">Pending</button>
+          <button class="filter-btn" data-rev="accepted">Accepted</button>
+          <button class="filter-btn" data-rev="rejected">Rejected</button>
+          <button class="filter-btn" data-rev="all">All</button>
+        </div>
+        <div id="artList"></div>
+      </div>
+      <div class="view" id="consoleView">
+        <div class="run-bar">
+          <label style="font-size:11px;color:var(--text2);">Max items</label>
+          <input type="number" id="maxItems" value="25" min="1" max="100" />
+          <label style="font-size:11px;color:var(--text2);">Rounds</label>
+          <input type="number" id="maxRounds" value="2" min="1" max="3" />
+          <button class="btn btn-primary btn-sm" id="runBtn2" onclick="startRun()"><i class="fas fa-robot"></i> Run agent</button>
+          <span id="runStatus" style="font-size:12px;color:var(--text2);"></span>
+        </div>
+        <div id="planBox"></div>
+        <div class="console-log" id="consoleLog"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="notif" id="notif"></div>
+
+<script>
+const API = '/api';
+let investigations = [];
+let currentInv = null;
+let network = null, nodes = null, edges = null, graphData = null;
+let physicsEnabled = true;
+let clusterMode = 'off', clusterIds = [], clusterCache = { category: null, similarity: null };
+let activeRunId = null, lastEventId = 0, pollTimer = null;
+let revFilter = 'pending';
+
+const TYPE_COLORS = {
+  news: '#58a6ff', paper: '#3fb950', book: '#f0b429', essay: '#bc8cff',
+  tweet: '#5ce0e6', interview: '#f85a5a', research: '#da8fff', projection: '#f0b429'
+};
+
+document.addEventListener('DOMContentLoaded', () => {
+  initTheme();
+  document.getElementById('searchInput').addEventListener('input', debounce(onSearch, 300));
+  document.querySelectorAll('#revFilters .filter-btn').forEach(b =>
+    b.addEventListener('click', () => {
+      document.querySelectorAll('#revFilters .filter-btn').forEach(x => x.classList.remove('active'));
+      b.classList.add('active'); revFilter = b.dataset.rev; loadArtifacts();
+    }));
+  refreshAll();
+});
+
+function debounce(fn, ms) { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; }
+
+function initTheme() {
+  if (localStorage.getItem('theme') === 'light') document.documentElement.className = 'light';
+}
+function toggleTheme() {
+  const light = document.documentElement.className !== 'light';
+  document.documentElement.className = light ? 'light' : '';
+  localStorage.setItem('theme', light ? 'light' : 'dark');
+  if (network) {
+    const isLight = light;
+    nodes.forEach(n => {
+      const g = graphData.nodes.find(x => x.id === n.id);
+      nodes.update({ id: n.id, font: { color: isLight ? '#1f2328' : '#ffffff', size: 11 } });
+    });
+    network.redraw();
+    if (clusterMode !== 'off' && clusterCache[clusterMode]) {
+      const m = clusterMode; openAllClusters(); clusterMode = m; updateClusterButtons();
+      applyClusters(clusterCache[m].clusters || [], m);
+    }
+  }
+}
+
+function showNotif(msg, type) {
+  const el = document.getElementById('notif');
+  el.textContent = msg; el.className = 'notif ' + type;
+  setTimeout(() => { el.className = 'notif'; }, 3500);
+}
+
+async function refreshAll() {
+  await checkLLM();
+  await loadInvestigations();
+}
+
+async function checkLLM() {
+  const dot = document.getElementById('llmDot'), label = document.getElementById('llmLabel');
+  try {
+    const res = await fetch(`${API}/health`);
+    const h = await res.json();
+    if (h.llm && h.llm.reachable) {
+      dot.className = 'llm-dot ok';
+      label.textContent = `llm: ${h.llm.model}${h.llm.model_available === false ? ' (model missing!)' : ''}`;
+    } else {
+      dot.className = 'llm-dot bad'; label.textContent = 'llm: unreachable';
+    }
+  } catch (e) { dot.className = 'llm-dot bad'; label.textContent = 'llm: unreachable'; }
+}
+
+/* ---------- investigations ---------- */
+
+async function loadInvestigations() {
+  const res = await fetch(`${API}/investigations`);
+  const data = await res.json();
+  investigations = data.items || [];
+  const list = document.getElementById('invList');
+  if (!investigations.length) {
+    list.innerHTML = '<div class="empty-state"><i class="fas fa-folder-open"></i><br/>No investigations yet.<br/>Create one to start collecting.</div>';
+  } else {
+    list.innerHTML = investigations.map(i => `
+      <div class="inv-item ${currentInv === i.id ? 'active' : ''}" onclick="selectInvestigation(${i.id})">
+        <div class="t">${i.title}</div>
+        <div class="m"><span class="status-pill st-${i.status}">${i.status}</span>
+          <span><i class="fas fa-database"></i> ${i.artifacts}</span>
+          <span><i class="fas fa-share-nodes"></i> ${i.relationships}</span>
+          <span><i class="fas fa-robot"></i> ${i.runs}</span></div>
+      </div>`).join('');
+  }
+  if (currentInv && !investigations.find(i => i.id === currentInv)) currentInv = null;
+  if (!currentInv && investigations.length) await selectInvestigation(investigations[0].id);
+  if (!investigations.length) {
+    document.getElementById('briefPanel').style.display = 'none';
+  }
+}
+
+async function newInvestigation() {
+  const title = prompt('Investigation title:', 'New topic');
+  if (!title) return;
+  const res = await fetch(`${API}/investigations`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title }),
+  });
+  if (!res.ok) { showNotif('Failed to create', 'error'); return; }
+  const inv = await res.json();
+  await loadInvestigations();
+  await selectInvestigation(inv.id);
+}
+
+async function selectInvestigation(id) {
+  currentInv = id;
+  clusterCache = { category: null, similarity: null };
+  clusterMode = 'off'; updateClusterButtons();
+  stopPolling();
+  const res = await fetch(`${API}/investigations/${id}`);
+  const inv = await res.json();
+  document.getElementById('briefPanel').style.display = 'block';
+  document.getElementById('bTitle').value = inv.title || '';
+  document.getElementById('bKeywords').value = inv.keywords || '';
+  document.getElementById('bDesc').value = inv.description || '';
+  const srcs = (inv.sources || 'rss,arxiv,web').split(',');
+  document.getElementById('srcRss').checked = srcs.includes('rss');
+  document.getElementById('srcArxiv').checked = srcs.includes('arxiv');
+  document.getElementById('srcWeb').checked = srcs.includes('web');
+  document.getElementById('runHistory').innerHTML =
+    (inv.recent_runs || []).map(r => `
+      <div style="font-size:11px;color:var(--text2);padding:4px 0;border-top:1px solid var(--border);cursor:pointer;"
+           onclick="watchRun(${r.id})">
+        <i class="fas fa-robot"></i> run #${r.id} · ${r.status}
+        ${r.stats.artifacts_kept != null ? ` · ${r.stats.artifacts_kept} items` : ''}
+      </div>`).join('');
+  document.querySelectorAll('.inv-item').forEach((el, ix) => {
+    el.classList.toggle('active', investigations[ix] && investigations[ix].id === id);
+  });
+  setRunButtons(inv.status === 'running', inv.status === 'running' ? 'Agent running…' : null);
+  await Promise.all([loadGraph(), loadArtifacts()]);
+  updatePendingCount();
+}
+
+async function saveBrief() {
+  if (!currentInv) return;
+  const srcs = ['rss', 'arxiv', 'web'].filter(s =>
+    document.getElementById('src' + s[0].toUpperCase() + s.slice(1)).checked);
+  const res = await fetch(`${API}/investigations/${currentInv}`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      title: document.getElementById('bTitle').value,
+      keywords: document.getElementById('bKeywords').value,
+      description: document.getElementById('bDesc').value,
+      sources: srcs.join(','),
+    }),
+  });
+  if (!res.ok) { showNotif('Save failed', 'error'); return; }
+  showNotif('Brief saved', 'success');
+  loadInvestigations();
+}
+
+async function deleteInvestigation() {
+  if (!currentInv || !confirm('Delete this investigation and all its data?')) return;
+  await fetch(`${API}/investigations/${currentInv}`, { method: 'DELETE' });
+  currentInv = null;
+  showNotif('Deleted', 'success');
+  loadInvestigations();
+}
+
+/* ---------- agent runs ---------- */
+
+function setRunButtons(running, label) {
+  ['runBtn', 'runBtn2'].forEach(id => {
+    const b = document.getElementById(id);
+    if (b) b.disabled = running;
+  });
+  document.getElementById('runStatus').innerHTML = running
+    ? `<i class="fas fa-spinner spin"></i> ${label || 'Agent running…'}` : '';
+}
+
+async function startRun() {
+  if (!currentInv) { showNotif('Select an investigation first', 'error'); return; }
+  await saveBrief();
+  const res = await fetch(`${API}/investigations/${currentInv}/run`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      max_items: parseInt(document.getElementById('maxItems').value) || 25,
+      max_rounds: parseInt(document.getElementById('maxRounds').value) || 2,
+    }),
+  });
+  if (res.status === 429) { showNotif('A run is already in progress', 'error'); return; }
+  if (!res.ok) { showNotif('Failed to start run', 'error'); return; }
+  showNotif('Agent started', 'success');
+  switchView('console');
+  document.getElementById('consoleLog').innerHTML = '';
+  document.getElementById('planBox').innerHTML = '';
+  setRunButtons(true);
+  // find the new run by polling the latest
+  setTimeout(async () => {
+    const r = await fetch(`${API}/runs?investigation_id=${currentInv}&limit=1`);
+    const d = await r.json();
+    if (d.items && d.items.length) watchRun(d.items[0].id);
+  }, 1500);
+}
+
+function watchRun(runId) {
+  stopPolling();
+  activeRunId = runId; lastEventId = 0;
+  document.getElementById('consoleLog').innerHTML = '';
+  document.getElementById('planBox').innerHTML = '';
+  switchView('console');
+  setRunButtons(true, 'Watching run…');
+  pollRun();
+  pollTimer = setInterval(pollRun, 2000);
+}
+
+function stopPolling() {
+  if (pollTimer) clearInterval(pollTimer);
+  pollTimer = null; activeRunId = null;
+}
+
+async function pollRun() {
+  if (!activeRunId) return;
+  try {
+    const res = await fetch(`${API}/runs/${activeRunId}/events?after_id=${lastEventId}`);
+    const data = await res.json();
+    const log = document.getElementById('consoleLog');
+    for (const e of data.events || []) {
+      lastEventId = Math.max(lastEventId, e.id);
+      const det = e.data && (e.data.queries || e.data.kept)
+        ? `<div class="detail">${(e.data.queries || []).map(q => `▸ ${q.text} <span style="opacity:.7">[${(q.sources || []).join(',')}]</span>`).join('<br/>')}${(e.data.kept || []).map(k => `▸ ${k}`).join('<br/>')}</div>` : '';
+      log.insertAdjacentHTML('beforeend',
+        `<div class="ev ev-${e.stage}"><div class="stage">${e.stage}</div><div>${e.message}</div>${det}</div>`);
+      log.scrollTop = log.scrollHeight;
+    }
+    if (data.status === 'done' || data.status === 'error') {
+      stopPolling();
+      setRunButtons(false);
+      if (data.status === 'done') {
+        showNotif('Agent run finished', 'success');
+        loadGraph(); loadArtifacts(); loadInvestigations(); updatePendingCount();
+      } else showNotif('Agent run failed — see console', 'error');
+      const full = await (await fetch(`${API}/runs/${activeRunId}`)).json().catch(() => null);
+      if (full && full.plan) {
+        document.getElementById('planBox').innerHTML = `
+          <div class="plan-box"><strong style="color:var(--purple)"><i class="fas fa-route"></i> Search plan</strong>
+          <div style="color:var(--text2);margin:4px 0;">${full.plan.rationale || ''}</div>
+          ${(full.plan.queries || []).map(q => `<div>▸ ${q.text} <span style="color:var(--text2)">[${(q.sources || []).join(', ')}]</span></div>`).join('')}</div>`;
+      }
+    }
+  } catch (e) {}
+}
+
+/* ---------- graph ---------- */
+
+async function loadGraph() {
+  if (!currentInv) return;
+  const res = await fetch(`${API}/investigations/${currentInv}/graph`);
+  graphData = await res.json();
+  renderGraph();
+}
+
+function renderGraph() {
+  const container = document.getElementById('graph');
+  const isLight = document.documentElement.className === 'light';
+  const fontColor = isLight ? '#1f2328' : '#ffffff';
+  nodes = new vis.DataSet((graphData.nodes || []).map(n => ({
+    id: n.id,
+    label: n.label,
+    title: `${n.title}\nRelevance: ${n.relevance}\nReview: ${n.review}\nTags: ${n.tags}`,
+    color: {
+      background: TYPE_COLORS[n.type] || '#666',
+      border: TYPE_COLORS[n.type] || '#666',
+      highlight: { background: '#fff', border: '#fff' },
+      hover: { background: TYPE_COLORS[n.type] || '#666', border: '#fff' },
+    },
+    shape: 'dot',
+    size: 12 + (n.relevance || 0) * 22,
+    borderWidth: 2,
+    font: { color: fontColor, size: 11 },
+    group: n.type,
+    opacity: n.review === 'rejected' ? 0.35 : 1,
+  })));
+  edges = new vis.DataSet((graphData.edges || []).map(e => ({
+    from: e.from, to: e.to, label: e.label, title: e.title,
+    color: { color: isLight ? '#0969da44' : '#58a6ff66', highlight: '#58a6ff', hover: '#58a6ff' },
+    font: { size: 9, strokeWidth: 0 },
+    width: 2, smooth: { type: 'continuous' },
+    arrows: { to: { enabled: true, scaleFactor: 0.6 } },
+  })));
+  if (network) network.destroy();
+  network = new vis.Network(container, { nodes, edges }, {
+    nodes: { scaling: { min: 8, max: 40 } },
+    edges: { smooth: { type: 'continuous' } },
+    physics: { enabled: true, solver: 'forceAtlas2Based',
+      forceAtlas2Based: { gravitationalConstant: -40, centralGravity: 0.005, springLength: 180, springConstant: 0.02, damping: 0.4 },
+      stabilization: false },
+    interaction: { hover: true, tooltipDelay: 200, hideEdgesOnDrag: true },
+  });
+  network.on('click', params => {
+    if (!params.nodes.length) return;
+    const c = params.nodes[0];
+    if (network.isCluster(c)) {
+      network.openCluster(c);
+      clusterIds = clusterIds.filter(x => x !== c);
+      updateClusterCount(clusterIds.length);
+    }
+  });
+  if (clusterMode !== 'off') { const p = clusterMode; clusterMode = 'off'; setClusterMode(p); }
+}
+
+function fitGraph() { network?.fit({ animation: true }); }
+function togglePhysics() { physicsEnabled = !physicsEnabled; network?.setOptions({ physics: { enabled: physicsEnabled } }); }
+
+function updateClusterButtons() {
+  document.querySelectorAll('.cluster-btn').forEach(b =>
+    b.classList.toggle('active', b.dataset.cluster === clusterMode));
+}
+function updateClusterCount(n) {
+  document.getElementById('clusterCount').textContent =
+    (clusterMode === 'off' || !n) ? '' : `${n} cluster${n === 1 ? '' : 's'}`;
+}
+function openAllClusters() {
+  if (!network) return;
+  [...clusterIds].forEach(cid => { try { if (network.isCluster(cid)) network.openCluster(cid); } catch (e) {} });
+  clusterIds = []; updateClusterCount(0);
+}
+async function setClusterMode(mode) {
+  clusterMode = mode; updateClusterButtons();
+  if (!network || !graphData || !currentInv) return;
+  openAllClusters();
+  if (mode === 'off') return;
+  try {
+    let data = clusterCache[mode];
+    if (!data) {
+      const res = await fetch(`${API}/investigations/${currentInv}/graph/clusters?mode=${mode}`);
+      data = await res.json();
+      clusterCache[mode] = data;
+    }
+    applyClusters(data.clusters || [], mode);
+  } catch (e) { showNotif('Failed to load clusters', 'error'); clusterMode = 'off'; updateClusterButtons(); }
+}
+function applyClusters(clusters, mode) {
+  const isLight = document.documentElement.className === 'light';
+  let applied = 0;
+  for (const c of clusters) {
+    const members = (c.member_ids || []).filter(id => nodes.get(id));
+    if (members.length < 2) continue;
+    const set = new Set(members);
+    const bg = mode === 'category' ? (TYPE_COLORS[c.centroid] || '#8b949e') : '#8250df';
+    try {
+      network.cluster({
+        joinCondition: node => set.has(node.id),
+        clusterNodeProperties: {
+          id: `cluster:${c.id}`, label: c.label,
+          title: `${mode === 'category' ? 'Category' : 'Similarity centroid'}: ${c.centroid}\n${members.length} artifacts\nClick to expand`,
+          shape: 'dot', size: 22 + Math.min(18, members.length * 2), borderWidth: 3,
+          color: { background: bg, border: isLight ? '#1f2328' : '#ffffff' },
+          font: { color: isLight ? '#1f2328' : '#ffffff', size: 12 },
+        },
+      });
+      clusterIds.push(`cluster:${c.id}`); applied++;
+    } catch (e) {}
+  }
+  updateClusterCount(applied);
+  if (!applied) showNotif(`No ${mode} clusters (groups < 2)`, 'error');
+}
+
+/* ---------- review queue ---------- */
+
+async function loadArtifacts() {
+  if (!currentInv) return;
+  const q = document.getElementById('searchInput').value.trim();
+  let url = `${API}/investigations/${currentInv}/artifacts?review=${revFilter}&limit=200`;
+  if (q) url += `&search=${encodeURIComponent(q)}`;
+  const res = await fetch(url);
+  const data = await res.json();
+  const list = document.getElementById('artList');
+  if (!data.items.length) {
+    list.innerHTML = '<div class="empty-state"><i class="fas fa-inbox"></i><br/>Nothing here. Run the agent to collect.</div>';
+    return;
+  }
+  list.innerHTML = data.items.map(a => {
+    const pct = Math.round((a.relevance || 0) * 100);
+    const col = pct >= 70 ? 'var(--green)' : pct >= 45 ? 'var(--orange)' : 'var(--text2)';
+    return `<div class="art-card">
+      <div class="row1">
+        <div class="rel-ring" style="background:${col}20;color:${col};border:2px solid ${col};">${pct}%</div>
+        <div class="ttl"><span class="type-badge" style="background:var(--bg3);color:var(--text2);">${a.artifact_type}</span> ${a.title}</div>
+      </div>
+      ${a.relevance_reason ? `<div class="reason">“${a.relevance_reason}”</div>` : ''}
+      <div class="meta">
+        ${a.source ? `<span><i class="fas fa-globe"></i> ${a.source}</span>` : ''}
+        ${a.author ? `<span>${a.author}</span>` : ''}
+        ${a.sentiment != null ? `<span>sentiment ${Number(a.sentiment).toFixed(2)}</span>` : ''}
+        ${a.tags ? a.tags.split(',').map(t => `<span class="tag">${t.trim()}</span>`).join('') : ''}
+        ${a.url ? `<a href="${a.url}" target="_blank" rel="noopener" style="color:var(--accent);font-size:11px;"><i class="fas fa-external-link-alt"></i> source</a>` : ''}
+      </div>
+      <div class="actions">
+        ${a.review !== 'accepted' ? `<button class="btn btn-primary btn-sm" onclick="setReview(${a.id},'accepted')"><i class="fas fa-check"></i> Accept</button>` : ''}
+        ${a.review !== 'rejected' ? `<button class="btn btn-ghost btn-sm" onclick="setReview(${a.id},'rejected')"><i class="fas fa-times"></i> Reject</button>` : ''}
+        ${a.review !== 'pending' ? `<button class="btn btn-ghost btn-sm" onclick="setReview(${a.id},'pending')">Unreview</button>` : ''}
+        <button class="btn btn-danger btn-sm" onclick="deleteArtifact(${a.id})"><i class="fas fa-trash"></i></button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function setReview(id, review) {
+  await fetch(`${API}/artifacts/${id}`, {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ review }),
+  });
+  loadArtifacts(); updatePendingCount(); loadGraph();
+}
+
+async function deleteArtifact(id) {
+  if (!confirm('Delete this artifact?')) return;
+  await fetch(`${API}/artifacts/${id}`, { method: 'DELETE' });
+  loadArtifacts(); updatePendingCount(); loadGraph();
+}
+
+async function updatePendingCount() {
+  if (!currentInv) return;
+  const res = await fetch(`${API}/investigations/${currentInv}/artifacts?review=pending&limit=1`);
+  const data = await res.json();
+  document.getElementById('pendingCount').textContent = data.total ? `(${data.total})` : '';
+}
+
+function onSearch() { if (currentInv) loadArtifacts(); }
+
+function switchView(view) {
+  document.querySelectorAll('.main-tab').forEach(t => t.classList.toggle('active', t.dataset.view === view));
+  document.querySelectorAll('.view').forEach(v => v.classList.remove('visible'));
+  document.getElementById(view + 'View').classList.add('visible');
+  if (view === 'graph' && network) setTimeout(() => network.fit({ animation: true }), 100);
+}
+
+window.addEventListener('resize', () => { if (network) network.fit({ animation: false }); });
+</script>
+</body>
+</html>

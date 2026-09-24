@@ -1,0 +1,22 @@
+services:
+  mapper:
+    build: .
+    container_name: agentic-knowledge-mapper
+    ports:
+      - "8204:8204"
+    environment:
+      # Primary LLM: axiom-1 mesh peer Ollama (2x RTX 5080), discovered via
+      # fox-services mesh. Falls back to the local fox-services gateway.
+      - LLM_BASE_URL=${LLM_BASE_URL:-http://100.101.3.115:11434/v1}
+      - LLM_FALLBACK_URL=${LLM_FALLBACK_URL:-http://host.docker.internal:8210/v1}
+      - LLM_MODEL=${LLM_MODEL:-qwen3.8:latest}
+      - LLM_FALLBACK_MODEL=${LLM_FALLBACK_MODEL:-qwen3.8:27b}
+      - LLM_TIMEOUT_S=${LLM_TIMEOUT_S:-180}
+    volumes:
+      - akm_data:/app/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+volumes:
+  akm_data:
