@@ -4,6 +4,7 @@ Runs in a background thread with its own DB session. Progress is streamed
 as AgentEvents the GUI polls. All reasoning goes through the fox-services
 LLM gateway (see app/llm.py).
 """
+import contextvars
 import json
 import re
 import threading
@@ -14,16 +15,30 @@ from sqlalchemy.orm import Session
 
 from .database import SessionLocal
 from .models import Investigation, Artifact, Relationship, AgentRun, AgentEvent
+from . import ledger as L
 from . import llm, search as providers
 
 ANALYZE_BATCH = 5
 KEEP_THRESHOLD = 0.4
+
+# Phases this agent actually reports, declared up front so the mandate can check
+# the agent against its own plan instead of rubber-stamping whatever it did.
+AGENT_STAGES = ["plan", "search", "analyze", "map", "summary"]
+
+
+def ledger_run_id(run_id: int) -> str:
+    """Ledger id for an ``AgentRun``. Keyed off the product's own row so the
+    chain and the run the UI already shows are the same thing."""
+    return f"akm-{run_id}"
 
 
 def _event(db: Session, run_id: int, stage: str, message: str, data: dict | None = None):
     db.add(AgentEvent(run_id=run_id, stage=stage, message=message,
                       data=json.dumps(data or {})))
     db.commit()
+    # Same step, onto the chain. No-ops outside a ledger scope, so this costs
+    # nothing for callers that are not being audited.
+    L.record_agent_step(stage, message, data)
 
 
 def _plan_queries(inv: Investigation) -> dict:
@@ -210,6 +225,7 @@ def run_investigation_agent(investigation_id: int, max_items: int = 25,
                             max_rounds: int = 2, trigger: str = "manual",
                             run_id: int | None = None, goal: str | None = None):
     db = SessionLocal()
+    rid = None            # ledger run id, once the AgentRun row exists
     try:
         inv = db.query(Investigation).filter(Investigation.id == investigation_id).first()
         if not inv:
@@ -230,117 +246,125 @@ def run_investigation_agent(investigation_id: int, max_items: int = 25,
         inv.status = "running"
         db.commit()
 
-        _event(db, run.id, "plan", f"Planning search for '{inv.title}'…")
-        try:
-            plan = _plan_queries(inv)
-        except Exception as e:
-            raise RuntimeError(f"planner failed: {e}")
-        if goal:
-            plan["goal"] = plan.get("goal") or goal
-        run.plan = json.dumps(plan)
-        db.commit()
-        _event(db, run.id, "plan",
-               plan.get("rationale") or f"{len(plan['queries'])} queries planned.",
-               {"queries": plan["queries"]})
-
-        seen = {(a.url or "").strip().lower() for a in
-                db.query(Artifact).filter(Artifact.investigation_id == inv.id).all()
-                if a.url}
-        seen |= {a.title.lower() for a in
-                 db.query(Artifact).filter(Artifact.investigation_id == inv.id).all()}
-        total_kept, total_rels, rounds = 0, 0, 0
-        queries = plan["queries"]
-
-        while rounds < max_rounds and total_kept < max_items:
-            rounds += 1
-            _event(db, run.id, "search",
-                   f"Round {rounds}: searching {len(queries)} queries…")
-            found = _run_searches(queries, seen)
-            _event(db, run.id, "search", f"Round {rounds}: {len(found)} candidates.",
-                   {"count": len(found),
-                    "sample": [f["title"][:80] for f in found[:10]]})
-            if not found:
-                break
-
-            # Pre-rank cheaply: LLM analyzes only the top slice (3x target).
-            analyze_cap = max(max_items * 3, 10)
-            if len(found) > analyze_cap:
-                found = _prefilter(inv, found, analyze_cap)
-                _event(db, run.id, "search",
-                       f"Round {rounds}: pre-ranked to top {analyze_cap} for analysis.")
-
-            existing = [{"id": a.id, "title": a.title, "tags": a.tags or ""}
-                        for a in db.query(Artifact)
-                        .filter(Artifact.investigation_id == inv.id).all()]
-            pre_ids = {e["id"] for e in existing}
-            kept = []
-            for i in range(0, len(found), ANALYZE_BATCH):
-                batch = found[i:i + ANALYZE_BATCH]
-                verdicts = _analyze_batch(inv, batch, existing)
-                by_idx = {v.get("index"): v for v in verdicts
-                          if isinstance(v, dict) and isinstance(v.get("index"), int)}
-                for j, cand in enumerate(batch):
-                    v = by_idx.get(j)
-                    if not v:
-                        continue
-                    try:
-                        rel = float(v.get("relevance", 0))
-                    except (TypeError, ValueError):
-                        rel = 0
-                    if (v.get("keep") or rel >= KEEP_THRESHOLD) and rel > 0:
-                        kept.append((cand, v))
-                _event(db, run.id, "analyze",
-                       f"Round {rounds}: analyzed {min(i + ANALYZE_BATCH, len(found))}/{len(found)}…")
-            kept.sort(key=lambda kv: -float(kv[1].get("relevance", 0) or 0))
-            kept = kept[:max(0, max_items - total_kept)]
-            if not kept:
-                _event(db, run.id, "analyze", f"Round {rounds}: nothing worth keeping.")
-                break
-
-            rows = _persist(db, inv.id, kept, run_id=run.id)
-            rels = _map_relationships(db, inv.id, rows, pre_ids, run_id=run.id)
-            total_kept += len(rows)
-            total_rels += rels
-            _event(db, run.id, "map",
-                   f"Round {rounds}: kept {len(rows)}, mapped {rels} relationships.",
-                   {"kept": [r["title"][:80] for r in rows]})
-            for r in rows:
-                existing.append({"id": r["id"], "title": r["title"], "tags": r["tags"]})
-
-            if total_kept >= max_items or rounds >= max_rounds:
-                break
-            # Refinement round: ask planner for follow-up queries.
+        rid = ledger_run_id(run.id)
+        mandate = L.Mandate(
+            objective=f"map the investigation '{inv.title}'",
+            planned_intents=AGENT_STAGES,
+            allowed_actors=["agent", "llm", "user", "system", "mcp", "human", "planner", "analyzer"],
+        )
+        run_label = f"AKM run: {inv.title[:60]}"
+        with L.scope(rid, mandate, label=run_label):
+            _event(db, run.id, "plan", f"Planning search for '{inv.title}'…")
             try:
-                follow = llm.chat_json([
-                    {"role": "system",
-                     "content": "Research search planner. Reply JSON only."},
-                    {"role": "user",
-                     "content": (f"Brief: {inv.title} | {inv.keywords} | {inv.description}\n"
-                                 f"Kept so far ({total_kept}): "
-                                 f"{[e['title'][:60] for e in existing[-8:]]}\n"
-                                 "Reply {\"queries\": [{\"text\": str, \"sources\": [...]}]} "
-                                 "max 3 follow-up queries exploring gaps. "
-                                 f"Sources allowed: {inv.sources}")}],
-                    max_tokens=512)
-                queries = [{"text": q["text"][:120], "sources": q.get("sources") or ["web"]}
-                           for q in (follow.get("queries") or [])[:3] if q.get("text")]
-                if not queries:
-                    break
-                _event(db, run.id, "plan", f"Refinement: {len(queries)} follow-up queries.",
-                       {"queries": queries})
-            except Exception:
-                break
+                plan = _plan_queries(inv)
+            except Exception as e:
+                raise RuntimeError(f"planner failed: {e}")
+            if goal:
+                plan["goal"] = plan.get("goal") or goal
+            run.plan = json.dumps(plan)
+            db.commit()
+            _event(db, run.id, "plan",
+                   plan.get("rationale") or f"{len(plan['queries'])} queries planned.",
+                   {"queries": plan["queries"]})
 
-        stats = {"rounds": rounds, "artifacts_kept": total_kept,
-                 "relationships": total_rels}
-        run.stats = json.dumps(stats)
-        run.status = "done"
-        run.finished_at = datetime.now(timezone.utc)
-        inv.status = "ready"
-        db.commit()
-        _event(db, run.id, "summary",
-               f"Done: {total_kept} artifacts, {total_rels} relationships in {rounds} round(s).",
-               stats)
+            seen = {(a.url or "").strip().lower() for a in
+                    db.query(Artifact).filter(Artifact.investigation_id == inv.id).all()
+                    if a.url}
+            seen |= {a.title.lower() for a in
+                     db.query(Artifact).filter(Artifact.investigation_id == inv.id).all()}
+            total_kept, total_rels, rounds = 0, 0, 0
+            queries = plan["queries"]
+
+            while rounds < max_rounds and total_kept < max_items:
+                rounds += 1
+                _event(db, run.id, "search",
+                       f"Round {rounds}: searching {len(queries)} queries…")
+                found = _run_searches(queries, seen)
+                _event(db, run.id, "search", f"Round {rounds}: {len(found)} candidates.",
+                       {"count": len(found),
+                        "sample": [f["title"][:80] for f in found[:10]]})
+                if not found:
+                    break
+
+                # Pre-rank cheaply: LLM analyzes only the top slice (3x target).
+                analyze_cap = max(max_items * 3, 10)
+                if len(found) > analyze_cap:
+                    found = _prefilter(inv, found, analyze_cap)
+                    _event(db, run.id, "search",
+                           f"Round {rounds}: pre-ranked to top {analyze_cap} for analysis.")
+
+                existing = [{"id": a.id, "title": a.title, "tags": a.tags or ""}
+                            for a in db.query(Artifact)
+                            .filter(Artifact.investigation_id == inv.id).all()]
+                pre_ids = {e["id"] for e in existing}
+                kept = []
+                for i in range(0, len(found), ANALYZE_BATCH):
+                    batch = found[i:i + ANALYZE_BATCH]
+                    verdicts = _analyze_batch(inv, batch, existing)
+                    by_idx = {v.get("index"): v for v in verdicts
+                              if isinstance(v, dict) and isinstance(v.get("index"), int)}
+                    for j, cand in enumerate(batch):
+                        v = by_idx.get(j)
+                        if not v:
+                            continue
+                        try:
+                            rel = float(v.get("relevance", 0))
+                        except (TypeError, ValueError):
+                            rel = 0
+                        if (v.get("keep") or rel >= KEEP_THRESHOLD) and rel > 0:
+                            kept.append((cand, v))
+                    _event(db, run.id, "analyze",
+                           f"Round {rounds}: analyzed {min(i + ANALYZE_BATCH, len(found))}/{len(found)}…")
+                kept.sort(key=lambda kv: -float(kv[1].get("relevance", 0) or 0))
+                kept = kept[:max(0, max_items - total_kept)]
+                if not kept:
+                    _event(db, run.id, "analyze", f"Round {rounds}: nothing worth keeping.")
+                    break
+
+                rows = _persist(db, inv.id, kept, run_id=run.id)
+                rels = _map_relationships(db, inv.id, rows, pre_ids, run_id=run.id)
+                total_kept += len(rows)
+                total_rels += rels
+                _event(db, run.id, "map",
+                       f"Round {rounds}: kept {len(rows)}, mapped {rels} relationships.",
+                       {"kept": [r["title"][:80] for r in rows]})
+                for r in rows:
+                    existing.append({"id": r["id"], "title": r["title"], "tags": r["tags"]})
+
+                if total_kept >= max_items or rounds >= max_rounds:
+                    break
+                # Refinement round: ask planner for follow-up queries.
+                try:
+                    follow = llm.chat_json([
+                        {"role": "system",
+                         "content": "Research search planner. Reply JSON only."},
+                        {"role": "user",
+                         "content": (f"Brief: {inv.title} | {inv.keywords} | {inv.description}\n"
+                                     f"Kept so far ({total_kept}): "
+                                     f"{[e['title'][:60] for e in existing[-8:]]}\n"
+                                     "Reply {\"queries\": [{\"text\": str, \"sources\": [...]}]} "
+                                     "max 3 follow-up queries exploring gaps. "
+                                     f"Sources allowed: {inv.sources}")}],
+                        max_tokens=512)
+                    queries = [{"text": q["text"][:120], "sources": q.get("sources") or ["web"]}
+                               for q in (follow.get("queries") or [])[:3] if q.get("text")]
+                    if not queries:
+                        break
+                    _event(db, run.id, "plan", f"Refinement: {len(queries)} follow-up queries.",
+                           {"queries": queries})
+                except Exception:
+                    break
+
+            stats = {"rounds": rounds, "artifacts_kept": total_kept,
+                     "relationships": total_rels}
+            run.stats = json.dumps(stats)
+            run.status = "done"
+            run.finished_at = datetime.now(timezone.utc)
+            inv.status = "ready"
+            db.commit()
+            _event(db, run.id, "summary",
+                   f"Done: {total_kept} artifacts, {total_rels} relationships in {rounds} round(s).",
+                   stats)
     except Exception as e:
         try:
             run.status = "error"
@@ -352,6 +376,13 @@ def run_investigation_agent(investigation_id: int, max_items: int = 25,
                 inv.status = "ready"
             db.commit()
             _event(db, run.id, "summary", f"Run failed: {e}")
+            # The scope above has closed, so reopen it briefly: a run that died
+            # is exactly the run whose reason you need on the chain.
+            if rid:
+                with L.scope(rid, mandate, label=run_label):
+                    L.record_agent_step("summary", f"Run failed: {e}",
+                                        {"error": str(e)[:200],
+                                         "trigger": trigger})
         except Exception:
             db.rollback()
     finally:
@@ -360,8 +391,12 @@ def run_investigation_agent(investigation_id: int, max_items: int = 25,
 
 def launch_run(investigation_id: int, max_items: int = 25, max_rounds: int = 2,
                trigger: str = "manual"):
-    t = threading.Thread(target=run_investigation_agent,
-                         args=(investigation_id, max_items, max_rounds, trigger),
+    # copy_context carries the session in: a thread started here does not
+    # inherit contextvars, so without this the run would anchor to no session.
+    ctx = contextvars.copy_context()
+    t = threading.Thread(target=ctx.run,
+                         args=(run_investigation_agent, investigation_id,
+                               max_items, max_rounds, trigger),
                          daemon=True)
     t.start()
     return t
@@ -380,7 +415,8 @@ def launch_run_with_goal(investigation_id: int, goal: str, max_items: int = 12,
         run_id = run.id
     finally:
         db.close()
-    t = threading.Thread(target=run_investigation_agent,
+    ctx = contextvars.copy_context()
+    t = threading.Thread(target=ctx.run,
                          kwargs=dict(investigation_id=investigation_id,
                                      run_id=run_id, goal=goal,
                                      max_items=max_items, max_rounds=max_rounds,

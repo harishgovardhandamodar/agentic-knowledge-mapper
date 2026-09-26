@@ -64,6 +64,7 @@ Components, UML diagrams, and data flows: [architecture](docs/architecture.md).
 - **Explainer** — modes (explain/deep-dive/compare/tutor/critique/tldr/glossary/api-ref), evidence drawer, trace, roadmap, quizzes, threads, bookmarks, drift watch.
 - **AI Security** — product + exposure form; score, executive summary, threat register, known exploits grounded in the investigation graph, A2A trail, diagrams, Markdown/PDF export.
 - **Agent console** — live stage-colored event log, search plan, run stats.
+- **Audit ledger** — one hash-chained timeline per run over every actor (A2A hops, model calls, human actions, claims). Chain integrity is *re-derived* on demand rather than trusted; per-event proofs, claim grounding, drift signals, blast-radius tracing ("what consumed this claim?"), the human approval queue, and a self-verifying JSON export. Browser work is grouped into session sittings with their own verification spine: violations, token use, activity, per-run health, and failed runs. The browser sends `X-AKM-Session`; the ledger stays out of the product's way, so audit outages cannot turn product calls into 500s.
 
 GUI map and flows: [frontend](docs/frontend.md).
 
@@ -90,6 +91,14 @@ GUI map and flows: [frontend](docs/frontend.md).
 | GET | `/api/agents/cards`, `/.well-known/agents` | A2A agent registry |
 | PATCH/DELETE | `/api/artifacts/{id}` | Review state / delete |
 | POST | `/api/relationships` | Manual edge |
+| GET | `/api/ledger/runs`, `/api/ledger/approvals/pending` | Audited runs / cross-run approval queue |
+| GET/POST | `/api/ledger/sessions`, `/api/ledger/sessions/{id}` | Browser session sittings / session detail |
+| GET | `/api/ledger/sessions/{id}/timeline`, `…/verify`, `…/insights` | Merged session timeline, spine verification, and enriched session aggregates |
+| GET | `/api/ledger/runs/{id}/timeline`, `…/timeline.csv`, `…/violations` | The chain, as JSON or CSV, and anything that tripped a gate |
+| GET | `/api/ledger/runs/{id}/verify`, `…/drift`, `…/proofs`, `…/events/{seq}/proof` | Re-derive integrity, compare plan vs. actual, inspect proofs |
+| GET | `/api/ledger/runs/{id}/claims`, `…/contamination/{ref}` | Claim grounding / blast radius of one claim |
+| GET/POST | `/api/ledger/runs/{id}/export`, `/api/ledger/verify-export` | Self-contained bundle + offline verification |
+| POST | `/api/ledger/runs/{id}/actions`, `…/approvals`, `/api/ledger/approvals/{id}/decide` | Land an MCP / human / peer action on the chain; decide a gate |
 
 ## Running
 
@@ -101,7 +110,8 @@ docker compose up -d --build
 Requires **fox-services** reachable (compose default: mesh peer Ollama,
 fallback `http://host.docker.internal:8210/v1`).
 Config via env: `LLM_BASE_URL`, `LLM_FALLBACK_URL`, `LLM_MODEL`,
-`LLM_FALLBACK_MODEL`, `LLM_TIMEOUT_S` (default 180). Local dev:
+`LLM_FALLBACK_MODEL`, `LLM_TIMEOUT_S` (default 180), optional `FOX_TELEMETRY_URL`
+for digest-only gateway proof linkage on direct-backend calls. Local dev:
 
 ```bash
 pip install -r requirements.txt

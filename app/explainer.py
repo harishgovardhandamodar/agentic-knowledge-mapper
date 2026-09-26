@@ -5,6 +5,7 @@ Runs in a background thread; the GUI polls the Explanation record.
 """
 import json
 import re
+import contextvars
 import threading
 import time
 import traceback
@@ -1193,8 +1194,9 @@ def run_explainer(exp_id: int, max_pages: int = MAX_PAGES, max_hops: int = 0):
 
 
 def launch_explanation(exp_id: int, max_pages: int = MAX_PAGES, max_hops: int = 0):
-    t = threading.Thread(target=run_explainer,
-                         args=(exp_id, max_pages, max_hops), daemon=True)
+    t = threading.Thread(target=contextvars.copy_context().run,
+                         args=(run_explainer, exp_id, max_pages, max_hops),
+                         daemon=True)
     t.start()
     return t
 

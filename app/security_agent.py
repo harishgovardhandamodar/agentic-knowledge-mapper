@@ -11,6 +11,7 @@ report-writer), where research-collector searches THIS app's knowledge graph
 evidence.
 """
 import json
+import contextvars
 import threading
 import traceback
 from datetime import datetime, timezone
@@ -208,8 +209,10 @@ def launch_security_assessment(investigation_id: int, params: dict) -> int:
         run_id = run.id
     finally:
         db.close()
-    t = threading.Thread(target=run_security_assessment,
-                         args=(run_id, params), daemon=True)
+    # copy_context carries the session into the worker thread.
+    t = threading.Thread(target=contextvars.copy_context().run,
+                         args=(run_security_assessment, run_id, params),
+                         daemon=True)
     t.start()
     return run_id
 
@@ -243,8 +246,10 @@ def resume_security_assessment(run_id: int) -> bool:
         db.commit()
     finally:
         db.close()
-    t = threading.Thread(target=run_security_assessment,
-                         args=(run_id, params), daemon=True)
+    # copy_context carries the session into the worker thread.
+    t = threading.Thread(target=contextvars.copy_context().run,
+                         args=(run_security_assessment, run_id, params),
+                         daemon=True)
     t.start()
     return True
 

@@ -136,6 +136,61 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .tl-entry .meta { font-size: 11px; color: var(--text2); margin-top: 4px; display: flex; gap: 10px; flex-wrap: wrap; }
 .trig-pill { display: inline-block; padding: 1px 8px; border-radius: 9px; font-size: 10px; font-weight: 600; background: var(--bg3); color: var(--text2); }
 .trig-schedule { background: #2d1f3d; color: var(--purple); }
+/* Audit ledger */
+.audit-grid { display: grid; grid-template-columns: 290px 1fr; height: 100%; }
+.audit-side { border-right: 1px solid var(--border); background: var(--bg2); overflow-y: auto; }
+.audit-main { overflow-y: auto; padding: 14px 18px; }
+.audit-run { display: block; width: 100%; text-align: left; background: transparent; border: none; border-bottom: 1px solid var(--border); padding: 9px 12px; cursor: pointer; color: var(--text); font-size: 12px; font-family: inherit; }
+.audit-run:hover { background: var(--bg3); }
+.audit-run.active { background: var(--bg3); box-shadow: inset 3px 0 0 var(--accent); }
+.audit-run .rid { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
+.audit-run .rlab { color: var(--text2); font-size: 11px; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.audit-banner { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; border: 1px solid var(--border); border-left: 3px solid var(--text2); border-radius: 6px; padding: 9px 13px; margin-bottom: 12px; font-size: 12px; background: var(--bg2); }
+.audit-banner.ok { border-left-color: var(--green); }
+.audit-banner.bad { border-left-color: var(--red); }
+.audit-banner .grow { flex: 1; }
+.audit-hash { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10.5px; color: var(--text2); word-break: break-all; }
+.audit-ev { background: var(--bg2); border: 1px solid var(--border); border-left: 3px solid var(--border); border-radius: 6px; margin-bottom: 7px; font-size: 12px; }
+.audit-ev.v-warn { border-left-color: var(--orange); }
+.audit-ev.v-block { border-left-color: var(--red); }
+.audit-ev.v-allow, .audit-ev.v-pass { border-left-color: var(--green); }
+.audit-ev-head { display: flex; align-items: center; gap: 9px; padding: 8px 12px; cursor: pointer; flex-wrap: wrap; }
+.audit-ev-head:hover { background: var(--bg3); }
+.audit-ev .seq { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--text2); font-size: 11px; min-width: 24px; }
+.audit-ev .kind { font-weight: 600; }
+.audit-ev .actor { color: var(--accent); }
+.audit-ev-body { border-top: 1px solid var(--border); padding: 10px 12px; }
+.audit-kv { display: grid; grid-template-columns: 120px 1fr; gap: 3px 10px; font-size: 11.5px; }
+.audit-kv .k { color: var(--text2); }
+.audit-kv .v { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-all; }
+.audit-pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; font-size: 11px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; word-break: break-word; max-height: 260px; overflow: auto; margin: 6px 0 0; }
+.audit-chip { display: inline-block; padding: 1px 7px; border-radius: 9px; font-size: 10px; font-weight: 600; border: 1px solid var(--border); color: var(--text2); }
+.audit-chip.ok { color: var(--green); border-color: var(--green); }
+.audit-chip.warn { color: var(--orange); border-color: var(--orange); }
+.audit-chip.bad { color: var(--red); border-color: var(--red); }
+.audit-chip.link { cursor: pointer; }
+.audit-chip.link:hover { background: var(--bg3); }
+.audit-sub { font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text2); margin: 14px 0 6px; }
+.audit-claim { background: var(--bg2); border: 1px solid var(--border); border-radius: 6px; padding: 8px 12px; margin-bottom: 6px; font-size: 12px; }
+.audit-empty { color: var(--text2); font-size: 12px; padding: 26px 4px; text-align: center; }
+/* session grouping in the audit sidebar */
+.audit-side-head { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 9px 12px; background: var(--bg2); border-bottom: 1px solid var(--border); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text2); }
+.audit-side-head .ash-title { display: flex; align-items: center; gap: 6px; }
+.audit-group { border-bottom: 1px solid var(--border); padding-bottom: 4px; }
+.audit-group-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 7px 12px 4px; font-size: 11px; color: var(--text2); }
+.audit-group-head.link { cursor: pointer; }
+.audit-group-head.link:hover { background: var(--bg3); color: var(--text); }
+.audit-group-head .ag-label { display: flex; align-items: center; gap: 5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.audit-group-head .ag-meta { font-size: 10px; white-space: nowrap; opacity: 0.75; }
+.audit-tbl { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+.audit-tbl th { text-align: left; color: var(--text2); font-weight: 600; padding: 5px 8px; border-bottom: 1px solid var(--border); }
+.audit-tbl td { padding: 5px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.audit-tbl th.num, .audit-tbl td.num { text-align: right; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.audit-tbl a { color: var(--accent); }
+.audit-act { display: grid; grid-template-columns: 52px 1fr 34px; gap: 8px; align-items: center; font-size: 11px; margin: 2px 0; }
+.audit-act .bar { height: 8px; background: var(--bg3); border-radius: 4px; overflow: hidden; }
+.audit-act .bar > span { display: block; height: 100%; background: var(--accent); border-radius: 4px; }
+.audit-act .n { text-align: right; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--text2); }
 .hl-banner { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); z-index: 11; display: flex; gap: 10px; align-items: center; background: var(--bg2); border: 1px solid var(--orange); border-radius: 8px; padding: 6px 12px; font-size: 12px; box-shadow: 0 2px 12px rgba(0,0,0,0.4); }
 /* Explainer */
 #explainerView { overflow-y: auto; padding: 20px 24px; height: 100%; background: var(--bg); }
@@ -535,6 +590,7 @@ body.pane-sec-top-collapsed .sec-topbar-sub { display: none; }
       <div class="main-tab" data-view="timeline" onclick="switchView('timeline')"><i class="fas fa-timeline"></i> Timeline</div>
       <div class="main-tab" data-view="explainer" onclick="switchView('explainer')"><i class="fas fa-lightbulb"></i> Explainer</div>
       <div class="main-tab" data-view="console" onclick="switchView('console')"><i class="fas fa-terminal"></i> Agent console</div>
+      <div class="main-tab" data-view="audit" onclick="switchView('audit')"><i class="fas fa-shield-halved"></i> Audit ledger <span id="auditBadge"></span></div>
     </div>
     <div class="main-content">
       <div class="view visible" id="graphView">
@@ -630,6 +686,15 @@ body.pane-sec-top-collapsed .sec-topbar-sub { display: none; }
         <div id="planBox"></div>
         <div class="console-log" id="consoleLog"></div>
       </div>
+
+      <div class="view" id="auditView">
+        <div class="audit-grid">
+          <div class="audit-side" id="auditRunList"></div>
+          <div class="audit-main" id="auditMain">
+            <div class="audit-empty"><i class="fas fa-shield-halved"></i> Pick an audited run, or start a security assessment to create one.</div>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
   </div><!-- /akmPane -->
@@ -720,6 +785,47 @@ body.pane-sec-top-collapsed .sec-topbar-sub { display: none; }
 
 <script>
 const API = '/api';
+
+// ---------------------------------------------------------------- sessions --
+// One "sitting" per browser. The key is what the server groups work by; the
+// server decides when a key has been idle long enough to deserve a new session,
+// so a long working stretch stays one session and an overnight-idle tab does
+// not grow a single chain forever.
+const SESSION_KEY_STORAGE = 'akm.sessionKey';
+function sessionKey() {
+  let k = null;
+  try { k = localStorage.getItem(SESSION_KEY_STORAGE); } catch (e) { /* private mode */ }
+  if (!k) {
+    k = (crypto.randomUUID ? crypto.randomUUID()
+                          : 'k' + Math.random().toString(36).slice(2) + Date.now().toString(36));
+    try { localStorage.setItem(SESSION_KEY_STORAGE, k); } catch (e) { /* ignore */ }
+  }
+  return k;
+}
+function newSessionKey() {
+  const k = (crypto.randomUUID ? crypto.randomUUID()
+                               : 'k' + Math.random().toString(36).slice(2) + Date.now().toString(36));
+  try { localStorage.setItem(SESSION_KEY_STORAGE, k); } catch (e) { /* ignore */ }
+  return k;
+}
+
+// Inject the session on every API call in one place. There are ~100 call sites
+// and none of them should have to remember this; a missed header would silently
+// split a sitting into two sessions, which is exactly the bug this avoids.
+const _rawFetch = window.fetch.bind(window);
+window.fetch = function (input, init) {
+  try {
+    const url = typeof input === 'string' ? input : (input && input.url) || '';
+    if (url.startsWith(API) || url.includes('/api/')) {
+      init = init || {};
+      const headers = new Headers(init.headers || {});
+      if (!headers.has('X-AKM-Session')) headers.set('X-AKM-Session', sessionKey());
+      init.headers = headers;
+    }
+  } catch (e) { /* never let bookkeeping break a request */ }
+  return _rawFetch(input, init);
+};
+
 let investigations = [];
 let currentInv = null;
 let network = null, nodes = null, edges = null, graphData = null;
@@ -2418,8 +2524,667 @@ function switchView(view) {
   if (el) el.classList.add('visible');
   if (view === 'graph' && network) setTimeout(() => network.fit({ animation: true }), 100);
   if (view === 'explainer') loadPrefs();
+  if (view === 'audit') loadAuditRuns();
 }
 
+
+/* ---------- Audit ledger ---------- */
+/* One hash-chained timeline per run over every actor: A2A hops, model calls,
+   human actions, claims. Chain integrity is re-derived on demand rather than
+   trusted, so "verified" here means recomputed from the stored hashes. */
+let auditRunId = null;
+let auditEvents = [];
+let auditFilter = '';
+let auditExpanded = new Set();
+let auditSessions = [];
+let auditSessionId = null;
+
+const LEDGER = '/api/ledger';
+const VERDICT_CLASS = { allow: 'ok', pass: 'ok', warn: 'warn', flag: 'warn', hold: 'warn', deny: 'bad', block: 'bad' };
+
+async function auditFetch(path, opts) {
+  const res = await fetch(LEDGER + path, opts);
+  if (!res.ok) {
+    let detail = res.statusText;
+    try { detail = (await res.json()).detail || detail; } catch (e) { /* not json */ }
+    throw new Error(detail);
+  }
+  return res.status === 204 ? null : res.json();
+}
+
+function auditShort(hash) { return hash ? String(hash).slice(0, 12) : '—'; }
+function auditTime(ts) { return ts ? new Date(ts).toLocaleTimeString() : ''; }
+
+async function loadAuditRuns(selectId) {
+  const list = document.getElementById('auditRunList');
+  let data, sessions;
+  try {
+    [data, sessions] = await Promise.all([
+      auditFetch('/runs?limit=200'),
+      auditFetch('/sessions?limit=60').catch(() => ({ sessions: [] })),
+    ]);
+  } catch (e) {
+    list.innerHTML = `<div class="audit-empty">Ledger unreachable: ${escHtml(e.message)}</div>`;
+    return;
+  }
+  const runs = data.runs || [];
+  const sess = sessions.sessions || [];
+  auditSessions = sess;
+  if (selectId) auditRunId = selectId;
+
+  // Group by session, newest sitting first. A run with no session (an external
+  // auditor opened one by hand) still gets a home under "unattributed".
+  const bySession = new Map();
+  runs.forEach(r => {
+    const key = r.session_id || '';
+    if (!bySession.has(key)) bySession.set(key, []);
+    bySession.get(key).push(r);
+  });
+  const ordered = sess
+    .filter(s => bySession.has(s.session_id))
+    .map(s => [s.session_id, s]);
+  bySession.forEach((v, k) => { if (k && !ordered.some(o => o[0] === k)) ordered.push([k, null]); });
+  if (bySession.has('')) ordered.push(['', null]);
+
+  const head = `
+    <div class="audit-side-head">
+      <span class="ash-title"><i class="fas fa-clock-rotate-left"></i> Sessions</span>
+      <button class="btn btn-sm" onclick="startNewAuditSession()" title="Start a fresh audit session in this browser">
+        <i class="fas fa-plus"></i> New
+      </button>
+    </div>`;
+
+  if (!runs.length) {
+    list.innerHTML = head + '<div class="audit-empty">No audited runs yet.<br>Start a security assessment to produce one.</div>';
+    document.getElementById('auditBadge').textContent = '';
+    return;
+  }
+  if (!runs.some(r => r.run_id === auditRunId)) auditRunId = runs[0].run_id;
+
+  const groups = ordered.map(([sid, meta]) => {
+    const label = meta ? (meta.label || sid) : (sid ? sid : 'unattributed');
+    const when = meta && meta.last_seen_at ? new Date(meta.last_seen_at) : null;
+    const rows = bySession.get(sid).map(r => `
+      <button class="audit-run ${r.run_id === auditRunId ? 'active' : ''}" data-rid="${escHtml(r.run_id)}" onclick="selectAuditRun('${escHtml(r.run_id)}')">
+        <div class="rid">${escHtml(r.run_id)}</div>
+        <div class="rlab">${escHtml(r.label || 'unlabelled')} · ${r.events} ev · ${escHtml(r.status)}</div>
+      </button>`).join('');
+    return `
+      <div class="audit-group">
+        <div class="audit-group-head${sid ? ' link' : ''}" ${sid ? `onclick="openAuditSession('${escHtml(sid)}')" title="Open session detail"` : ''}>
+          <span class="ag-label"><i class="fas fa-layer-group"></i> ${escHtml(label)}</span>
+          <span class="ag-meta">${bySession.get(sid).length} run${bySession.get(sid).length === 1 ? '' : 's'}${when ? ' · ' + when.toLocaleString() : ''}</span>
+        </div>
+        ${rows}
+      </div>`;
+  }).join('');
+
+  list.innerHTML = head + groups;
+  await selectAuditRun(auditRunId);
+}
+
+async function startNewAuditSession() {
+  // Rotate the browser key first, then tell the server, so the very next action
+  // already belongs to the new sitting rather than the old one.
+  newSessionKey();
+  try {
+    await auditFetch('/sessions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ client_key: sessionKey(), label: 'session ' + new Date().toLocaleString() }),
+    });
+  } catch (e) { /* the next call will create it anyway */ }
+  auditRunId = null;
+  auditSessionId = null;
+  await loadAuditRuns();
+  showNotif('New audit session started', 'success');
+}
+
+async function openAuditSession(sessionId) {
+  auditSessionId = sessionId;
+  const main = document.getElementById('auditMain');
+  main.innerHTML = '<div class="audit-empty"><i class="fas fa-spinner fa-spin"></i> Loading session…</div>';
+  let detail, verify, insights, timeline;
+  try {
+    [detail, verify, insights, timeline] = await Promise.all([
+      auditFetch('/sessions/' + encodeURIComponent(sessionId)),
+      auditFetch('/sessions/' + encodeURIComponent(sessionId) + '/verify'),
+      auditFetch('/sessions/' + encodeURIComponent(sessionId) + '/insights'),
+      auditFetch('/sessions/' + encodeURIComponent(sessionId) + '/timeline?limit=2000'),
+    ]);
+  } catch (e) {
+    main.innerHTML = `<div class="audit-empty">Session unavailable: ${escHtml(e.message)}</div>`;
+    return;
+  }
+
+  const okBadge = verify.ok
+    ? '<span class="audit-chip ok"><i class="fas fa-link"></i> spine + all tasks verify</span>'
+    : `<span class="audit-chip bad"><i class="fas fa-triangle-exclamation"></i> ${verify.findings.length} finding(s)</span>`;
+  const llm = insights.llm || {};
+  const split = insights.split || {};
+  const humansList = insights.human_actions || [];
+  const notices = insights.violations || [];
+  const failedRuns = insights.failed_runs || [];
+  const activity = insights.activity || [];
+  const verdicts = insights.verdicts || {};
+  const fmtDuration = s => {
+    if (s == null) return '';
+    const m = Math.floor(s / 60), r = s % 60;
+    return m ? `${m}m ${r}s` : `${r}s`;
+  };
+  const tokenTotal = llm.tokens ?? ((llm.tokens_in || 0) + (llm.tokens_out || 0));
+  const modelText = Object.entries(llm.models || {}).map(([name, value]) => {
+    if (value && typeof value === 'object') {
+      const calls = value.calls || 0;
+      const toks = (value.tokens_in || 0) + (value.tokens_out || 0);
+      return `${name} · ${calls} call${calls === 1 ? '' : 's'} · ${toks} tok`;
+    }
+    return `${name}×${value}`;
+  }).join(', ') || '—';
+  const verdictText = Object.entries(verdicts).map(([v, n]) => `${v}×${n}`).join(', ') || 'none';
+  const noticeChip = n => (n.class === 'gate' ? 'bad' : 'warn');
+  const noticeRow = n => {
+    const vcls = { deny: 'v-block', block: 'v-block', hold: 'v-warn', flag: 'v-warn', warn: 'v-warn' }[n.verdict] || 'v-warn';
+    return `<div class="audit-ev ${vcls}">
+       <div class="audit-ev-head" style="cursor:default">
+         <span class="audit-chip ${noticeChip(n)}">${escHtml(n.class || 'notice')}</span>
+         <span class="kind">${escHtml(n.action || n.kind)}</span>
+         <span class="actor">${escHtml(n.actor || '')}</span>
+         <span>${escHtml(n.reason || n.verdict || '')}</span>
+         <span style="flex:1"></span>
+         <span class="audit-hash">${escHtml(n.run_id || '')}</span>
+         <span class="seq">${auditTime(n.ts)}</span>
+         <span class="audit-hash" title="${escHtml(n.hash || '')}">${auditShort(n.hash)}</span>
+       </div>
+     </div>`;
+  };
+  const noticesHtml = notices.map(noticeRow).join('')
+    || '<div class="audit-empty">No gate, grounding, or drift notices in this sitting.</div>';
+  const noticeOverflow = (insights.violation_count ?? notices.length) > notices.length
+    ? `<div class="audit-empty">…and ${insights.violation_count - notices.length} more notice(s); use the run timeline below.</div>`
+    : '';
+  const failedHtml = failedRuns.map(f =>
+    `<div class="audit-ev v-block">
+       <div class="audit-ev-head" style="cursor:default">
+         <span class="kind">failed run</span>
+         <span><a href="#" onclick="selectAuditRun('${escHtml(f.run_id)}');return false">${escHtml(f.run_id)}</a></span>
+         <span>${escHtml(f.label || '')}</span>
+       </div>
+     </div>`).join('')
+    || '<div class="audit-empty">Every anchored run still reports a healthy status.</div>';
+  const peakActivity = Math.max(0, ...activity.map(b => b.events || 0));
+  const activityHtml = activity.map(b => `
+    <div class="audit-act">
+      <span>${escHtml(b.minute)}</span>
+      <span class="bar"><span style="width:${peakActivity ? Math.round(100 * (b.events || 0) / peakActivity) : 0}%"></span></span>
+      <span class="n">${b.events || 0}</span>
+    </div>`).join('')
+    || '<div class="audit-empty">No minute-by-minute activity yet.</div>';
+  const span = insights.span
+    ? `${new Date(insights.span.first).toLocaleString()} → ${new Date(insights.span.last).toLocaleString()}${insights.span.duration_s != null ? ` · ${fmtDuration(insights.span.duration_s)}` : ''}`
+    : '—';
+  const humans = humansList.map(h =>
+    `<div class="audit-ev v-allow">
+       <div class="audit-ev-head" style="cursor:default">
+         <span class="kind">${escHtml(h.intent || h.kind)}</span>
+         <span class="actor">${escHtml(h.actor || '')}</span>
+         <span style="flex:1"></span>
+         <span class="seq">${auditTime(h.ts)}</span>
+       </div>
+     </div>`).join('')
+    || '<div class="audit-empty">No human actions recorded in this sitting.</div>';
+
+  const insightTaskById = Object.fromEntries((insights.tasks || []).map(t => [t.run_id, t]));
+  const runRowsData = (detail.tasks || []).map(t => ({ ...t, ...(insightTaskById[t.run_id] || {}) }));
+  if (!runRowsData.length && insights.tasks) runRowsData.push(...insights.tasks);
+  const runVerdictText = t => Object.entries(t.verdicts || {}).map(([v, n]) => `${v}×${n}`).join(', ');
+  const taskRows = runRowsData.map(t => {
+    const v = (verify.tasks || []).find(x => x.run_id === t.run_id) || {};
+    const work = [
+      t.llm_calls != null ? `${t.llm_calls} LLM` : null,
+      t.tokens_in != null || t.tokens_out != null ? `${(t.tokens_in || 0) + (t.tokens_out || 0)} tok` : null,
+      t.human_actions != null ? `${t.human_actions} human` : null,
+    ].filter(Boolean).join(' · ') || '—';
+    const health = [
+      t.status || null,
+      t.ungrounded_claims ? `${t.ungrounded_claims} ungrounded` : null,
+      runVerdictText(t) || null,
+    ].filter(Boolean).join(' · ') || '—';
+    return `<tr>
+      <td><a href="#" onclick="selectAuditRun('${escHtml(t.run_id)}');return false">${escHtml(t.run_id)}</a></td>
+      <td>${escHtml(t.label || '—')}</td>
+      <td>${escHtml(t.kind || 'task')}</td>
+      <td class="num">${t.anchor_seq ?? '—'}</td>
+      <td class="num">${t.events}</td>
+      <td>${escHtml(work)}</td>
+      <td>${escHtml(health)}</td>
+      <td>${v.ok === undefined ? '—' : (v.ok ? '<span class="audit-chip ok">ok</span>' : '<span class="audit-chip bad">broken</span>')}</td>
+      <td>${t.genesis_ok ? '<span class="audit-chip ok">bound</span>' : '<span class="audit-chip bad">rebound</span>'}</td>
+    </tr>`;
+  }).join('');
+
+  main.innerHTML = `
+    <div class="audit-banner ${verify.ok ? 'ok' : 'bad'}">
+      <i class="fas fa-clock-rotate-left"></i>
+      <span class="grow"><b>${escHtml(detail.label || sessionId)}</b><br>
+        <span class="audit-hash">${escHtml(sessionId)}</span> · ${span}</span>
+      ${okBadge}
+    </div>
+    <div>
+      <div class="audit-sub">What happened in this sitting</div>
+      <div class="audit-kv">
+        <span class="k">Events</span><span class="v">${insights.total_events}</span>
+        <span class="k">Runs</span><span class="v">${(insights.tasks || []).length}</span>
+        <span class="k">Failed runs</span><span class="v">${failedRuns.length}</span>
+        <span class="k">Human / automated</span><span class="v">${split.human ?? humansList.length} / ${split.automated ?? Math.max(0, (insights.total_events || 0) - humansList.length)}</span>
+        <span class="k">Model calls</span><span class="v">${llm.calls || 0}${llm.mean_latency_ms != null ? ` · ${llm.mean_latency_ms}ms avg` : ''} · ${tokenTotal} tok</span>
+        <span class="k">Human actions</span><span class="v">${humansList.length}</span>
+        <span class="k">Investigations</span><span class="v">${escHtml((insights.investigations || []).join(', ') || '—')}</span>
+        <span class="k">Claims</span><span class="v">${insights.claims.total} · ${insights.claims.ungrounded} ungrounded</span>
+        <span class="k">Notices</span><span class="v">${insights.violation_count ?? notices.length} · ${escHtml(verdictText)}</span>
+        <span class="k">Approvals</span><span class="v">${insights.approvals_pending} pending · ${insights.approvals_decided ?? 0} decided</span>
+        <span class="k">Models</span><span class="v">${escHtml(modelText)}</span>
+      </div>
+    </div>
+    <div>
+      <div class="audit-sub">Notices <span style="text-transform:none">· gate refusals, grounding failures, and drift</span></div>
+      ${noticesHtml}
+      ${noticeOverflow}
+    </div>
+    <div>
+      <div class="audit-sub">Activity by minute</div>
+      ${activityHtml}
+    </div>
+    <div>
+      <div class="audit-sub">Human actions</div>
+      ${humans}
+    </div>
+    <div>
+      <div class="audit-sub">Failed runs</div>
+      ${failedHtml}
+    </div>
+    <div>
+      <div class="audit-sub">Runs in order <span style="text-transform:none">(position on the spine)</span></div>
+      <table class="audit-tbl">
+        <thead><tr><th>Run</th><th>Label</th><th>Kind</th><th class="num">Anchor</th><th class="num">Events</th><th>Work</th><th>Health</th><th>Chain</th><th>Binding</th></tr></thead>
+        <tbody>${taskRows || '<tr><td colspan="9">no runs anchored</td></tr>'}</tbody>
+      </table>
+    </div>
+    <div>
+      <div class="audit-sub">Merged timeline <span style="text-transform:none">· ${timeline.total} events across ${(timeline.runs || []).length} chains</span></div>
+      ${renderSessionTimeline(timeline)}
+    </div>`;
+}
+
+function renderSessionTimeline(tl) {
+  if (!tl.events || !tl.events.length) {
+    return '<div class="audit-empty">Nothing recorded in this session yet.</div>';
+  }
+  const vclass = v => ({ allow: 'v-allow', pass: 'v-pass', warn: 'v-warn',
+                         flag: 'v-warn', hold: 'v-warn', deny: 'v-block',
+                         block: 'v-block' }[v] || 'v-pass');
+  return tl.events.map(e => `
+    <div class="audit-ev ${vclass(e.verdict)}">
+      <div class="audit-ev-head" style="cursor:default">
+        <span class="seq">${e.seq}</span>
+        <span class="kind">${escHtml(e.kind)}</span>
+        <span class="actor" title="${escHtml(e.actor || '')}">${escHtml(e.actor || '')}</span>
+        <span>${escHtml(e.intent || '')}</span>
+        <span style="flex:1"></span>
+        <span class="audit-hash">${escHtml(e.run_id)}</span>
+        <span class="seq">${auditTime(e.ts)}</span>
+        <span class="audit-hash" title="${escHtml(e.hash || '')}">${auditShort(e.hash)}</span>
+      </div>
+    </div>`).join('');
+}
+
+async function selectAuditRun(runId) {
+  auditRunId = runId;
+  auditExpanded = new Set();
+  document.querySelectorAll('.audit-run').forEach(b =>
+    b.classList.toggle('active', b.dataset.rid === runId));
+  await renderAudit();
+}
+
+async function renderAudit() {
+  const main = document.getElementById('auditMain');
+  if (!auditRunId) return;
+  main.innerHTML = '<div class="audit-empty"><i class="fas fa-spinner fa-spin"></i> Loading chain…</div>';
+  let tl, verify, drift, claims, pending;
+  try {
+    [tl, verify, drift, claims] = await Promise.all([
+      auditFetch(`/runs/${encodeURIComponent(auditRunId)}/timeline?limit=2000`),
+      auditFetch(`/runs/${encodeURIComponent(auditRunId)}/verify`),
+      auditFetch(`/runs/${encodeURIComponent(auditRunId)}/drift`),
+      auditFetch(`/runs/${encodeURIComponent(auditRunId)}/claims`),
+    ]);
+    pending = await auditFetch('/approvals/pending').catch(() => ({ approvals: [] }));
+  } catch (e) {
+    main.innerHTML = `<div class="audit-empty">Could not load run: ${escHtml(e.message)}</div>`;
+    return;
+  }
+  auditEvents = tl.events || [];
+  const mine = (pending.approvals || []).filter(a => a.run_id === auditRunId);
+  document.getElementById('auditBadge').innerHTML =
+    mine.length ? `<span class="audit-chip warn">${mine.length} pending</span>` : '';
+
+  const findings = verify.findings || [];
+  const banner = verify.ok && !drift.findings.length
+    ? 'ok' : findings.length ? 'bad' : 'warn';
+  const bannerIcon = verify.ok && !drift.findings.length ? 'fa-circle-check'
+    : findings.length ? 'fa-triangle-exclamation' : 'fa-circle-info';
+
+  main.innerHTML = `
+    <div class="audit-banner ${banner}">
+      <i class="fas ${bannerIcon}"></i>
+      <div class="grow">
+        <strong>${escHtml(auditRunId)}</strong> —
+        ${verify.ok ? 'chain verified' : `<strong>chain BROKEN (${findings.length} finding${findings.length === 1 ? '' : 's'})</strong>`}
+        · ${verify.events} events · ${verify.proofs_checked} proofs checked
+        · ${drift.findings.length} drift signal${drift.findings.length === 1 ? '' : 's'}
+        <div class="audit-hash">head ${escHtml(verify.head_hash || '')}</div>
+      </div>
+      <button class="btn btn-ghost btn-sm" onclick="selectAuditRun('${escHtml(auditRunId)}')"><i class="fas fa-rotate"></i> Re-verify</button>
+      <button class="btn btn-ghost btn-sm" onclick="exportAuditRun()"><i class="fas fa-download"></i> Export</button>
+    </div>
+    ${findings.length ? `<div class="audit-sub" style="color:var(--red)">Integrity findings</div>${findings.map(auditFinding).join('')}` : ''}
+    ${drift.findings.length ? `<div class="audit-sub">Drift signals</div>${drift.findings.map(auditDrift).join('')}` : ''}
+    ${mine.length ? `<div class="audit-sub">Approvals waiting on a human</div>${mine.map(auditApproval).join('')}` : ''}
+    <div class="audit-sub">Chain events
+      <input id="auditFilter" placeholder="filter actor, kind or intent" style="background:var(--bg3);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:11px;padding:3px 7px;margin-left:8px;width:220px;"
+             oninput="auditFilter=this.value.toLowerCase();renderAuditEvents()">
+    </div>
+    <div id="auditEventList"></div>
+    ${(claims.claims || []).length ? `<div class="audit-sub">Claims &amp; grounding</div>${claims.claims.map(auditClaim).join('')}` : ''}
+  `;
+  renderAuditEvents();
+}
+
+function auditFinding(f) {
+  return `<div class="audit-ev v-block"><div class="audit-ev-head">
+    <i class="fas fa-triangle-exclamation" style="color:var(--red)"></i>
+    <span class="kind">${escHtml(f.detail || f.signal || 'integrity failure')}</span>
+  </div></div>`;
+}
+
+function auditDrift(f) {
+  const cls = VERDICT_CLASS[f.severity] || 'warn';
+  const seqs = (f.seqs || []).length
+    ? ` <span class="audit-hash">seq ${f.seqs.join(', ')}</span>` : '';
+  return `<div class="audit-ev v-warn"><div class="audit-ev-head">
+    <span class="audit-chip ${cls}">${escHtml(f.severity || 'warn')}</span>
+    <span class="kind">${escHtml(f.signal)}</span>
+    <span style="color:var(--text2)">${escHtml(f.detail || '')}</span>${seqs}
+  </div></div>`;
+}
+
+function auditApproval(a) {
+  return `<div class="audit-ev v-warn"><div class="audit-ev-head">
+    <i class="fas fa-user-check" style="color:var(--orange)"></i>
+    <div class="grow">
+      <div><strong>${escHtml(a.summary || a.kind || 'approval requested')}</strong></div>
+      <div style="color:var(--text2);font-size:11px;margin-top:2px;">
+        requested by ${escHtml(a.requested_by || '?')} · ${escHtml(a.requested_at || '')}</div>
+      <div class="audit-hash" style="margin-top:2px;">subject ${escHtml(a.subject_hash || '')}</div>
+    </div>
+    <button class="btn btn-primary btn-sm" onclick="decideAuditApproval('${escHtml(a.id)}','grant')"><i class="fas fa-check"></i> Approve</button>
+    <button class="btn btn-ghost btn-sm" onclick="decideAuditApproval('${escHtml(a.id)}','deny')"><i class="fas fa-xmark"></i> Deny</button>
+  </div></div>`;
+}
+
+function auditClaim(c) {
+  const conf = c.confidence || 'none';
+  const cls = conf === 'high' ? 'ok' : conf === 'none' ? 'bad' : 'warn';
+  return `<div class="audit-claim">
+    <div><span class="audit-chip ${cls}">${escHtml(conf)}</span> ${escHtml(c.text || '')}</div>
+    <div class="audit-hash" style="margin-top:4px;">${escHtml(c.claim_hash || '')}
+      · by ${escHtml(c.actor || '?')} · ${c.n_sources || 0} source(s)
+      ${c.verdict ? ` · <span style="color:${c.verdict === 'unsupported' ? 'var(--red)' : 'var(--text2)'}">${escHtml(c.verdict)}</span>` : ''}</div>
+    <button class="audit-chip link" style="margin-top:5px" onclick="traceContamination('${escHtml(c.claim_hash || '')}')">
+      <i class="fas fa-project-diagram"></i> trace what consumed this
+    </button>
+    <div id="contam-${escHtml((c.claim_hash || '').slice(0, 16))}"></div>
+  </div>`;
+}
+
+function renderAuditEvents() {
+  const box = document.getElementById('auditEventList');
+  if (!box) return;
+  const rows = auditEvents.filter(e => {
+    if (!auditFilter) return true;
+    // Search the addressing too, not just the actor: a hop's counterparty and
+    // tool live in the payload, and "which hops touched the collector?" is the
+    // usual question.
+    const d = e.data || {};
+    const hay = [e.actor, e.kind, e.intent, e.actor_type, e.verdict,
+                 d.from, d.to, d.tool, d.domain].join(' ').toLowerCase();
+    return hay.includes(auditFilter);
+  });
+  if (!rows.length) {
+    box.innerHTML = '<div class="audit-empty">No events match that filter.</div>';
+    return;
+  }
+  box.innerHTML = rows.map(e => {
+    const vcls = VERDICT_CLASS[e.verdict] || '';
+    const open = auditExpanded.has(e.seq);
+    const refs = (e.input_refs || []).length;
+    return `<div class="audit-ev v-${escHtml(e.verdict || 'allow')}">
+      <div class="audit-ev-head" onclick="toggleAuditEvent(${e.seq})">
+        <i class="fas fa-caret-${open ? 'down' : 'right'}" style="color:var(--text2);font-size:10px"></i>
+        <span class="seq">${e.seq}</span>
+        <span class="kind">${escHtml(e.kind)}</span>
+        <span class="actor">${escHtml(e.actor)}</span>
+        <span style="color:var(--text2)">${escHtml(e.intent || '')}</span>
+        ${e.verdict && e.verdict !== 'allow' ? `<span class="audit-chip ${vcls}">${escHtml(e.verdict)}</span>` : ''}
+        ${e.proof ? '<span class="audit-chip ok" title="has a re-derivable proof">proof</span>' : ''}
+        ${refs ? `<span class="audit-chip" title="${refs} upstream claim(s) referenced">${refs} ref${refs === 1 ? '' : 's'}</span>` : ''}
+        <div class="grow"></div>
+        <span style="color:var(--text2);font-size:11px">${auditTime(e.ts)}</span>
+      </div>
+      ${open ? auditEventBody(e) : ''}
+    </div>`;
+  }).join('');
+}
+
+function auditEventBody(e) {
+  const data = e.data && Object.keys(e.data).length
+    ? `<div class="audit-sub">Payload</div><pre class="audit-pre">${escHtml(JSON.stringify(e.data, null, 2))}</pre>` : '';
+  const refs = (e.input_refs || []).length ? `
+    <div class="audit-sub">Upstream claims this event consumed</div>
+    ${e.input_refs.map(r => `<button class="audit-chip link" onclick="traceContamination('${escHtml(r)}')">
+      <i class="fas fa-project-diagram"></i> ${escHtml(String(r).slice(0, 20))}…</button>`).join(' ')}` : '';
+  const proof = e.proof ? `
+    <div class="audit-sub">Proof of work</div>
+    <div class="audit-kv">
+      <span class="k">method</span><span class="v">${escHtml((e.proof.method || {}).type || '')}${(e.proof.method || {}).model ? ' / ' + escHtml(e.proof.method.model) : ''}</span>
+      <span class="k">prompt hash</span><span class="v">${escHtml((e.proof.method || {}).prompt_hash || '—')}</span>
+      <span class="k">output hash</span><span class="v">${escHtml(e.proof.output_hash || '—')}</span>
+      <span class="k">inputs</span><span class="v">${(e.proof.input_refs || []).length} reference(s)</span>
+    </div>` : '';
+  return `<div class="audit-ev-body">
+    <div class="audit-kv">
+      <span class="k">timestamp</span><span class="v">${escHtml(e.ts)}</span>
+      <span class="k">actor type</span><span class="v">${escHtml(e.actor_type)}</span>
+      <span class="k">severity</span><span class="v">${escHtml(e.severity)}</span>
+      <span class="k">event hash</span><span class="v">${escHtml(e.hash)}</span>
+      <span class="k">previous hash</span><span class="v">${escHtml(e.prev_hash)}</span>
+    </div>
+    ${data}${refs}${proof}
+  </div>`;
+}
+
+function toggleAuditEvent(seq) {
+  if (auditExpanded.has(seq)) auditExpanded.delete(seq);
+  else auditExpanded.add(seq);
+  renderAuditEvents();
+}
+
+async function traceContamination(ref) {
+  const id = `contam-${String(ref).slice(0, 16)}`;
+  const boxes = [...document.querySelectorAll('[id^="contam-"]')];
+  const box = boxes.find(b => b.id === id) || document.getElementById(id);
+  if (!box) return;
+  box.innerHTML = '<div style="color:var(--text2);font-size:11px;margin-top:5px">Tracing…</div>';
+  let data;
+  try {
+    data = await auditFetch(`/runs/${encodeURIComponent(auditRunId)}/contamination/${encodeURIComponent(ref)}`);
+  } catch (e) {
+    box.innerHTML = `<div style="color:var(--red);font-size:11px;margin-top:5px">${escHtml(e.message)}</div>`;
+    return;
+  }
+  const direct = data.direct_consumers || [];
+  const transitive = data.transitive || [];
+  const row = c => `<div style="font-size:11px;color:var(--text2);padding:2px 0">
+      seq ${c.seq} · ${escHtml(c.kind)} · ${escHtml(c.actor)} · ${escHtml(c.intent || '')}</div>`;
+  box.innerHTML = `<div style="margin-top:6px;font-size:11px">
+    <strong style="color:var(--orange)">blast radius ${data.blast_radius}</strong>
+    ${direct.length ? `<div class="audit-sub" style="margin:6px 0 2px">direct consumers</div>${direct.map(row).join('')}` : ''}
+    ${transitive.length ? `<div class="audit-sub" style="margin:6px 0 2px">transitively affected</div>${transitive.map(row).join('')}` : ''}
+    ${!direct.length && !transitive.length ? '<div style="color:var(--text2)">Nothing downstream consumed this.</div>' : ''}
+  </div>`;
+}
+
+async function decideAuditApproval(approvalId, decision) {
+  const who = prompt('Who is deciding? (recorded as the accountable human)', 'you');
+  if (!who) return;
+  try {
+    await auditFetch(`/approvals/${encodeURIComponent(approvalId)}/decide`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ decision, decided_by: who, note: decision + ' from the audit ledger' }),
+    });
+  } catch (e) {
+    alert('Could not record the decision: ' + e.message);
+    return;
+  }
+  await renderAudit();
+}
+
+async function exportAuditRun() {
+  if (!auditRunId) return;
+  let data;
+  try {
+    data = await auditFetch(`/runs/${encodeURIComponent(auditRunId)}/export`);
+  } catch (e) {
+    alert('Export failed: ' + e.message);
+    return;
+  }
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `${auditRunId}.ledger.json`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+  const v = (data.verification || {});
+  alert(`Exported ${auditRunId}.ledger.json\n\nSelf-verification: ${v.ok ? 'PASS' : 'FAIL'}\n` +
+        `${v.events || 0} events, ${v.proofs_checked || 0} proofs checked.` +
+        (v.ok ? '' : '\n\nThe exported chain did NOT verify. Do not treat it as evidence.'));
+}
+
+
+/* ---------- Audit ledger (AI Security pane) ---------- */
+/* Same chain, scoped to the one run behind the assessment on screen. The A2A
+   task id *is* the ledger run id, so there is nothing to look up. */
+let secAuditEvents = [];
+let secAuditExpanded = new Set();
+let secAuditFilter = '';
+
+async function secRenderAudit() {
+  const box = document.getElementById('secAuditBody');
+  if (!box) return;
+  if (!secA2ATaskId) {
+    box.innerHTML = '<div class="audit-empty">No chain yet — run a deep security assessment and every agent hop and model call lands here.</div>';
+    return;
+  }
+  box.innerHTML = '<div class="audit-empty"><i class="fas fa-spinner fa-spin"></i> Verifying chain…</div>';
+  const rid = encodeURIComponent(secA2ATaskId);
+  let tl, verify, drift, claims;
+  try {
+    [tl, verify, drift, claims] = await Promise.all([
+      auditFetch(`/runs/${rid}/timeline?limit=2000`),
+      auditFetch(`/runs/${rid}/verify`),
+      auditFetch(`/runs/${rid}/drift`),
+      auditFetch(`/runs/${rid}/claims`),
+    ]);
+  } catch (e) {
+    box.innerHTML = `<div class="audit-empty">Could not load the chain: ${escHtml(e.message)}</div>`;
+    return;
+  }
+  if (secA2ATaskId !== decodeURIComponent(rid)) return;   // a newer run won the race
+  secAuditEvents = tl.events || [];
+  const findings = verify.findings || [];
+  const banner = verify.ok && !drift.findings.length ? 'ok' : findings.length ? 'bad' : 'warn';
+  const icon = verify.ok && !drift.findings.length ? 'fa-circle-check'
+    : findings.length ? 'fa-triangle-exclamation' : 'fa-circle-info';
+
+  box.innerHTML = `
+    <div class="audit-banner ${banner}">
+      <i class="fas ${icon}"></i>
+      <div class="grow">
+        ${verify.ok ? '<strong>Chain verified</strong>' : '<strong>Chain BROKEN</strong>'}
+        · ${verify.events} events · ${verify.proofs_checked} proofs checked
+        · ${drift.findings.length} drift signal${drift.findings.length === 1 ? '' : 's'}
+        <div class="audit-hash">head ${escHtml(verify.head_hash || '')}</div>
+      </div>
+      <button class="btn btn-ghost btn-sm" onclick="secRenderAudit()"><i class="fas fa-rotate"></i> Re-verify</button>
+      <button class="btn btn-ghost btn-sm" onclick="secOpenInLedger()"><i class="fas fa-arrow-right"></i> Full ledger</button>
+    </div>
+    ${findings.length ? `<div class="audit-sub" style="color:var(--red)">Integrity findings</div>${findings.map(auditFinding).join('')}` : ''}
+    ${drift.findings.length ? `<div class="audit-sub">Drift signals</div>${drift.findings.map(auditDrift).join('')}` : ''}
+    <div class="audit-sub">Chain events
+      <input placeholder="filter actor, kind or intent" style="background:var(--bg3);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:11px;padding:3px 7px;margin-left:8px;width:210px;"
+             oninput="secAuditFilter=this.value.toLowerCase();secRenderAuditEvents()">
+    </div>
+    <div id="secAuditEvents"></div>
+    ${(claims.claims || []).length ? `<div class="audit-sub">Claims &amp; grounding</div>${claims.claims.map(auditClaim).join('')}` : ''}`;
+  secRenderAuditEvents();
+}
+
+function secRenderAuditEvents() {
+  const box = document.getElementById('secAuditEvents');
+  if (!box) return;
+  const rows = secAuditEvents.filter(e => {
+    if (!secAuditFilter) return true;
+    const d = e.data || {};
+    return [e.actor, e.kind, e.intent, e.actor_type, e.verdict, d.from, d.to, d.tool]
+      .join(' ').toLowerCase().includes(secAuditFilter);
+  });
+  if (!rows.length) {
+    box.innerHTML = '<div class="audit-empty">No events match that filter.</div>';
+    return;
+  }
+  box.innerHTML = rows.map(e => {
+    const open = secAuditExpanded.has(e.seq);
+    const refs = (e.input_refs || []).length;
+    return `<div class="audit-ev v-${escHtml(e.verdict || 'allow')}">
+      <div class="audit-ev-head" onclick="secToggleAuditEvent(${e.seq})">
+        <i class="fas fa-caret-${open ? 'down' : 'right'}" style="color:var(--text2);font-size:10px"></i>
+        <span class="seq">${e.seq}</span>
+        <span class="kind">${escHtml(e.kind)}</span>
+        <span class="actor">${escHtml(e.actor)}</span>
+        <span style="color:var(--text2)">${escHtml(e.intent || '')}</span>
+        ${e.verdict && e.verdict !== 'allow' ? `<span class="audit-chip ${VERDICT_CLASS[e.verdict] || ''}">${escHtml(e.verdict)}</span>` : ''}
+        ${e.proof ? '<span class="audit-chip ok" title="has a re-derivable proof">proof</span>' : ''}
+        ${refs ? `<span class="audit-chip" title="${refs} upstream claim(s)">${refs} ref${refs === 1 ? '' : 's'}</span>` : ''}
+        <div class="grow"></div>
+        <span style="color:var(--text2);font-size:11px">${auditTime(e.ts)}</span>
+      </div>
+      ${open ? auditEventBody(e) : ''}
+    </div>`;
+  }).join('');
+}
+
+function secToggleAuditEvent(seq) {
+  if (secAuditExpanded.has(seq)) secAuditExpanded.delete(seq);
+  else secAuditExpanded.add(seq);
+  secRenderAuditEvents();
+}
+
+function secOpenInLedger() {
+  switchApp('akm');
+  switchView('audit');
+  if (secA2ATaskId) loadAuditRuns(secA2ATaskId);
+}
 
 loadExplDefaults();
 
@@ -2434,6 +3199,9 @@ let secSubTab = 'overview';
 let secPerspectives = [];
 let secAudience = 'executive';
 let secSubPanes = null;
+/* The A2A task id doubles as this assessment's ledger run id, which is how the
+   audit sub-tab knows which chain to show. */
+let secA2ATaskId = '';
 
 const SEC_SUBTABS = [
   { key: 'overview', label: 'Overview', icon: 'fa-gauge-high' },
@@ -2442,6 +3210,7 @@ const SEC_SUBTABS = [
   { key: 'investigation', label: 'Investigation', icon: 'fa-diagram-project', count: 'artifacts' },
   { key: 'evidence', label: 'Evidence', icon: 'fa-magnifying-glass', count: 'evidence' },
   { key: 'agents', label: 'Agents', icon: 'fa-route' },
+  { key: 'audit', label: 'Audit', icon: 'fa-shield-halved' },
   { key: 'report', label: 'Report', icon: 'fa-file-lines' },
 ];
 
@@ -2869,6 +3638,7 @@ function secSwitchSubTab(key) {
   if (secSubPanes) {
     secSubPanes.forEach(p => { p.hidden = p.dataset.sub !== key; });
   }
+  if (key === 'audit') secRenderAudit();
   const el = document.getElementById('secResult');
   if (el) secEnsureMermaid(el);
 }
@@ -2996,6 +3766,7 @@ function secThreatApplicable(t) {
 function renderSecurityReport(data) {
   const el = document.getElementById('secResult');
   secPerspectives = Array.isArray(data.perspectives) ? data.perspectives : [];
+  secA2ATaskId = data.a2a_task_id || '';
   if (!secPerspectives.some(p => p && p.key === secAudience)) {
     secAudience = secPerspectives.length ? secPerspectives[0].key : 'executive';
   }
@@ -3159,6 +3930,12 @@ function renderSecurityReport(data) {
   const paneAgents = `
     <div class="sec-card"><h3><i class="fas fa-route"></i> Agent-to-agent trail</h3>${traceHtml}</div>`;
 
+  const paneAudit = `
+    <div class="sec-card">
+      <h3><i class="fas fa-shield-halved"></i> Audit ledger <span style="font-weight:400;font-size:11.5px;color:var(--text2)">— every hop and model call on one hash chain</span></h3>
+      <div id="secAuditBody"><div class="audit-empty"><i class="fas fa-spinner fa-spin"></i> Loading chain…</div></div>
+    </div>`;
+
   const paneReport = `
     <div class="sec-card"><h3><i class="fas fa-file-lines"></i> Full report (Markdown)</h3><div class="sec-md" id="secMarkdown"></div></div>`;
 
@@ -3183,10 +3960,13 @@ function renderSecurityReport(data) {
     <div class="sec-pane" data-sub="investigation"${secSubTab === 'investigation' ? '' : ' hidden'}>${paneInvestigation}</div>
     <div class="sec-pane" data-sub="evidence"${secSubTab === 'evidence' ? '' : ' hidden'}>${paneEvidence}</div>
     <div class="sec-pane" data-sub="agents"${secSubTab === 'agents' ? '' : ' hidden'}>${paneAgents}</div>
+    <div class="sec-pane" data-sub="audit"${secSubTab === 'audit' ? '' : ' hidden'}>${paneAudit}</div>
     <div class="sec-pane" data-sub="report"${secSubTab === 'report' ? '' : ' hidden'}>${paneReport}</div>`;
   const mdEl = document.getElementById('secMarkdown');
   if (mdEl) mdEl.innerHTML = renderMarkdownLite(data.markdown || '');
   secSubPanes = Array.from(el.querySelectorAll('.sec-pane'));
+  secAuditExpanded = new Set();
+  if (secSubTab === 'audit') secRenderAudit();
   const audHost = document.getElementById('secAudPanel');
   if (audHost) audHost.innerHTML = secAudiencePanel();
   secApplyRoleHighlights();

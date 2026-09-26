@@ -4,7 +4,10 @@ import os
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
 os.makedirs(DATA_DIR, exist_ok=True)
-SQLALCHEMY_DATABASE_URL = f"sqlite:///{os.path.join(DATA_DIR, 'akm.db')}"
+# Overridable so tests (and throwaway audits) can point at a scratch database
+# instead of the real one.
+SQLALCHEMY_DATABASE_URL = os.environ.get(
+    "AKM_DATABASE_URL", f"sqlite:///{os.path.join(DATA_DIR, 'akm.db')}")
 
 engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
 
@@ -33,6 +36,9 @@ def get_db():
 
 
 def init_db():
+    # Imported here, not at module scope: the ledger models build on Base, and
+    # database is their foundation, so a top-level import would be circular.
+    from . import ledger_models  # noqa: F401
     Base.metadata.create_all(bind=engine)
     ensure_columns()
 
@@ -72,6 +78,12 @@ _MIGRATIONS = [
     ("security_assessments", "focus_json", "TEXT"),
     ("security_assessments", "require_approval", "INTEGER"),
     ("security_assessments", "perspectives_json", "TEXT"),
+    # Ledger sessions: additive columns on the existing run table, so an
+    # already-audited run keeps its chain and simply gains a session link.
+    ("ledger_runs", "kind", "VARCHAR(20) NOT NULL DEFAULT 'task'"),
+    ("ledger_runs", "session_id", "VARCHAR(64)"),
+    ("ledger_runs", "client_key", "VARCHAR(64)"),
+    ("ledger_runs", "last_seen_at", "DATETIME"),
 ]
 
 

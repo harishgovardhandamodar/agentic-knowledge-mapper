@@ -5,7 +5,7 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import FastAPI, Depends, HTTPException, Query
+from fastapi import FastAPI, Depends, HTTPException, Query, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -15,6 +15,7 @@ from .database import init_db, get_db
 from .models import (Investigation, Artifact, Relationship, AgentRun, AgentEvent,
                      Explanation, SecurityAssessment)
 from . import llm, scheduler
+from . import ledger_api
 from .agent import launch_run, launch_run_with_goal
 from . import security_agent
 from . import security as sec_engine
@@ -25,7 +26,16 @@ from .explainer import (launch_explanation, _extract_concepts, MODES,
 
 os.makedirs("data", exist_ok=True)
 
-app = FastAPI(title="Agentic Knowledge Mapper")
+app = FastAPI(title="Agentic Knowledge Mapper",
+              # Every request carries its "sitting" if the client offers one, so
+              # work started by a click and work started by a background thread
+              # end up on the same session spine. Requests without a session key
+              # are unaffected -- this resolves to None and stays out of the way.
+              dependencies=[Depends(ledger_api.open_session)])
+
+# Audit ledger: its own router so the review/audit surface can be reasoned about
+# (and locked down) separately from the product API.
+app.include_router(ledger_api.router)
 
 app.add_middleware(
     CORSMiddleware,
@@ -216,7 +226,8 @@ def list_investigations(db: Session = Depends(get_db)):
 
 
 @app.post("/api/investigations")
-def create_investigation(data: InvestigationCreate, db: Session = Depends(get_db)):
+def create_investigation(data: InvestigationCreate, request: Request,
+                         db: Session = Depends(get_db)):
     if not data.title.strip():
         raise HTTPException(400, "Title is required")
     inv = Investigation(title=data.title.strip()[:300],
@@ -226,14 +237,21 @@ def create_investigation(data: InvestigationCreate, db: Session = Depends(get_db
     db.add(inv)
     db.commit()
     db.refresh(inv)
+    ledger_api.human_action(request, "created_investigation",
+                            {"investigation": inv.id, "title": inv.title,
+                             "sources": inv.sources})
     return _inv_json(inv, db)
 
 
 @app.get("/api/investigations/{inv_id}")
-def get_investigation(inv_id: int, db: Session = Depends(get_db)):
+def get_investigation(inv_id: int, request: Request, db: Session = Depends(get_db)):
     inv = db.query(Investigation).filter(Investigation.id == inv_id).first()
     if not inv:
         raise HTTPException(404, "Investigation not found")
+    # The UI calls this whenever the user opens an investigation, which makes it
+    # the honest place to see "what was this person working on".
+    ledger_api.human_action(request, "opened_investigation",
+                            {"investigation": inv.id, "title": inv.title})
     out = _inv_json(inv, db)
     runs = (db.query(AgentRun).filter(AgentRun.investigation_id == inv_id)
             .order_by(AgentRun.id.desc()).limit(10).all())
@@ -285,13 +303,19 @@ def delete_investigation(inv_id: int, db: Session = Depends(get_db)):
 # ---------- agent runs ----------
 
 @app.post("/api/investigations/{inv_id}/run")
-def start_run(inv_id: int, req: RunRequest, db: Session = Depends(get_db)):
+def start_run(inv_id: int, req: RunRequest, request: Request,
+              db: Session = Depends(get_db)):
     inv = db.query(Investigation).filter(Investigation.id == inv_id).first()
     if not inv:
         raise HTTPException(404, "Investigation not found")
     if db.query(AgentRun).filter(AgentRun.investigation_id == inv_id,
                                  AgentRun.status == "running").first():
         raise HTTPException(429, "A run is already in progress for this investigation")
+    ledger_api.human_action(request, "started_agent_run",
+                            {"investigation": inv_id, "title": inv.title,
+                             "max_items": req.max_items, "max_rounds": req.max_rounds})
+    # launch_run copies this context, so the run anchors to the same session
+    # the click came from.
     launch_run(inv_id, max_items=max(1, min(req.max_items, 100)),
                max_rounds=max(1, min(req.max_rounds, 3)))
     return {"status": "started"}
@@ -508,7 +532,8 @@ def create_artifact(inv_id: int, data: ArtifactCreate, db: Session = Depends(get
 
 
 @app.patch("/api/artifacts/{artifact_id}")
-def review_artifact(artifact_id: int, data: ReviewUpdate, db: Session = Depends(get_db)):
+def review_artifact(artifact_id: int, data: ReviewUpdate, request: Request,
+                    db: Session = Depends(get_db)):
     if data.review not in ("pending", "accepted", "rejected"):
         raise HTTPException(400, "Invalid review state")
     a = db.query(Artifact).filter(Artifact.id == artifact_id).first()
@@ -516,6 +541,12 @@ def review_artifact(artifact_id: int, data: ReviewUpdate, db: Session = Depends(
         raise HTTPException(404, "Artifact not found")
     a.review = data.review
     db.commit()
+    # A review decision is the most consequential human act in the product: it
+    # is what later work is allowed to treat as accepted.
+    ledger_api.human_action(request, f"review_{data.review}",
+                            {"artifact": artifact_id, "title": a.title,
+                             "investigation": a.investigation_id,
+                             "url": a.url})
     return _artifact_json(a)
 
 
@@ -672,7 +703,8 @@ def _expl_json(e: Explanation) -> dict:
 
 
 @app.post("/api/investigations/{inv_id}/explain")
-def ask_explainer(inv_id: int, req: ExplainRequest, db: Session = Depends(get_db)):
+def ask_explainer(inv_id: int, req: ExplainRequest, request: Request,
+                   db: Session = Depends(get_db)):
     inv = db.query(Investigation).filter(Investigation.id == inv_id).first()
     if not inv:
         raise HTTPException(404, "Investigation not found")
@@ -695,6 +727,12 @@ def ask_explainer(inv_id: int, req: ExplainRequest, db: Session = Depends(get_db
     db.add(exp)
     db.commit()
     db.refresh(exp)
+    # The question itself is the interesting part, so it is recorded verbatim
+    # (it is already user input, not model output or a credential).
+    ledger_api.human_action(request, "asked_explainer",
+                            {"investigation": inv_id, "explanation": exp.id,
+                             "question": exp.question, "mode": req.mode,
+                             "depth": req.depth})
     hops = 1 if req.depth == "deep" else max(0, req.max_hops)
     launch_explanation(exp.id, max_pages=exp.max_pages, max_hops=hops)
     return _expl_json(exp)
@@ -1114,7 +1152,7 @@ def rescore_security_assessment(assessment_id: int, data: SecurityRescoreRequest
 
 @app.post("/api/investigations/{inv_id}/security/assess")
 def start_security_assessment(inv_id: int, data: SecurityAssessRequest,
-                              db: Session = Depends(get_db)):
+                              request: Request, db: Session = Depends(get_db)):
     """Launch the AI Security Engineering & Evaluation Agent as a background
     run (polled via /api/runs/{run_id}). The run executes the agent-to-agent
     workflow with agentic search over this investigation's knowledge graph."""
@@ -1123,6 +1161,10 @@ def start_security_assessment(inv_id: int, data: SecurityAssessRequest,
         raise HTTPException(404, "Investigation not found")
     if security_agent.security_run_busy(db, inv_id):
         raise HTTPException(429, "A security assessment is already running here")
+    ledger_api.human_action(request, "started_security_assessment",
+                            {"investigation": inv_id, "title": inv.title,
+                             "product": data.product_name or "Target product",
+                             "require_approval": bool(data.require_approval)})
     run_id = security_agent.launch_security_assessment(inv_id, {
         "product_name": data.product_name or "Target product",
         "product_url": data.product_url or "",

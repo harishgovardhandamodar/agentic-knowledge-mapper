@@ -4,6 +4,11 @@ Protocol ``a2a/1.0``: every inter-agent call is a JSON envelope routed through
 ``dispatch()`` (the protocol bus), not a bare function call. Each hop appends
 an auditable trace entry, persisted with the assessment and rendered in the UI.
 
+The bus is also the audit checkpoint: every hop, and every model call made inside
+a handler, lands on one hash-chained ledger timeline per task (see ``app.ledger``
+and ``/api/ledger``). The in-envelope ``trace`` stays as the lightweight
+protocol-level record; the ledger is the tamper-evident one.
+
 Agents (cards at ``GET /api/agents/cards`` and ``GET /.well-known/agents``):
 
 - ``security-orchestrator`` — plans the workflow, fans out collection tasks.
@@ -20,11 +25,15 @@ Agents (cards at ``GET /api/agents/cards`` and ``GET /.well-known/agents``):
 
 from __future__ import annotations
 
+import contextlib
 import json
 import re
+import time
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
+
+from . import ledger
 
 PROTOCOL = "a2a/1.0"
 
@@ -311,6 +320,35 @@ def _score_artifact(artifact: Any, terms: list[str]) -> tuple[float, list[str]]:
     return score, hits
 
 
+def _audit_evidence(ranked: list[dict[str, Any]], artifacts: list[Any]) -> None:
+    """Bind each evidence item to a content-addressed claim.
+
+    This is where the pipeline's grounding guarantee is established: the snippet
+    is checked verbatim against the artifact it was taken from, and the claim
+    hash is attached to the item itself. Because the orchestrator forwards the
+    same evidence list to threat-intel and report-writer, those hops inherit the
+    refs and the whole assessment becomes traceable back to an artifact id.
+
+    No-ops when no ledger run is open, so the collector is unchanged in tests
+    and one-off calls.
+    """
+    if not ledger.current_run():
+        return
+    by_id = {a.id: a for a in artifacts if a is not None}
+    for e in ranked:
+        art = by_id.get(e.get("artifact_id"))
+        source_text = ((art.description or art.content or "") if art else "")
+        source_key = e.get("url") or f"artifact:{e.get('artifact_id')}"
+        res = ledger.record_claim(
+            e.get("title") or "",
+            [{"source": source_key, "quote": e.get("snippet") or ""}],
+            {source_key: source_text},
+            actor="research-collector")
+        if res:
+            e["claim_hash"] = res["claim_hash"]
+            e["grounded"] = not res["violation"]
+
+
 def research_collector_handle(env: dict[str, Any], db: Any) -> dict[str, Any]:
     """Intent ``collect_research``: agentic multi-query search over local artifacts."""
     payload = env.get("payload", {})
@@ -375,6 +413,7 @@ def research_collector_handle(env: dict[str, Any], db: Any) -> dict[str, Any]:
     ranked = sorted(best.values(), key=lambda e: -e.pop("score_raw"))[: max(1, top_k)]
     for e in ranked:
         e["reason"] = f"Matched {e['query_group']} ({'; '.join(e['matched_on'][:4])})"
+    _audit_evidence(ranked, artifacts)
     return reply_envelope(
         env, "research-collector", "research_collected",
         {"evidence": ranked, "queries_run": queries_run,
@@ -685,17 +724,107 @@ _HANDLERS = {
 }
 
 
+# ----------------------------------------------------------- audit ledger --
+
+def default_mandate() -> Any:
+    """Policy derived from the agent cards and the handler table: who exists and
+    which intents they are actually wired for.
+
+    Deriving it rather than hand-writing it means the boundary cannot drift away
+    from the code -- an envelope addressed to a recipient or intent that is not
+    registered is denied on the record, instead of quietly doing nothing.
+    """
+    intents: list[str] = []
+    for handlers in _HANDLERS.values():
+        for intent in handlers:
+            if intent not in intents:
+                intents.append(intent)
+    return ledger.Mandate(
+        objective="A2A security assessment",
+        allowed_actors=[c["name"] for c in AGENT_CARDS],
+        allowed_intents=intents,
+        planned_intents=intents,
+        max_events=500,
+        max_llm_calls=60,
+        loop_threshold=6,
+    )
+
+
+def _audit_run_id(env: dict[str, Any]) -> str:
+    """One ledger run per A2A task, keyed by the protocol's own task id, so the
+    audit trail and the protocol trace share a correlation key."""
+    return env.get("task_id") or f"a2a-{uuid.uuid4().hex[:12]}"
+
+
+def _payload_claim_refs(payload: Any) -> list[str]:
+    """Collect the claim hashes a request is built on.
+
+    Evidence carries its own ``claim_hash`` from the collector, and the
+    orchestrator forwards that same list to threat-intel and report-writer, so
+    walking the payload recovers the real lineage without the orchestrator
+    having to know the ledger exists.
+    """
+    refs: list[str] = []
+
+    def walk(node: Any, depth: int = 0) -> None:
+        if depth > 6:
+            return
+        if isinstance(node, dict):
+            h = node.get("claim_hash")
+            if isinstance(h, str) and len(h) == 64 and h not in refs:
+                refs.append(h)
+            for v in node.values():
+                walk(v, depth + 1)
+        elif isinstance(node, (list, tuple)):
+            for v in node:
+                walk(v, depth + 1)
+
+    walk(payload)
+    return refs
+
+
+def _audit_hop(ctx: Any, env: dict[str, Any], result: dict[str, Any],
+               latency_ms: int) -> None:
+    try:
+        if ctx is not None:
+            ctx.hop(env.get("from", "?"), env.get("to", "?"), env.get("intent", "?"),
+                    env.get("payload") or {}, result.get("payload") or {},
+                    task_id=env.get("task_id"), protocol=env.get("protocol", PROTOCOL),
+                    latency_ms=latency_ms,
+                    input_refs=_payload_claim_refs(env.get("payload") or {}))
+    except Exception as exc:  # noqa: BLE001 - auditing must not break the bus
+        print(f"[ledger] dropped hop record: {exc}")
+
+
 def dispatch(env: dict[str, Any], db: Any = None) -> dict[str, Any]:
-    """Route one A2A envelope to the target agent's handler (the protocol bus)."""
+    """Route one A2A envelope to the target agent's handler (the protocol bus).
+
+    Also the audit checkpoint for agent traffic: every hop lands on the task's
+    ledger chain, and the run is made current for the duration of the handler so
+    the model calls inside it are recorded against the same chain.
+    """
     if env.get("protocol") != PROTOCOL:
         raise ValueError(f"unsupported protocol: {env.get('protocol')}")
     agent_handlers = _HANDLERS.get(env.get("to", ""), {})
     handler = agent_handlers.get(env.get("intent", ""))
     if handler is None:
         raise ValueError(f"no handler for {env.get('to')}.{env.get('intent')}")
-    if env["to"] == "research-collector":
-        return handler(env, db)
-    return handler(env)
+
+    run_id = _audit_run_id(env)
+    try:
+        scope = ledger.scope(run_id, default_mandate(),
+                             label=f"A2A {env.get('intent')} task {run_id}")
+    except Exception as exc:                       # pragma: no cover - ledger down
+        # Auditing must never be the reason a security review cannot run. If the
+        # ledger is unavailable, drop this hop rather than the whole assessment;
+        # the chain will show a gap, which is itself the signal.
+        print(f"[ledger] audit scope unavailable, hop run unaudited: {exc!r}")
+        scope = contextlib.nullcontext(None)
+    with scope as ctx:
+        t0 = time.time()
+        result = handler(env, db) if env["to"] == "research-collector" else handler(env)
+        _audit_hop(ctx, env, result, int((time.time() - t0) * 1000))
+    return result
 
 
 def _hop_io(trace: list[dict[str, Any]], agent: str, intent: str,
