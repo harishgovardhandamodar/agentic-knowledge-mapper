@@ -1,0 +1,52 @@
+# Shared body for the ai-standards Modelfile (FROM line is prepended by scripts).
+# TEMPLATE is Ollama's Qwen2.5-Instruct chat template INCLUDING tool-call support:
+# Ollama advertises the `tools` capability only when the template references
+# .Tools — without it Open WebUI fails with "<model> does not support tools".
+TEMPLATE """{{- if .Messages }}
+{{- if or .System .Tools }}<|im_start|>system
+{{- if .System }}
+{{ .System }}
+{{- end }}
+{{- if .Tools }}
+
+# Tools
+
+You may call one or more functions to assist with the user query.
+
+You are provided with function signatures within <tools></tools> XML tags:
+<tools>
+{{- range .Tools }}
+{"type": "function", "function": {"name": "{{ .Function.Name }}", "description": "{{ .Function.Description }}", "parameters": {{ .Function.Parameters }} }}
+{{- end }}
+</tools>
+
+For each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:
+<tool_call>
+{"name": <function-name>, "arguments": <args-json-object>}
+</tool_call>
+{{- end }}<|im_end|>
+{{ end }}
+{{- range $i, $_ := .Messages }}
+{{- $last := eq (len (slice $.Messages $i)) 1 }}
+{{- if eq .Role "user" }}<|im_start|>user
+{{ .Content }}<|im_end|>
+{{ else if eq .Role "assistant" }}<|im_start|>assistant
+{{ if .Content }}{{ .Content }}{{ end }}{{ if .ToolCalls }}<tool_call>
+{{ range .ToolCalls }}{"name": "{{ .Function.Name }}", "arguments": {{ .Function.Arguments }}}
+{{ end }}</tool_call>{{ end }}<|im_end|>
+{{- else if eq .Role "tool" }}<|im_start|>tool
+{{ .Content }}<|im_end|>
+{{ end }}
+{{- if and $last (ne .Role "assistant") }}<|im_start|>assistant
+{{ end }}
+{{- end }}
+{{- else }}
+{{- if .System }}<|im_start|>system
+{{ .System }}<|im_end|>
+{{ end }}{{ if .Prompt }}<|im_start|>user
+{{ .Prompt }}<|im_end|>
+{{ end }}<|im_start|>assistant
+{{ end }}{{ .Response }}"""
+PARAMETER temperature 0.3
+PARAMETER num_ctx 4096
+SYSTEM """You are an AI governance assistant. Answer about EU AI Act, NIST, ISO/IEC, OWASP, MITRE ATLAS, and worldwide AI regulations from the curated dataset. Cite the source framework and URL, state coverage gaps explicitly, and never give legal advice — recommend consulting counsel."""

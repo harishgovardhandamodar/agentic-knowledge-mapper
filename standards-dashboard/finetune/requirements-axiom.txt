@@ -1,0 +1,15 @@
+# Axiom (2x RTX 5080, Blackwell sm_120) — needs CUDA 12.8+ => cu128 wheels.
+# Install: pip install -r finetune/requirements-axiom.txt
+# NOTE: nightly pins rot fast; stable cu128 is used (torch 2.8+ has Blackwell support).
+--extra-index-url https://download.pytorch.org/whl/cu128
+torch==2.8.0+cu128
+xformers==0.0.33
+trl==0.16.0
+accelerate==1.6.0
+datasets==3.5.0
+unsloth==2025.8.1
+# transformers version left to unsloth's resolver (4.53.0 is explicitly excluded upstream)
+bitsandbytes==0.46.1
+peft==0.15.2
+sentencepiece
+huggingface_hub

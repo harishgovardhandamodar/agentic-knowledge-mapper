@@ -1,0 +1,5034 @@
+{
+  "generated": "2026-09-07",
+  "frameworks": [
+    {
+      "id": "eu-ai-act",
+      "name": "EU Artificial Intelligence Act",
+      "issuer": "European Union",
+      "jurisdiction": "EU",
+      "kind": "regulation",
+      "version": "Regulation (EU) 2024/1689",
+      "status": "in-force (phased, GPAI duties from Aug 2025)",
+      "url": "https://eur-lex.europa.eu/eli/reg/2024/1689",
+      "summary": "Risk-based horizontal law: bans prohibited practices, high-risk conformity + GPAI model duties, transparency for synthetic content, incident reporting.",
+      "riskTiers": [
+        "prohibited",
+        "high-risk",
+        "limited-risk",
+        "minimal-risk",
+        "GPAI systemic-risk"
+      ],
+      "controls": [
+        "risk-tiering",
+        "conformity-assessment",
+        "data-quality",
+        "logging",
+        "human-oversight",
+        "transparency-labeling",
+        "incident-reporting",
+        "post-market-monitoring"
+      ],
+      "coverage": {
+        "risk_management": 2,
+        "data_governance": 2,
+        "transparency": 2,
+        "robustness": 2,
+        "security": 1,
+        "privacy": 1,
+        "accountability": 2,
+        "human_oversight": 2,
+        "incident_response": 2,
+        "lifecycle_eval": 2
+      },
+      "scenarios": [
+        "eu-deployment",
+        "high-risk",
+        "healthcare",
+        "hr-hiring",
+        "biometrics",
+        "chatbot",
+        "gpai",
+        "foundation-model",
+        "rag"
+      ],
+      "lastChecked": "2026-09-07"
+    },
+    {
+      "id": "eu-gpai-code",
+      "name": "EU General-Purpose AI Code of Practice",
+      "issuer": "European Commission / AI Office",
+      "jurisdiction": "EU",
+      "kind": "framework",
+      "version": "2025-07-10",
+      "status": "in-force (voluntary commitment route to AI Act Ch.V)",
+      "url": "https://digital-strategy.ec.europa.eu/en/policies/gpai-code",
+      "summary": "Operationalizes GPAI duties: transparency documentation, copyright policy, safety/security evals for systemic-risk models.",
+      "riskTiers": [
+        "GPAI",
+        "GPAI systemic-risk"
+      ],
+      "controls": [
+        "model-documentation",
+        "eval-thresholds",
+        "cybersecurity",
+        "copyright",
+        "incident-reporting"
+      ],
+      "coverage": {
+        "risk_management": 2,
+        "data_governance": 2,
+        "transparency": 2,
+        "robustness": 2,
+        "security": 2,
+        "privacy": 0,
+        "accountability": 2,
+        "human_oversight": 1,
+        "incident_response": 2,
+        "lifecycle_eval": 1
+      },
+      "scenarios": [
+        "foundation-model",
+        "open-weights",
+        "api-model",
+        "eval"
+      ],
+      "lastChecked": "2026-09-07"
+    },
+    {
+      "id": "eu-pld-ai",
+      "name": "EU Revised Product Liability Directive (AI liability)",
+      "issuer": "European Union",
+      "jurisdiction": "EU",
+      "kind": "regulation",
+      "version": "Directive (EU) 2024/2853",
+      "status": "in-force (transposition by Dec 2026)",
+      "url": "https://eur-lex.europa.eu/eli/dir/2024/2853",
+      "summary": "Strict/defect liability extended to software/AI; eases burden of proof, mandated logging evidence disclosure.",
+      "riskTiers": [
+        "defective-product"
+      ],
+      "controls": [
+        "logging",
+        "evidence-disclosure",
+        "lifecycle-updates",
+        "post-market"
+      ],
+      "coverage": {
+        "risk_management": 1,
+        "data_governance": 0,
+        "transparency": 1,
+        "robustness": 1,
+        "security": 1,
+        "privacy": 0,
+        "accountability": 2,
+        "human_oversight": 0,
+        "incident_response": 2,
+        "lifecycle_eval": 2
+      },
+      "scenarios": [
+        "product",
+        "embedded-ai",
+        "robotics",
+        "eu-deployment"
+      ],
+      "lastChecked": "2026-09-07"
+    },
+    {
+      "id": "coe-framework-convention",
+      "name": "Council of Europe Framework Convention on AI (CETS No. 225)",
+      "issuer": "Council of Europe",
+      "jurisdiction": "Global (46+ signatories)",
+      "kind": "regulation",
+      "version": "CETS 225 (2024)",
+      "status": "open for signature/ratification",
+      "url": "https://www.coe.int/en/web/artificial-intelligence/the-framework-convention-on-artificial-intelligence",
+      "summary": "First binding AI treaty: human rights, democracy, rule-of-law alignment, lifecycle risk management.",
+      "riskTiers": [
+        "rights-impacting"
+      ],
+      "controls": [
+        "human-rights-impact",
+        "risk-management",
+        "remedy",
+        "oversight"
+      ],
+      "coverage": {
+        "risk_management": 2,
+        "data_governance": 1,
+        "transparency": 1,
+        "robustness": 1,
+        "security": 0,
+        "privacy": 1,
+        "accountability": 2,
+        "human_oversight": 2,
+        "incident_response": 1,
+        "lifecycle_eval": 2
+      },
+      "scenarios": [
+        "public-sector",
+        "justice",
+        "biometrics",
+        "eu-deployment"
+      ],
+      "lastChecked": "2026-09-07"
+    },
+    {
+      "id": "nist-ai-rmf",
+      "name": "NIST AI Risk Management Framework 1.0",
+      "issuer": "NIST (US)",
+      "jurisdiction": "US / Global voluntary",
+      "kind": "framework",
+      "version": "AI RMF 1.0 (Jan 2023)",
+      "status": "current",
+      "url": "https://www.nist.gov/itl/ai-risk-management-framework",
+      "summary": "Govern-Map-Measure-Manage functions; cross-sector baseline for trustworthy AI risk management.",
+      "riskTiers": [
+        "organizational-risk"
+      ],
+      "controls": [
+        "govern",
+        "map",
+        "measure",
+        "manage",
+        "third-party-risk"
+      ],
+      "coverage": {
+        "risk_management": 2,
+        "data_governance": 1,
+        "transparency": 1,
+        "robustness": 2,
+        "security": 1,
+        "privacy": 1,
+        "accountability": 2,
+        "human_oversight": 1,
+        "incident_response": 1,
+        "lifecycle_eval": 2
+      },
+      "scenarios": [
+        "enterprise-adoption",
+        "vendor-diligence",
+        "risk-program",
+        "rag",
+        "agent"
+      ],
+      "lastChecked": "2026-09-07"
+    },
+    {
+      "id": "nist-genai-600-1",
+      "name": "NIST AI 600-1: Generative AI Profile",
+      "issuer": "NIST (US)",
+      "jurisdiction": "US / Global voluntary",
+      "kind": "framework",
+      "version": "AI 600-1 (Jul 2024)",
+      "status": "current",
+      "url": "https://www.nist.gov/itl/small-business-cybersecurity-corner/profile-generative-artificial-intelligence",
+      "summary": "GenAI risk profile extending AI RMF: CBRN, confabulation, IP, environmental, value-chain risks and mitigations.",
+      "riskTiers": [
+        "genai-specific"
+      ],
+      "controls": [
+        "cbrn-guardrails",
+        "confabulation-testing",
+        "data-provenance",
+        "content-provenance",
+        "filtering"
+      ],
+      "coverage": {
+        "risk_management": 2,
+        "data_governance": 2,
+        "transparency": 2,
+        "robustness": 2,
+        "security": 1,
+        "privacy": 1,
+        "accountability": 1,
+        "human_oversight": 1,
+        "incident_response": 1,
+        "lifecycle_eval": 2
+      },
+      "scenarios": [
+        "genai",
+        "chatbot",
+        "rag",
+        "image-gen",
+        "coding-assistant"
+      ],
+      "lastChecked": "2026-09-07"
+    },
+    {
+      "id": "nist-adversarial-ml",
+      "name": "NIST AI 100-2e / Adversarial ML Taxonomy",
+      "issuer": "NIST (US)",
+      "jurisdiction": "US / Global voluntary",
+      "kind": "standard",
+      "version": "AI 100-2e2023 (Jan 2024)",
+      "status": "current",
+      "url": "https://csrc.nist.gov/pubs/ai/100/2/e2023/final",
+      "summary": "Taxonomy of GenAI/predictive-AI attacks (evasion, poisoning, prompt injection, privacy) and mitigations.",
+      "riskTiers": [
+        "adversarial"
+      ],
+      "controls": [
+        "evasion-defense",
+        "poisoning-defense",
+        "prompt-injection",
+        "privacy-attacks",
+        "supply-chain"
+      ],
+      "coverage": {
+        "risk_management": 1,
+        "data_governance": 1,
+        "transparency": 0,
+        "robustness": 2,
+        "security": 2,
+        "privacy": 2,
+        "accountability": 0,
+        "human_oversight": 0,
+        "incident_response": 1,
+        "lifecycle_eval": 1
+      },
+      "scenarios": [
+        "red-team",
+        "llm-security",
+        "agent",
+        "rag"
+      ],
+      "lastChecked": "2026-09-07"
+    },
+    {
+      "id": "iso-42001",
+      "name": "ISO/IEC 42001 AI Management System",
+      "issuer": "ISO/IEC",
+      "jurisdiction": "Global",
+      "kind": "standard",
+      "version": "2023",
+      "status": "current (certifiable)",
+      "url": "https://www.iso.org/standard/81230.html",
+      "summary": "Management system for AI (AIMS): policy, objectives, risk, lifecycle controls Annex A/B; certifiable like ISO 27001.",
+      "riskTiers": [
+        "management-system"
+      ],
+      "controls": [
+        "aims-policy",
+        "risk-assessment",
+        "supplier-agreements",
+        "monitoring",
+        "audit",
+        "continual-improvement"
+      ],
+      "coverage": {
+        "risk_management": 2,
+        "data_governance": 2,
+        "transparency": 1,
+        "robustness": 1,
+        "security": 1,
+        "privacy": 1,
+        "accountability": 2,
+        "human_oversight": 1,
+        "incident_response": 1,
+        "lifecycle_eval": 2
+      },
+      "scenarios": [
+        "certification",
+        "enterprise-adoption",
+        "vendor-diligence",
+        "mlops"
+      ],
+      "lastChecked": "2026-09-07"
+    },
+    {
+      "id": "iso-23894",
+      "name": "ISO/IEC 23894 AI Risk Management",
+      "issuer": "ISO/IEC",
+      "jurisdiction": "Global",
+      "kind": "standard",
+      "version": "2023",
+      "status": "current",
+      "url": "https://www.iso.org/standard/77304.html",
+      "summary": "Risk management guidance for AI aligned to ISO 31000; complements NIST RMF and EU AI Act risk duties.",
+      "riskTiers": [
+        "risk-process"
+      ],
+      "controls": [
+        "risk-identification",
+        "risk-analysis",
+        "risk-treatment",
+        "risk-communication"
+      ],
+      "coverage": {
+        "risk_management": 2,
+        "data_governance": 1,
+        "transparency": 0,
+        "robustness": 1,
+        "security": 1,
+        "privacy": 1,
+        "accountability": 2,
+        "human_oversight": 1,
+        "incident_response": 1,
+        "lifecycle_eval": 2
+      },
+      "scenarios": [
+        "risk-program",
+        "high-risk",
+        "certification"
+      ],
+      "lastChecked": "2026-09-07"
+    },
+    {
+      "id": "iso-23053",
+      "name": "ISO/IEC 23053 AI Lifecycle Framework",
+      "issuer": "ISO/IEC",
+      "jurisdiction": "Global",
+      "kind": "standard",
+      "version": "2022",
+      "status": "current",
+      "url": "https://www.iso.org/standard/74438.html",
+      "summary": "ML lifecycle processes: data, training, verification, deployment, operations, decommissioning.",
+      "riskTiers": [
+        "lifecycle"
+      ],
+      "controls": [
+        "lifecycle-processes",
+        "verification",
+        "operations",
+        "decommissioning"
+      ],
+      "coverage": {
+        "risk_management": 1,
+        "data_governance": 2,
+        "transparency": 1,
+        "robustness": 2,
+        "security": 0,
+        "privacy": 0,
+        "accountability": 1,
+        "human_oversight": 0,
+        "incident_response": 1,
+        "lifecycle_eval": 2
+      },
+      "scenarios": [
+        "mlops",
+        "model-release",
+        "decommissioning"
+      ],
+      "lastChecked": "2026-09-07"
+    },
+    {
+      "id": "iso-24029",
+      "name": "ISO/IEC 24029 AI Robustness Assessment",
+      "issuer": "ISO/IEC",
+      "jurisdiction": "Global",
+      "kind": "standard",
+      "version": "24029-1:2021 / 24029-2 under dev",
+      "status": "current",
+      "url": "https://www.iso.org/standard/77609.html",
+      "summary": "Robustness of neural networks: assessment methods, formal/statistical approaches.",
+      "riskTiers": [
+        "robustness"
+      ],
+      "controls": [
+        "robustness-testing",
+        "formal-verification",
+        "statistical-testing"
+      ],
+      "coverage": {
+        "risk_management": 1,
+        "data_governance": 0,
+        "transparency": 0,
+        "robustness": 2,
+        "security": 1,
+        "privacy": 0,
+        "accountability": 0,
+        "human_oversight": 0,
+        "incident_response": 0,
+        "lifecycle_eval": 2
+      },
+      "scenarios": [
+        "eval",
+        "safety-case",
+        "high-risk"
+      ],
+      "lastChecked": "2026-09-07"
+    },
+    {
+      "id": "iso-24028",
+      "name": "ISO/IEC 24028 AI Trustworthiness Overview",
+      "issuer": "ISO/IEC",
+      "jurisdiction": "Global",
+      "kind": "standard",
+      "version": "2020 (TR)",
+      "status": "current",
+      "url": "https://www.iso.org/standard/77608.html",
+      "summary": "Trustworthiness characteristics: reliability, resilience, controllability, explainability, fairness.",
+      "riskTiers": [
+        "trustworthiness"
+      ],
+      "controls": [
+        "fairness",
+        "explainability",
+        "controllability",
+        "resilience"
+      ],
+      "coverage": {
+        "risk_management": 1,
+        "data_governance": 1,
+        "transparency": 2,
+        "robustness": 2,
+        "security": 1,
+        "privacy": 1,
+        "accountability": 1,
+        "human_oversight": 2,
+        "incident_response": 0,
+        "lifecycle_eval": 1
+      },
+      "scenarios": [
+        "fairness-audit",
+        "explainability",
+        "high-risk"
+      ],
+      "lastChecked": "2026-09-07"
+    },
+    {
+      "id": "oecd-ai-principles",
+      "name": "OECD AI Principles",
+      "issuer": "OECD",
+      "jurisdiction": "Global (46 adherents)",
+      "kind": "framework",
+      "version": "2019, revised 2024",
+      "status": "current",
+      "url": "https://oecd.ai/en/ai-principles",
+      "summary": "Values-based principles: inclusive growth, human rights, transparency, robustness, accountability; GPAI safety additions 2024.",
+      "riskTiers": [
+        "principles"
+      ],
+      "controls": [
+        "human-rights",
+        "transparency",
+        "robustness",
+        "accountability"
+      ],
+      "coverage": {
+        "risk_management": 1,
+        "data_governance": 0,
+        "transparency": 2,
+        "robustness": 1,
+        "security": 1,
+        "privacy": 1,
+        "accountability": 2,
+        "human_oversight": 1,
+        "incident_response": 0,
+        "lifecycle_eval": 1
+      },
+      "scenarios": [
+        "policy-design",
+        "public-sector",
+        "strategy"
+      ],
+      "lastChecked": "2026-09-07"
+    },
+    {
+      "id": "unesco-ai-ethics",
+      "name": "UNESCO Recommendation on the Ethics of AI",
+      "issuer": "UNESCO",
+      "jurisdiction": "Global (193 states)",
+      "kind": "framework",
+      "version": "2021 (implementation tools incl. RAM)",
+      "status": "current",
+      "url": "https://www.unesco.org/en/artificial-intelligence/recommendation-ethics",
+      "summary": "Ethics + Readiness Assessment Methodology (RAM); bans social scoring/mass surveillance uses.",
+      "riskTiers": [
+        "ethics"
+      ],
+      "controls": [
+        "ethical-impact",
+        "readiness-assessment",
+        "prohibitions",
+        "gender-environment"
+      ],
+      "coverage": {
+        "risk_management": 1,
+        "data_governance": 1,
+        "transparency": 1,
+        "robustness": 0,
+        "security": 0,
+        "privacy": 2,
+        "accountability": 2,
+        "human_oversight": 2,
+        "incident_response": 0,
+        "lifecycle_eval": 1
+      },
+      "scenarios": [
+        "public-sector",
+        "developing-region",
+        "policy-design"
+      ],
+      "lastChecked": "2026-09-07"
+    },
+    {
+      "id": "g7-hiroshima",
+      "name": "G7 Hiroshima Process (Intl Guiding Principles + Code of Conduct)",
+      "issuer": "G7",
+      "jurisdiction": "Global",
+      "kind": "framework",
+      "version": "2023",
+      "status": "current",
+      "url": "https://www.mofa.go.jp/ecm/ec/page5e_000601.html",
+      "summary": "11 guiding principles + voluntary code for advanced foundation-model developers and deployers.",
+      "riskTiers": [
+        "frontier"
+      ],
+      "controls": [
+        "risk-assessment",
+        "incident-reporting",
+        "watermarking",
+        "security"
+      ],
+      "coverage": {
+        "risk_management": 1,
+        "data_governance": 0,
+        "transparency": 2,
+        "robustness": 1,
+        "security": 2,
+        "privacy": 0,
+        "accountability": 1,
+        "human_oversight": 0,
+        "incident_response": 2,
+        "lifecycle_eval": 1
+      },
+      "scenarios": [
+        "foundation-model",
+        "frontier",
+        "api-model"
+      ],
+      "lastChecked": "2026-09-07"
+    },
+    {
+      "id": "owasp-llm-top10",
+      "name": "OWASP Top 10 for LLM Applications",
+      "issuer": "OWASP",
+      "jurisdiction": "Global (industry)",
+      "kind": "framework",
+      "version": "2025",
+      "status": "current",
+      "url": "https://genai.owasp.org/llm-top-10/",
+      "summary": "Top LLM risks: prompt injection, data leakage, poisoning, supply chain, excessive agency, overreliance + mitigations.",
+      "riskTiers": [
+        "appsec"
+      ],
+      "controls": [
+        "LLM01-prompt-injection",
+        "LLM02-data-leakage",
+        "LLM06-excessive-agency",
+        "LLM09-misinformation",
+        "red-teaming"
+      ],
+      "coverage": {
+        "risk_management": 1,
+        "data_governance": 1,
+        "transparency": 0,
+        "robustness": 2,
+        "security": 2,
+        "privacy": 2,
+        "accountability": 0,
+        "human_oversight": 1,
+        "incident_response": 1,
+        "lifecycle_eval": 1
+      },
+      "scenarios": [
+        "chatbot",
+        "rag",
+        "llm-security",
+        "coding-assistant",
+        "agent"
+      ],
+      "lastChecked": "2026-09-07"
+    },
+    {
+      "id": "owasp-agentic",
+      "name": "OWASP Agentic AI Threats & Mitigations",
+      "issuer": "OWASP",
+      "jurisdiction": "Global (industry)",
+      "kind": "framework",
+      "version": "2025 (GenAI Red Teaming Guide incl.)",
+      "status": "current",
+      "url": "https://genai.owasp.org/resource/agentic-ai-threats-and-mitigations/",
+      "summary": "Agent-specific: tool abuse, identity, memory poisoning, cascading failures, human-in-loop gates.",
+      "riskTiers": [
+        "agentic"
+      ],
+      "controls": [
+        "tool-sandboxing",
+        "agent-identity",
+        "memory-isolation",
+        "least-privilege-tools",
+        "human-approval-gates"
+      ],
+      "coverage": {
+        "risk_management": 1,
+        "data_governance": 0,
+        "transparency": 1,
+        "robustness": 2,
+        "security": 2,
+        "privacy": 1,
+        "accountability": 1,
+        "human_oversight": 2,
+        "incident_response": 1,
+        "lifecycle_eval": 1
+      },
+      "scenarios": [
+        "agent",
+        "tool-use",
+        "multi-agent",
+        "llm-security"
+      ],
+      "lastChecked": "2026-09-07"
+    },
+    {
+      "id": "mitre-atlas",
+      "name": "MITRE ATLAS (Adversarial Threat Landscape for AI Systems)",
+      "issuer": "MITRE",
+      "jurisdiction": "Global (industry)",
+      "kind": "framework",
+      "version": "living matrix (v5.x)",
+      "status": "current",
+      "url": "https://atlas.mitre.org/",
+      "summary": "ATT&CK-style AI TTPs across lifecycle: recon, resource dev, initial access, ML attack staging, impact; case studies.",
+      "riskTiers": [
+        "threat-model"
+      ],
+      "controls": [
+        "threat-modeling",
+        "detection",
+        "mitigation-mapping",
+        "case-studies"
+      ],
+      "coverage": {
+        "risk_management": 1,
+        "data_governance": 0,
+        "transparency": 0,
+        "robustness": 1,
+        "security": 2,
+        "privacy": 1,
+        "accountability": 0,
+        "human_oversight": 0,
+        "incident_response": 2,
+        "lifecycle_eval": 1
+      },
+      "scenarios": [
+        "red-team",
+        "soc",
+        "threat-model",
+        "llm-security"
+      ],
+      "lastChecked": "2026-09-07"
+    },
+    {
+      "id": "csa-ccm-ai",
+      "name": "CSA AI Controls Matrix / Cloud Controls (AI extension)",
+      "issuer": "Cloud Security Alliance",
+      "jurisdiction": "Global (industry)",
+      "kind": "framework",
+      "version": "CCM v4 + AI controls",
+      "status": "current",
+      "url": "https://cloudsecurityalliance.org/artifacts/cloud-controls-matrix",
+      "summary": "Cloud + AI control mapping: AIS datasets, model management, supply chain, logging for SaaS AI deployments.",
+      "riskTiers": [
+        "cloud-ai"
+      ],
+      "controls": [
+        "dataset-security",
+        "model-inventory",
+        "supply-chain",
+        "logging-monitoring"
+      ],
+      "coverage": {
+        "risk_management": 1,
+        "data_governance": 2,
+        "transparency": 1,
+        "robustness": 1,
+        "security": 2,
+        "privacy": 2,
+        "accountability": 1,
+        "human_oversight": 0,
+        "incident_response": 1,
+        "lifecycle_eval": 2
+      },
+      "scenarios": [
+        "saas-ai",
+        "cloud-deployment",
+        "vendor-diligence",
+        "rag"
+      ],
+      "lastChecked": "2026-09-07"
+    },
+    {
+      "id": "ieee-7000",
+      "name": "IEEE 7000-Series (Ethical System Design)",
+      "issuer": "IEEE",
+      "jurisdiction": "Global",
+      "kind": "standard",
+      "version": "7000/7001/7007 bundle",
+      "status": "current",
+      "url": "https://standards.ieee.org/initiatives/artificial-intelligence-systems/",
+      "summary": "Ethical elicitation, transparency (7001), ontological impact (7007) for autonomous/intelligent systems.",
+      "riskTiers": [
+        "ethics-by-design"
+      ],
+      "controls": [
+        "value-elicitation",
+        "transparency-levels",
+        "impact-assessment"
+      ],
+      "coverage": {
+        "risk_management": 1,
+        "data_governance": 0,
+        "transparency": 2,
+        "robustness": 1,
+        "security": 0,
+        "privacy": 1,
+        "accountability": 2,
+        "human_oversight": 2,
+        "incident_response": 0,
+        "lifecycle_eval": 2
+      },
+      "scenarios": [
+        "design-review",
+        "robotics",
+        "safety-case"
+      ],
+      "lastChecked": "2026-09-07"
+    },
+    {
+      "id": "us-eo-ai",
+      "name": "US Executive Orders on AI (14110 as amended by 14278)",
+      "issuer": "White House (US)",
+      "jurisdiction": "US",
+      "kind": "regulation",
+      "version": "EO 14110 (2023), EO 14278 (2025)",
+      "status": "partially revoked/amended — check current",
+      "url": "https://www.whitehouse.gov/presidential-actions/",
+      "summary": "Frontier-model reporting, red-teaming, agency governance; 2025 shift toward innovation + existing-law enforcement.",
+      "riskTiers": [
+        "dual-use-foundation"
+      ],
+      "controls": [
+        "model-reporting",
+        "red-teaming",
+        "agency-governance",
+        "procurement"
+      ],
+      "coverage": {
+        "risk_management": 1,
+        "data_governance": 0,
+        "transparency": 1,
+        "robustness": 2,
+        "security": 2,
+        "privacy": 1,
+        "accountability": 1,
+        "human_oversight": 0,
+        "incident_response": 1,
+        "lifecycle_eval": 1
+      },
+      "scenarios": [
+        "foundation-model",
+        "federal-procurement",
+        "frontier"
+      ],
+      "lastChecked": "2026-09-07"
+    },
+    {
+      "id": "us-omb-m2410",
+      "name": "US OMB M-24-10 AI Governance (federal)",
+      "issuer": "OMB (US)",
+      "jurisdiction": "US federal",
+      "kind": "regulation",
+      "version": "M-24-10 (2024), M-25-21/22 updates",
+      "status": "current (as amended)",
+      "url": "https://www.whitehouse.gov/omb/management/memoranda/",
+      "summary": "Federal agency AI inventory, rights/safety-impacting use-case controls, CAIO governance, procurement.",
+      "riskTiers": [
+        "rights-impacting",
+        "safety-impacting"
+      ],
+      "controls": [
+        "use-case-inventory",
+        "impact-assessment",
+        "public-consultation",
+        "opt-out"
+      ],
+      "coverage": {
+        "risk_management": 2,
+        "data_governance": 1,
+        "transparency": 2,
+        "robustness": 1,
+        "security": 1,
+        "privacy": 2,
+        "accountability": 2,
+        "human_oversight": 2,
+        "incident_response": 1,
+        "lifecycle_eval": 2
+      },
+      "scenarios": [
+        "public-sector",
+        "federal-procurement",
+        "benefits-system"
+      ],
+      "lastChecked": "2026-09-07"
+    },
+    {
+      "id": "us-co-ai-act",
+      "name": "Colorado AI Act (SB 24-205)",
+      "issuer": "Colorado (US)",
+      "jurisdiction": "US-CO",
+      "kind": "regulation",
+      "version": "SB24-205 (effective Jun 2026)",
+      "status": "in-force",
+      "url": "https://leg.colorado.gov/bills/sb24-205",
+      "summary": "First US state algorithmic-discrimination law: deployer impact assessments, notices for consequential decisions (hiring, lending, housing).",
+      "riskTiers": [
+        "consequential-decisions"
+      ],
+      "controls": [
+        "impact-assessment",
+        "bias-audit",
+        "consumer-notice",
+        "appeal"
+      ],
+      "coverage": {
+        "risk_management": 2,
+        "data_governance": 2,
+        "transparency": 2,
+        "robustness": 1,
+        "security": 0,
+        "privacy": 1,
+        "accountability": 2,
+        "human_oversight": 1,
+        "incident_response": 1,
+        "lifecycle_eval": 1
+      },
+      "scenarios": [
+        "hr-hiring",
+        "lending",
+        "housing",
+        "us-deployment"
+      ],
+      "lastChecked": "2026-09-07"
+    },
+    {
+      "id": "us-ca-ai-transparency",
+      "name": "California AI Transparency + Training Data Acts",
+      "issuer": "California (US)",
+      "jurisdiction": "US-CA",
+      "kind": "regulation",
+      "version": "SB 942 + AB 2013 (2024)",
+      "status": "in-force (phased)",
+      "url": "https://leginfo.legislature.ca.gov/",
+      "summary": "Provenance disclosure for GenAI outputs; public training-data summaries for frontier developers.",
+      "riskTiers": [
+        "genai-disclosure"
+      ],
+      "controls": [
+        "provenance",
+        "watermarking",
+        "training-data-disclosure"
+      ],
+      "coverage": {
+        "risk_management": 0,
+        "data_governance": 2,
+        "transparency": 2,
+        "robustness": 0,
+        "security": 0,
+        "privacy": 1,
+        "accountability": 1,
+        "human_oversight": 0,
+        "incident_response": 0,
+        "lifecycle_eval": 1
+      },
+      "scenarios": [
+        "genai",
+        "image-gen",
+        "chatbot",
+        "us-deployment"
+      ],
+      "lastChecked": "2026-09-07"
+    },
+    {
+      "id": "uk-aisi",
+      "name": "UK AI Safety Institute (Inspect evals + guidelines)",
+      "issuer": "DSIT / UK AISI",
+      "jurisdiction": "UK",
+      "kind": "framework",
+      "version": "Inspect platform + Systemic AI Safety (2024-25)",
+      "status": "current",
+      "url": "https://www.gov.uk/government/organisations/uk-ai-safety-institute",
+      "summary": "Frontier evals (Inspect), pro-innovation principles applied by sector regulators, voluntary model testing.",
+      "riskTiers": [
+        "frontier-eval"
+      ],
+      "controls": [
+        "capability-evals",
+        "inspect-tooling",
+        "sector-guidance"
+      ],
+      "coverage": {
+        "risk_management": 1,
+        "data_governance": 0,
+        "transparency": 1,
+        "robustness": 2,
+        "security": 1,
+        "privacy": 0,
+        "accountability": 1,
+        "human_oversight": 0,
+        "incident_response": 1,
+        "lifecycle_eval": 2
+      },
+      "scenarios": [
+        "eval",
+        "frontier",
+        "uk-deployment"
+      ],
+      "lastChecked": "2026-09-07"
+    },
+    {
+      "id": "china-genai-measures",
+      "name": "China Interim Measures for Generative AI Services",
+      "issuer": "CAC et al. (China)",
+      "jurisdiction": "CN",
+      "kind": "regulation",
+      "version": "2023-08-15",
+      "status": "in-force (+ labeling rules 2025)",
+      "url": "https://www.cac.gov.cn/2023-07/13/c_1690898327029107.htm",
+      "summary": "Security assessment + algorithm filing, training-data legality, content labeling, user-complaint handling.",
+      "riskTiers": [
+        "public-facing-genai"
+      ],
+      "controls": [
+        "security-assessment",
+        "algorithm-filing",
+        "content-labeling",
+        "data-legality"
+      ],
+      "coverage": {
+        "risk_management": 1,
+        "data_governance": 2,
+        "transparency": 2,
+        "robustness": 1,
+        "security": 2,
+        "privacy": 1,
+        "accountability": 2,
+        "human_oversight": 0,
+        "incident_response": 1,
+        "lifecycle_eval": 1
+      },
+      "scenarios": [
+        "china-deployment",
+        "chatbot",
+        "image-gen",
+        "api-model"
+      ],
+      "lastChecked": "2026-09-07"
+    },
+    {
+      "id": "china-deep-synthesis",
+      "name": "China Deep Synthesis (Deepfake) Provisions",
+      "issuer": "CAC/MIIT/MPS (China)",
+      "jurisdiction": "CN",
+      "kind": "regulation",
+      "version": "2023-01-10",
+      "status": "in-force",
+      "url": "https://www.cac.gov.cn/2022-12/11/c_1672221949354811.htm",
+      "summary": "Consent + conspicuous labeling for synthetic media, recommender transparency, rumor controls.",
+      "riskTiers": [
+        "synthetic-media"
+      ],
+      "controls": [
+        "consent",
+        "labeling",
+        "recommender-transparency"
+      ],
+      "coverage": {
+        "risk_management": 0,
+        "data_governance": 1,
+        "transparency": 2,
+        "robustness": 0,
+        "security": 1,
+        "privacy": 2,
+        "accountability": 2,
+        "human_oversight": 0,
+        "incident_response": 1,
+        "lifecycle_eval": 0
+      },
+      "scenarios": [
+        "image-gen",
+        "voice-clone",
+        "video-gen",
+        "china-deployment"
+      ],
+      "lastChecked": "2026-09-07"
+    },
+    {
+      "id": "canada-aida",
+      "name": "Canada AIDA (Bill C-27, Part 3)",
+      "issuer": "Canada (ISED)",
+      "jurisdiction": "CA",
+      "kind": "regulation",
+      "version": "Bill C-27 (parliamentary; voluntary code interim)",
+      "status": "draft/pending — voluntary code applies",
+      "url": "https://ised-isde.canada.ca/site/ised/en/artificial-intelligence-and-data-act",
+      "summary": "High-impact system duties: risk assessment, mitigation, monitoring, public reporting; interim voluntary code for GPAI.",
+      "riskTiers": [
+        "high-impact"
+      ],
+      "controls": [
+        "risk-assessment",
+        "mitigation",
+        "monitoring",
+        "public-report"
+      ],
+      "coverage": {
+        "risk_management": 2,
+        "data_governance": 1,
+        "transparency": 2,
+        "robustness": 1,
+        "security": 0,
+        "privacy": 1,
+        "accountability": 2,
+        "human_oversight": 1,
+        "incident_response": 1,
+        "lifecycle_eval": 2
+      },
+      "scenarios": [
+        "canada-deployment",
+        "high-risk",
+        "hr-hiring"
+      ],
+      "lastChecked": "2026-09-07"
+    },
+    {
+      "id": "brazil-bill-2338",
+      "name": "Brazil AI Bill 2338/2023",
+      "issuer": "Brazil Senate",
+      "jurisdiction": "BR",
+      "kind": "regulation",
+      "version": "PL 2338/2023 (Senate approved Dec 2024)",
+      "status": "pending Chamber approval",
+      "url": "https://www25.senado.leg.br/web/atividade/materias/-/materia/157233",
+      "summary": "Risk-based + rights-based: prohibited uses, high-risk algorithmic impact assessments, GPAI duties, ANPD oversight.",
+      "riskTiers": [
+        "excessive-risk",
+        "high-risk",
+        "GPAI"
+      ],
+      "controls": [
+        "impact-assessment",
+        "prohibitions",
+        "user-rights",
+        "incident-reporting"
+      ],
+      "coverage": {
+        "risk_management": 2,
+        "data_governance": 1,
+        "transparency": 2,
+        "robustness": 1,
+        "security": 1,
+        "privacy": 2,
+        "accountability": 2,
+        "human_oversight": 2,
+        "incident_response": 2,
+        "lifecycle_eval": 1
+      },
+      "scenarios": [
+        "brazil-deployment",
+        "high-risk",
+        "biometrics",
+        "chatbot"
+      ],
+      "lastChecked": "2026-09-07"
+    },
+    {
+      "id": "singapore-model-framework",
+      "name": "Singapore Model AI Governance Framework (+ GenAI Eval Sandbox)",
+      "issuer": "IMDA/PDPC (SG)",
+      "jurisdiction": "SG",
+      "kind": "framework",
+      "version": "Model Framework + ISAGO self-assessment",
+      "status": "current",
+      "url": "https://www.imda.gov.sg/regulations-and-licensing-list/ai-governance",
+      "summary": "Practical self-assessment (ISAGO), human-centricity, operations management; GenAI evaluation sandbox (Moonshot).",
+      "riskTiers": [
+        "self-assessment"
+      ],
+      "controls": [
+        "self-assessment",
+        "operations-management",
+        "eval-sandbox",
+        "incident-management"
+      ],
+      "coverage": {
+        "risk_management": 2,
+        "data_governance": 1,
+        "transparency": 2,
+        "robustness": 2,
+        "security": 1,
+        "privacy": 1,
+        "accountability": 2,
+        "human_oversight": 1,
+        "incident_response": 1,
+        "lifecycle_eval": 2
+      },
+      "scenarios": [
+        "apac-deployment",
+        "enterprise-adoption",
+        "eval",
+        "chatbot"
+      ],
+      "lastChecked": "2026-09-07"
+    },
+    {
+      "id": "japan-ai-guidelines",
+      "name": "Japan AI Guidelines for Business (v1.0)",
+      "issuer": "MIC/METI (Japan)",
+      "jurisdiction": "JP",
+      "kind": "framework",
+      "version": "v1.0 (Apr 2024)",
+      "status": "current (AI Promotion Act 2025 adds duties)",
+      "url": "https://www.meti.go.jp/english/press/2024/0419_004.html",
+      "summary": "Soft-law for developers/providers/users: safety, fairness, privacy, transparency, accountability; 10 principles.",
+      "riskTiers": [
+        "voluntary"
+      ],
+      "controls": [
+        "safety",
+        "fairness",
+        "transparency",
+        "accountability"
+      ],
+      "coverage": {
+        "risk_management": 1,
+        "data_governance": 1,
+        "transparency": 1,
+        "robustness": 1,
+        "security": 1,
+        "privacy": 1,
+        "accountability": 1,
+        "human_oversight": 1,
+        "incident_response": 0,
+        "lifecycle_eval": 1
+      },
+      "scenarios": [
+        "japan-deployment",
+        "enterprise-adoption"
+      ],
+      "lastChecked": "2026-09-07"
+    },
+    {
+      "id": "korea-ai-basic-act",
+      "name": "Korea AI Basic Act (Framework Act on AI)",
+      "issuer": "MSIT (Korea)",
+      "jurisdiction": "KR",
+      "kind": "regulation",
+      "version": "Enacted Jan 2025, effective Jan 2026",
+      "status": "in-force (phased)",
+      "url": "https://www.msit.go.kr/eng/",
+      "summary": "Licensing-adjacent duties: transparency labeling, high-impact AI impact assessments, AI Safety Institute.",
+      "riskTiers": [
+        "high-impact",
+        "generative"
+      ],
+      "controls": [
+        "labeling",
+        "impact-assessment",
+        "safety-lab"
+      ],
+      "coverage": {
+        "risk_management": 2,
+        "data_governance": 1,
+        "transparency": 2,
+        "robustness": 1,
+        "security": 1,
+        "privacy": 1,
+        "accountability": 2,
+        "human_oversight": 1,
+        "incident_response": 1,
+        "lifecycle_eval": 1
+      },
+      "scenarios": [
+        "korea-deployment",
+        "chatbot",
+        "high-risk"
+      ],
+      "lastChecked": "2026-09-07"
+    },
+    {
+      "id": "india-niti",
+      "name": "India NITI Aayog Responsible AI Principles",
+      "issuer": "NITI Aayog (India)",
+      "jurisdiction": "IN",
+      "kind": "framework",
+      "version": "Part 1 (2021) + Part 2 (2022)",
+      "status": "current (Digital India Act pending)",
+      "url": "https://www.niti.gov.in/responsible-ai",
+      "summary": "Principles + use-case risk assessment; sectoral enforcement via existing law (DPDP Act 2023 for privacy).",
+      "riskTiers": [
+        "principles"
+      ],
+      "controls": [
+        "principles",
+        "risk-assessment",
+        "sectoral-enforcement"
+      ],
+      "coverage": {
+        "risk_management": 1,
+        "data_governance": 1,
+        "transparency": 1,
+        "robustness": 0,
+        "security": 0,
+        "privacy": 1,
+        "accountability": 1,
+        "human_oversight": 1,
+        "incident_response": 0,
+        "lifecycle_eval": 1
+      },
+      "scenarios": [
+        "india-deployment",
+        "public-sector"
+      ],
+      "lastChecked": "2026-09-07"
+    },
+    {
+      "id": "australia-ai-standard",
+      "name": "Australia Voluntary AI Safety Standard (10 guardrails)",
+      "issuer": "DISR (Australia)",
+      "jurisdiction": "AU",
+      "kind": "framework",
+      "version": "2024-09",
+      "status": "current (mandatory guardrails proposed)",
+      "url": "https://www.industry.gov.au/science-technology-and-innovation/technology/artificial-intelligence",
+      "summary": "10 guardrails for high-risk settings: testing, human oversight, transparency, contestability; aligns with EU AI Act.",
+      "riskTiers": [
+        "high-risk-voluntary"
+      ],
+      "controls": [
+        "testing",
+        "human-oversight",
+        "contestability",
+        "supply-chain"
+      ],
+      "coverage": {
+        "risk_management": 2,
+        "data_governance": 1,
+        "transparency": 2,
+        "robustness": 2,
+        "security": 1,
+        "privacy": 1,
+        "accountability": 2,
+        "human_oversight": 2,
+        "incident_response": 1,
+        "lifecycle_eval": 1
+      },
+      "scenarios": [
+        "australia-deployment",
+        "high-risk",
+        "hr-hiring"
+      ],
+      "lastChecked": "2026-09-07"
+    }
+  ],
+  "overlap": [
+    {
+      "a": "brazil-bill-2338",
+      "b": "korea-ai-basic-act",
+      "jaccard": 0.273,
+      "shared": [
+        "impact-assessment",
+        "high-risk",
+        "chatbot"
+      ]
+    },
+    {
+      "a": "eu-gpai-code",
+      "b": "g7-hiroshima",
+      "jaccard": 0.231,
+      "shared": [
+        "incident-reporting",
+        "foundation-model",
+        "api-model"
+      ]
+    },
+    {
+      "a": "nist-genai-600-1",
+      "b": "us-ca-ai-transparency",
+      "jaccard": 0.214,
+      "shared": [
+        "genai",
+        "chatbot",
+        "image-gen"
+      ]
+    },
+    {
+      "a": "eu-ai-act",
+      "b": "brazil-bill-2338",
+      "jaccard": 0.19,
+      "shared": [
+        "incident-reporting",
+        "high-risk",
+        "biometrics",
+        "chatbot"
+      ]
+    },
+    {
+      "a": "nist-adversarial-ml",
+      "b": "owasp-llm-top10",
+      "jaccard": 0.188,
+      "shared": [
+        "llm-security",
+        "agent",
+        "rag"
+      ]
+    },
+    {
+      "a": "oecd-ai-principles",
+      "b": "japan-ai-guidelines",
+      "jaccard": 0.182,
+      "shared": [
+        "transparency",
+        "accountability"
+      ]
+    },
+    {
+      "a": "nist-genai-600-1",
+      "b": "owasp-llm-top10",
+      "jaccard": 0.176,
+      "shared": [
+        "chatbot",
+        "rag",
+        "coding-assistant"
+      ]
+    },
+    {
+      "a": "oecd-ai-principles",
+      "b": "unesco-ai-ethics",
+      "jaccard": 0.167,
+      "shared": [
+        "policy-design",
+        "public-sector"
+      ]
+    },
+    {
+      "a": "g7-hiroshima",
+      "b": "us-eo-ai",
+      "jaccard": 0.167,
+      "shared": [
+        "foundation-model",
+        "frontier"
+      ]
+    },
+    {
+      "a": "canada-aida",
+      "b": "australia-ai-standard",
+      "jaccard": 0.167,
+      "shared": [
+        "high-risk",
+        "hr-hiring"
+      ]
+    },
+    {
+      "a": "us-ca-ai-transparency",
+      "b": "china-genai-measures",
+      "jaccard": 0.154,
+      "shared": [
+        "image-gen",
+        "chatbot"
+      ]
+    },
+    {
+      "a": "china-genai-measures",
+      "b": "china-deep-synthesis",
+      "jaccard": 0.154,
+      "shared": [
+        "china-deployment",
+        "image-gen"
+      ]
+    },
+    {
+      "a": "eu-ai-act",
+      "b": "australia-ai-standard",
+      "jaccard": 0.143,
+      "shared": [
+        "human-oversight",
+        "high-risk",
+        "hr-hiring"
+      ]
+    },
+    {
+      "a": "nist-adversarial-ml",
+      "b": "mitre-atlas",
+      "jaccard": 0.133,
+      "shared": [
+        "red-team",
+        "llm-security"
+      ]
+    },
+    {
+      "a": "nist-adversarial-ml",
+      "b": "csa-ccm-ai",
+      "jaccard": 0.133,
+      "shared": [
+        "supply-chain",
+        "rag"
+      ]
+    },
+    {
+      "a": "iso-42001",
+      "b": "canada-aida",
+      "jaccard": 0.133,
+      "shared": [
+        "risk-assessment",
+        "monitoring"
+      ]
+    },
+    {
+      "a": "nist-ai-rmf",
+      "b": "csa-ccm-ai",
+      "jaccard": 0.125,
+      "shared": [
+        "vendor-diligence",
+        "rag"
+      ]
+    },
+    {
+      "a": "nist-genai-600-1",
+      "b": "china-genai-measures",
+      "jaccard": 0.125,
+      "shared": [
+        "chatbot",
+        "image-gen"
+      ]
+    },
+    {
+      "a": "nist-adversarial-ml",
+      "b": "owasp-agentic",
+      "jaccard": 0.125,
+      "shared": [
+        "llm-security",
+        "agent"
+      ]
+    },
+    {
+      "a": "nist-ai-rmf",
+      "b": "nist-adversarial-ml",
+      "jaccard": 0.118,
+      "shared": [
+        "rag",
+        "agent"
+      ]
+    },
+    {
+      "a": "owasp-llm-top10",
+      "b": "owasp-agentic",
+      "jaccard": 0.118,
+      "shared": [
+        "llm-security",
+        "agent"
+      ]
+    },
+    {
+      "a": "nist-ai-rmf",
+      "b": "iso-42001",
+      "jaccard": 0.111,
+      "shared": [
+        "enterprise-adoption",
+        "vendor-diligence"
+      ]
+    },
+    {
+      "a": "nist-ai-rmf",
+      "b": "owasp-llm-top10",
+      "jaccard": 0.111,
+      "shared": [
+        "rag",
+        "agent"
+      ]
+    },
+    {
+      "a": "eu-ai-act",
+      "b": "korea-ai-basic-act",
+      "jaccard": 0.095,
+      "shared": [
+        "high-risk",
+        "chatbot"
+      ]
+    },
+    {
+      "a": "eu-ai-act",
+      "b": "g7-hiroshima",
+      "jaccard": 0.091,
+      "shared": [
+        "incident-reporting",
+        "foundation-model"
+      ]
+    },
+    {
+      "a": "eu-ai-act",
+      "b": "canada-aida",
+      "jaccard": 0.091,
+      "shared": [
+        "high-risk",
+        "hr-hiring"
+      ]
+    },
+    {
+      "a": "iso-24029",
+      "b": "iso-24028",
+      "jaccard": 0.091,
+      "shared": [
+        "high-risk"
+      ]
+    },
+    {
+      "a": "iso-24029",
+      "b": "ieee-7000",
+      "jaccard": 0.091,
+      "shared": [
+        "safety-case"
+      ]
+    },
+    {
+      "a": "iso-24029",
+      "b": "uk-aisi",
+      "jaccard": 0.091,
+      "shared": [
+        "eval"
+      ]
+    },
+    {
+      "a": "iso-24029",
+      "b": "korea-ai-basic-act",
+      "jaccard": 0.091,
+      "shared": [
+        "high-risk"
+      ]
+    },
+    {
+      "a": "iso-24028",
+      "b": "japan-ai-guidelines",
+      "jaccard": 0.091,
+      "shared": [
+        "fairness"
+      ]
+    },
+    {
+      "a": "iso-24028",
+      "b": "korea-ai-basic-act",
+      "jaccard": 0.091,
+      "shared": [
+        "high-risk"
+      ]
+    },
+    {
+      "a": "oecd-ai-principles",
+      "b": "india-niti",
+      "jaccard": 0.091,
+      "shared": [
+        "public-sector"
+      ]
+    },
+    {
+      "a": "unesco-ai-ethics",
+      "b": "india-niti",
+      "jaccard": 0.091,
+      "shared": [
+        "public-sector"
+      ]
+    },
+    {
+      "a": "g7-hiroshima",
+      "b": "india-niti",
+      "jaccard": 0.091,
+      "shared": [
+        "risk-assessment"
+      ]
+    },
+    {
+      "a": "ieee-7000",
+      "b": "korea-ai-basic-act",
+      "jaccard": 0.091,
+      "shared": [
+        "impact-assessment"
+      ]
+    },
+    {
+      "a": "us-omb-m2410",
+      "b": "india-niti",
+      "jaccard": 0.091,
+      "shared": [
+        "public-sector"
+      ]
+    },
+    {
+      "a": "canada-aida",
+      "b": "india-niti",
+      "jaccard": 0.091,
+      "shared": [
+        "risk-assessment"
+      ]
+    },
+    {
+      "a": "eu-ai-act",
+      "b": "eu-pld-ai",
+      "jaccard": 0.087,
+      "shared": [
+        "logging",
+        "eu-deployment"
+      ]
+    },
+    {
+      "a": "eu-ai-act",
+      "b": "coe-framework-convention",
+      "jaccard": 0.087,
+      "shared": [
+        "eu-deployment",
+        "biometrics"
+      ]
+    },
+    {
+      "a": "eu-ai-act",
+      "b": "eu-gpai-code",
+      "jaccard": 0.083,
+      "shared": [
+        "incident-reporting",
+        "foundation-model"
+      ]
+    },
+    {
+      "a": "coe-framework-convention",
+      "b": "india-niti",
+      "jaccard": 0.083,
+      "shared": [
+        "public-sector"
+      ]
+    },
+    {
+      "a": "iso-23894",
+      "b": "iso-24029",
+      "jaccard": 0.083,
+      "shared": [
+        "high-risk"
+      ]
+    },
+    {
+      "a": "iso-23894",
+      "b": "iso-24028",
+      "jaccard": 0.083,
+      "shared": [
+        "high-risk"
+      ]
+    },
+    {
+      "a": "iso-23894",
+      "b": "korea-ai-basic-act",
+      "jaccard": 0.083,
+      "shared": [
+        "high-risk"
+      ]
+    },
+    {
+      "a": "iso-24029",
+      "b": "canada-aida",
+      "jaccard": 0.083,
+      "shared": [
+        "high-risk"
+      ]
+    },
+    {
+      "a": "iso-24029",
+      "b": "australia-ai-standard",
+      "jaccard": 0.083,
+      "shared": [
+        "high-risk"
+      ]
+    },
+    {
+      "a": "iso-24028",
+      "b": "canada-aida",
+      "jaccard": 0.083,
+      "shared": [
+        "high-risk"
+      ]
+    },
+    {
+      "a": "iso-24028",
+      "b": "australia-ai-standard",
+      "jaccard": 0.083,
+      "shared": [
+        "high-risk"
+      ]
+    },
+    {
+      "a": "g7-hiroshima",
+      "b": "uk-aisi",
+      "jaccard": 0.083,
+      "shared": [
+        "frontier"
+      ]
+    },
+    {
+      "a": "ieee-7000",
+      "b": "us-omb-m2410",
+      "jaccard": 0.083,
+      "shared": [
+        "impact-assessment"
+      ]
+    },
+    {
+      "a": "us-eo-ai",
+      "b": "uk-aisi",
+      "jaccard": 0.083,
+      "shared": [
+        "frontier"
+      ]
+    },
+    {
+      "a": "us-omb-m2410",
+      "b": "korea-ai-basic-act",
+      "jaccard": 0.083,
+      "shared": [
+        "impact-assessment"
+      ]
+    },
+    {
+      "a": "us-ca-ai-transparency",
+      "b": "korea-ai-basic-act",
+      "jaccard": 0.083,
+      "shared": [
+        "chatbot"
+      ]
+    },
+    {
+      "a": "china-deep-synthesis",
+      "b": "korea-ai-basic-act",
+      "jaccard": 0.083,
+      "shared": [
+        "labeling"
+      ]
+    },
+    {
+      "a": "canada-aida",
+      "b": "korea-ai-basic-act",
+      "jaccard": 0.083,
+      "shared": [
+        "high-risk"
+      ]
+    },
+    {
+      "a": "korea-ai-basic-act",
+      "b": "australia-ai-standard",
+      "jaccard": 0.083,
+      "shared": [
+        "high-risk"
+      ]
+    },
+    {
+      "a": "eu-ai-act",
+      "b": "nist-genai-600-1",
+      "jaccard": 0.08,
+      "shared": [
+        "chatbot",
+        "rag"
+      ]
+    },
+    {
+      "a": "eu-ai-act",
+      "b": "owasp-llm-top10",
+      "jaccard": 0.08,
+      "shared": [
+        "chatbot",
+        "rag"
+      ]
+    },
+    {
+      "a": "eu-pld-ai",
+      "b": "ieee-7000",
+      "jaccard": 0.077,
+      "shared": [
+        "robotics"
+      ]
+    },
+    {
+      "a": "iso-23894",
+      "b": "canada-aida",
+      "jaccard": 0.077,
+      "shared": [
+        "high-risk"
+      ]
+    },
+    {
+      "a": "iso-23894",
+      "b": "australia-ai-standard",
+      "jaccard": 0.077,
+      "shared": [
+        "high-risk"
+      ]
+    },
+    {
+      "a": "iso-24029",
+      "b": "brazil-bill-2338",
+      "jaccard": 0.077,
+      "shared": [
+        "high-risk"
+      ]
+    },
+    {
+      "a": "iso-24029",
+      "b": "singapore-model-framework",
+      "jaccard": 0.077,
+      "shared": [
+        "eval"
+      ]
+    },
+    {
+      "a": "iso-24028",
+      "b": "brazil-bill-2338",
+      "jaccard": 0.077,
+      "shared": [
+        "high-risk"
+      ]
+    },
+    {
+      "a": "oecd-ai-principles",
+      "b": "us-omb-m2410",
+      "jaccard": 0.077,
+      "shared": [
+        "public-sector"
+      ]
+    },
+    {
+      "a": "unesco-ai-ethics",
+      "b": "us-omb-m2410",
+      "jaccard": 0.077,
+      "shared": [
+        "public-sector"
+      ]
+    },
+    {
+      "a": "g7-hiroshima",
+      "b": "us-ca-ai-transparency",
+      "jaccard": 0.077,
+      "shared": [
+        "watermarking"
+      ]
+    },
+    {
+      "a": "g7-hiroshima",
+      "b": "canada-aida",
+      "jaccard": 0.077,
+      "shared": [
+        "risk-assessment"
+      ]
+    },
+    {
+      "a": "ieee-7000",
+      "b": "us-co-ai-act",
+      "jaccard": 0.077,
+      "shared": [
+        "impact-assessment"
+      ]
+    },
+    {
+      "a": "ieee-7000",
+      "b": "brazil-bill-2338",
+      "jaccard": 0.077,
+      "shared": [
+        "impact-assessment"
+      ]
+    },
+    {
+      "a": "us-eo-ai",
+      "b": "us-omb-m2410",
+      "jaccard": 0.077,
+      "shared": [
+        "federal-procurement"
+      ]
+    },
+    {
+      "a": "us-co-ai-act",
+      "b": "korea-ai-basic-act",
+      "jaccard": 0.077,
+      "shared": [
+        "impact-assessment"
+      ]
+    },
+    {
+      "a": "us-ca-ai-transparency",
+      "b": "china-deep-synthesis",
+      "jaccard": 0.077,
+      "shared": [
+        "image-gen"
+      ]
+    },
+    {
+      "a": "uk-aisi",
+      "b": "singapore-model-framework",
+      "jaccard": 0.077,
+      "shared": [
+        "eval"
+      ]
+    },
+    {
+      "a": "china-genai-measures",
+      "b": "korea-ai-basic-act",
+      "jaccard": 0.077,
+      "shared": [
+        "chatbot"
+      ]
+    },
+    {
+      "a": "singapore-model-framework",
+      "b": "japan-ai-guidelines",
+      "jaccard": 0.077,
+      "shared": [
+        "enterprise-adoption"
+      ]
+    },
+    {
+      "a": "singapore-model-framework",
+      "b": "korea-ai-basic-act",
+      "jaccard": 0.077,
+      "shared": [
+        "chatbot"
+      ]
+    },
+    {
+      "a": "eu-gpai-code",
+      "b": "iso-24029",
+      "jaccard": 0.071,
+      "shared": [
+        "eval"
+      ]
+    },
+    {
+      "a": "eu-gpai-code",
+      "b": "uk-aisi",
+      "jaccard": 0.071,
+      "shared": [
+        "eval"
+      ]
+    },
+    {
+      "a": "coe-framework-convention",
+      "b": "oecd-ai-principles",
+      "jaccard": 0.071,
+      "shared": [
+        "public-sector"
+      ]
+    },
+    {
+      "a": "coe-framework-convention",
+      "b": "unesco-ai-ethics",
+      "jaccard": 0.071,
+      "shared": [
+        "public-sector"
+      ]
+    },
+    {
+      "a": "coe-framework-convention",
+      "b": "us-omb-m2410",
+      "jaccard": 0.071,
+      "shared": [
+        "public-sector"
+      ]
+    },
+    {
+      "a": "iso-42001",
+      "b": "india-niti",
+      "jaccard": 0.071,
+      "shared": [
+        "risk-assessment"
+      ]
+    },
+    {
+      "a": "iso-23894",
+      "b": "brazil-bill-2338",
+      "jaccard": 0.071,
+      "shared": [
+        "high-risk"
+      ]
+    },
+    {
+      "a": "unesco-ai-ethics",
+      "b": "brazil-bill-2338",
+      "jaccard": 0.071,
+      "shared": [
+        "prohibitions"
+      ]
+    },
+    {
+      "a": "g7-hiroshima",
+      "b": "china-genai-measures",
+      "jaccard": 0.071,
+      "shared": [
+        "api-model"
+      ]
+    },
+    {
+      "a": "g7-hiroshima",
+      "b": "brazil-bill-2338",
+      "jaccard": 0.071,
+      "shared": [
+        "incident-reporting"
+      ]
+    },
+    {
+      "a": "csa-ccm-ai",
+      "b": "australia-ai-standard",
+      "jaccard": 0.071,
+      "shared": [
+        "supply-chain"
+      ]
+    },
+    {
+      "a": "us-omb-m2410",
+      "b": "us-co-ai-act",
+      "jaccard": 0.071,
+      "shared": [
+        "impact-assessment"
+      ]
+    },
+    {
+      "a": "us-omb-m2410",
+      "b": "brazil-bill-2338",
+      "jaccard": 0.071,
+      "shared": [
+        "impact-assessment"
+      ]
+    },
+    {
+      "a": "us-co-ai-act",
+      "b": "us-ca-ai-transparency",
+      "jaccard": 0.071,
+      "shared": [
+        "us-deployment"
+      ]
+    },
+    {
+      "a": "us-co-ai-act",
+      "b": "canada-aida",
+      "jaccard": 0.071,
+      "shared": [
+        "hr-hiring"
+      ]
+    },
+    {
+      "a": "us-co-ai-act",
+      "b": "australia-ai-standard",
+      "jaccard": 0.071,
+      "shared": [
+        "hr-hiring"
+      ]
+    },
+    {
+      "a": "us-ca-ai-transparency",
+      "b": "brazil-bill-2338",
+      "jaccard": 0.071,
+      "shared": [
+        "chatbot"
+      ]
+    },
+    {
+      "a": "us-ca-ai-transparency",
+      "b": "singapore-model-framework",
+      "jaccard": 0.071,
+      "shared": [
+        "chatbot"
+      ]
+    },
+    {
+      "a": "canada-aida",
+      "b": "brazil-bill-2338",
+      "jaccard": 0.071,
+      "shared": [
+        "high-risk"
+      ]
+    },
+    {
+      "a": "brazil-bill-2338",
+      "b": "australia-ai-standard",
+      "jaccard": 0.071,
+      "shared": [
+        "high-risk"
+      ]
+    },
+    {
+      "a": "eu-gpai-code",
+      "b": "us-eo-ai",
+      "jaccard": 0.067,
+      "shared": [
+        "foundation-model"
+      ]
+    },
+    {
+      "a": "eu-pld-ai",
+      "b": "coe-framework-convention",
+      "jaccard": 0.067,
+      "shared": [
+        "eu-deployment"
+      ]
+    },
+    {
+      "a": "coe-framework-convention",
+      "b": "brazil-bill-2338",
+      "jaccard": 0.067,
+      "shared": [
+        "biometrics"
+      ]
+    },
+    {
+      "a": "nist-ai-rmf",
+      "b": "japan-ai-guidelines",
+      "jaccard": 0.067,
+      "shared": [
+        "enterprise-adoption"
+      ]
+    },
+    {
+      "a": "nist-genai-600-1",
+      "b": "korea-ai-basic-act",
+      "jaccard": 0.067,
+      "shared": [
+        "chatbot"
+      ]
+    },
+    {
+      "a": "nist-adversarial-ml",
+      "b": "australia-ai-standard",
+      "jaccard": 0.067,
+      "shared": [
+        "supply-chain"
+      ]
+    },
+    {
+      "a": "iso-42001",
+      "b": "iso-23053",
+      "jaccard": 0.067,
+      "shared": [
+        "mlops"
+      ]
+    },
+    {
+      "a": "iso-42001",
+      "b": "japan-ai-guidelines",
+      "jaccard": 0.067,
+      "shared": [
+        "enterprise-adoption"
+      ]
+    },
+    {
+      "a": "owasp-llm-top10",
+      "b": "korea-ai-basic-act",
+      "jaccard": 0.067,
+      "shared": [
+        "chatbot"
+      ]
+    },
+    {
+      "a": "us-co-ai-act",
+      "b": "brazil-bill-2338",
+      "jaccard": 0.067,
+      "shared": [
+        "impact-assessment"
+      ]
+    },
+    {
+      "a": "china-genai-measures",
+      "b": "brazil-bill-2338",
+      "jaccard": 0.067,
+      "shared": [
+        "chatbot"
+      ]
+    },
+    {
+      "a": "china-genai-measures",
+      "b": "singapore-model-framework",
+      "jaccard": 0.067,
+      "shared": [
+        "chatbot"
+      ]
+    },
+    {
+      "a": "brazil-bill-2338",
+      "b": "singapore-model-framework",
+      "jaccard": 0.067,
+      "shared": [
+        "chatbot"
+      ]
+    },
+    {
+      "a": "eu-gpai-code",
+      "b": "china-genai-measures",
+      "jaccard": 0.063,
+      "shared": [
+        "api-model"
+      ]
+    },
+    {
+      "a": "eu-gpai-code",
+      "b": "brazil-bill-2338",
+      "jaccard": 0.063,
+      "shared": [
+        "incident-reporting"
+      ]
+    },
+    {
+      "a": "eu-gpai-code",
+      "b": "singapore-model-framework",
+      "jaccard": 0.063,
+      "shared": [
+        "eval"
+      ]
+    },
+    {
+      "a": "nist-ai-rmf",
+      "b": "iso-23894",
+      "jaccard": 0.063,
+      "shared": [
+        "risk-program"
+      ]
+    },
+    {
+      "a": "nist-genai-600-1",
+      "b": "china-deep-synthesis",
+      "jaccard": 0.063,
+      "shared": [
+        "image-gen"
+      ]
+    },
+    {
+      "a": "iso-42001",
+      "b": "iso-23894",
+      "jaccard": 0.063,
+      "shared": [
+        "certification"
+      ]
+    },
+    {
+      "a": "iso-42001",
+      "b": "g7-hiroshima",
+      "jaccard": 0.063,
+      "shared": [
+        "risk-assessment"
+      ]
+    },
+    {
+      "a": "owasp-llm-top10",
+      "b": "us-eo-ai",
+      "jaccard": 0.063,
+      "shared": [
+        "red-teaming"
+      ]
+    },
+    {
+      "a": "owasp-llm-top10",
+      "b": "us-ca-ai-transparency",
+      "jaccard": 0.063,
+      "shared": [
+        "chatbot"
+      ]
+    },
+    {
+      "a": "owasp-agentic",
+      "b": "mitre-atlas",
+      "jaccard": 0.063,
+      "shared": [
+        "llm-security"
+      ]
+    },
+    {
+      "a": "nist-ai-rmf",
+      "b": "singapore-model-framework",
+      "jaccard": 0.059,
+      "shared": [
+        "enterprise-adoption"
+      ]
+    },
+    {
+      "a": "nist-genai-600-1",
+      "b": "csa-ccm-ai",
+      "jaccard": 0.059,
+      "shared": [
+        "rag"
+      ]
+    },
+    {
+      "a": "nist-genai-600-1",
+      "b": "brazil-bill-2338",
+      "jaccard": 0.059,
+      "shared": [
+        "chatbot"
+      ]
+    },
+    {
+      "a": "nist-genai-600-1",
+      "b": "singapore-model-framework",
+      "jaccard": 0.059,
+      "shared": [
+        "chatbot"
+      ]
+    },
+    {
+      "a": "iso-42001",
+      "b": "csa-ccm-ai",
+      "jaccard": 0.059,
+      "shared": [
+        "vendor-diligence"
+      ]
+    },
+    {
+      "a": "iso-42001",
+      "b": "singapore-model-framework",
+      "jaccard": 0.059,
+      "shared": [
+        "enterprise-adoption"
+      ]
+    },
+    {
+      "a": "owasp-llm-top10",
+      "b": "mitre-atlas",
+      "jaccard": 0.059,
+      "shared": [
+        "llm-security"
+      ]
+    },
+    {
+      "a": "owasp-llm-top10",
+      "b": "csa-ccm-ai",
+      "jaccard": 0.059,
+      "shared": [
+        "rag"
+      ]
+    },
+    {
+      "a": "owasp-llm-top10",
+      "b": "china-genai-measures",
+      "jaccard": 0.059,
+      "shared": [
+        "chatbot"
+      ]
+    },
+    {
+      "a": "owasp-llm-top10",
+      "b": "brazil-bill-2338",
+      "jaccard": 0.059,
+      "shared": [
+        "chatbot"
+      ]
+    },
+    {
+      "a": "owasp-llm-top10",
+      "b": "singapore-model-framework",
+      "jaccard": 0.059,
+      "shared": [
+        "chatbot"
+      ]
+    },
+    {
+      "a": "nist-ai-rmf",
+      "b": "owasp-agentic",
+      "jaccard": 0.056,
+      "shared": [
+        "agent"
+      ]
+    },
+    {
+      "a": "nist-genai-600-1",
+      "b": "nist-adversarial-ml",
+      "jaccard": 0.056,
+      "shared": [
+        "rag"
+      ]
+    },
+    {
+      "a": "nist-ai-rmf",
+      "b": "nist-genai-600-1",
+      "jaccard": 0.053,
+      "shared": [
+        "rag"
+      ]
+    },
+    {
+      "a": "eu-ai-act",
+      "b": "iso-24029",
+      "jaccard": 0.045,
+      "shared": [
+        "high-risk"
+      ]
+    },
+    {
+      "a": "eu-ai-act",
+      "b": "iso-24028",
+      "jaccard": 0.045,
+      "shared": [
+        "high-risk"
+      ]
+    },
+    {
+      "a": "eu-ai-act",
+      "b": "iso-23894",
+      "jaccard": 0.043,
+      "shared": [
+        "high-risk"
+      ]
+    },
+    {
+      "a": "eu-ai-act",
+      "b": "us-eo-ai",
+      "jaccard": 0.043,
+      "shared": [
+        "foundation-model"
+      ]
+    },
+    {
+      "a": "eu-ai-act",
+      "b": "us-ca-ai-transparency",
+      "jaccard": 0.043,
+      "shared": [
+        "chatbot"
+      ]
+    },
+    {
+      "a": "eu-ai-act",
+      "b": "csa-ccm-ai",
+      "jaccard": 0.042,
+      "shared": [
+        "rag"
+      ]
+    },
+    {
+      "a": "eu-ai-act",
+      "b": "us-co-ai-act",
+      "jaccard": 0.042,
+      "shared": [
+        "hr-hiring"
+      ]
+    },
+    {
+      "a": "eu-ai-act",
+      "b": "china-genai-measures",
+      "jaccard": 0.042,
+      "shared": [
+        "chatbot"
+      ]
+    },
+    {
+      "a": "eu-ai-act",
+      "b": "singapore-model-framework",
+      "jaccard": 0.042,
+      "shared": [
+        "chatbot"
+      ]
+    },
+    {
+      "a": "eu-ai-act",
+      "b": "nist-adversarial-ml",
+      "jaccard": 0.04,
+      "shared": [
+        "rag"
+      ]
+    },
+    {
+      "a": "eu-ai-act",
+      "b": "nist-ai-rmf",
+      "jaccard": 0.038,
+      "shared": [
+        "rag"
+      ]
+    },
+    {
+      "a": "eu-ai-act",
+      "b": "iso-42001",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "eu-ai-act",
+      "b": "iso-23053",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "eu-ai-act",
+      "b": "oecd-ai-principles",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "eu-ai-act",
+      "b": "unesco-ai-ethics",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "eu-ai-act",
+      "b": "owasp-agentic",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "eu-ai-act",
+      "b": "mitre-atlas",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "eu-ai-act",
+      "b": "ieee-7000",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "eu-ai-act",
+      "b": "us-omb-m2410",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "eu-ai-act",
+      "b": "uk-aisi",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "eu-ai-act",
+      "b": "china-deep-synthesis",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "eu-ai-act",
+      "b": "japan-ai-guidelines",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "eu-ai-act",
+      "b": "india-niti",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "eu-gpai-code",
+      "b": "eu-pld-ai",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "eu-gpai-code",
+      "b": "coe-framework-convention",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "eu-gpai-code",
+      "b": "nist-ai-rmf",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "eu-gpai-code",
+      "b": "nist-genai-600-1",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "eu-gpai-code",
+      "b": "nist-adversarial-ml",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "eu-gpai-code",
+      "b": "iso-42001",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "eu-gpai-code",
+      "b": "iso-23894",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "eu-gpai-code",
+      "b": "iso-23053",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "eu-gpai-code",
+      "b": "iso-24028",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "eu-gpai-code",
+      "b": "oecd-ai-principles",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "eu-gpai-code",
+      "b": "unesco-ai-ethics",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "eu-gpai-code",
+      "b": "owasp-llm-top10",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "eu-gpai-code",
+      "b": "owasp-agentic",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "eu-gpai-code",
+      "b": "mitre-atlas",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "eu-gpai-code",
+      "b": "csa-ccm-ai",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "eu-gpai-code",
+      "b": "ieee-7000",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "eu-gpai-code",
+      "b": "us-omb-m2410",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "eu-gpai-code",
+      "b": "us-co-ai-act",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "eu-gpai-code",
+      "b": "us-ca-ai-transparency",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "eu-gpai-code",
+      "b": "china-deep-synthesis",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "eu-gpai-code",
+      "b": "canada-aida",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "eu-gpai-code",
+      "b": "japan-ai-guidelines",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "eu-gpai-code",
+      "b": "korea-ai-basic-act",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "eu-gpai-code",
+      "b": "india-niti",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "eu-gpai-code",
+      "b": "australia-ai-standard",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "eu-pld-ai",
+      "b": "nist-ai-rmf",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "eu-pld-ai",
+      "b": "nist-genai-600-1",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "eu-pld-ai",
+      "b": "nist-adversarial-ml",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "eu-pld-ai",
+      "b": "iso-42001",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "eu-pld-ai",
+      "b": "iso-23894",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "eu-pld-ai",
+      "b": "iso-23053",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "eu-pld-ai",
+      "b": "iso-24029",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "eu-pld-ai",
+      "b": "iso-24028",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "eu-pld-ai",
+      "b": "oecd-ai-principles",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "eu-pld-ai",
+      "b": "unesco-ai-ethics",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "eu-pld-ai",
+      "b": "g7-hiroshima",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "eu-pld-ai",
+      "b": "owasp-llm-top10",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "eu-pld-ai",
+      "b": "owasp-agentic",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "eu-pld-ai",
+      "b": "mitre-atlas",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "eu-pld-ai",
+      "b": "csa-ccm-ai",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "eu-pld-ai",
+      "b": "us-eo-ai",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "eu-pld-ai",
+      "b": "us-omb-m2410",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "eu-pld-ai",
+      "b": "us-co-ai-act",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "eu-pld-ai",
+      "b": "us-ca-ai-transparency",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "eu-pld-ai",
+      "b": "uk-aisi",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "eu-pld-ai",
+      "b": "china-genai-measures",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "eu-pld-ai",
+      "b": "china-deep-synthesis",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "eu-pld-ai",
+      "b": "canada-aida",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "eu-pld-ai",
+      "b": "brazil-bill-2338",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "eu-pld-ai",
+      "b": "singapore-model-framework",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "eu-pld-ai",
+      "b": "japan-ai-guidelines",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "eu-pld-ai",
+      "b": "korea-ai-basic-act",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "eu-pld-ai",
+      "b": "india-niti",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "eu-pld-ai",
+      "b": "australia-ai-standard",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "coe-framework-convention",
+      "b": "nist-ai-rmf",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "coe-framework-convention",
+      "b": "nist-genai-600-1",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "coe-framework-convention",
+      "b": "nist-adversarial-ml",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "coe-framework-convention",
+      "b": "iso-42001",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "coe-framework-convention",
+      "b": "iso-23894",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "coe-framework-convention",
+      "b": "iso-23053",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "coe-framework-convention",
+      "b": "iso-24029",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "coe-framework-convention",
+      "b": "iso-24028",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "coe-framework-convention",
+      "b": "g7-hiroshima",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "coe-framework-convention",
+      "b": "owasp-llm-top10",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "coe-framework-convention",
+      "b": "owasp-agentic",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "coe-framework-convention",
+      "b": "mitre-atlas",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "coe-framework-convention",
+      "b": "csa-ccm-ai",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "coe-framework-convention",
+      "b": "ieee-7000",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "coe-framework-convention",
+      "b": "us-eo-ai",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "coe-framework-convention",
+      "b": "us-co-ai-act",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "coe-framework-convention",
+      "b": "us-ca-ai-transparency",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "coe-framework-convention",
+      "b": "uk-aisi",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "coe-framework-convention",
+      "b": "china-genai-measures",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "coe-framework-convention",
+      "b": "china-deep-synthesis",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "coe-framework-convention",
+      "b": "canada-aida",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "coe-framework-convention",
+      "b": "singapore-model-framework",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "coe-framework-convention",
+      "b": "japan-ai-guidelines",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "coe-framework-convention",
+      "b": "korea-ai-basic-act",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "coe-framework-convention",
+      "b": "australia-ai-standard",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "nist-ai-rmf",
+      "b": "iso-23053",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "nist-ai-rmf",
+      "b": "iso-24029",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "nist-ai-rmf",
+      "b": "iso-24028",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "nist-ai-rmf",
+      "b": "oecd-ai-principles",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "nist-ai-rmf",
+      "b": "unesco-ai-ethics",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "nist-ai-rmf",
+      "b": "g7-hiroshima",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "nist-ai-rmf",
+      "b": "mitre-atlas",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "nist-ai-rmf",
+      "b": "ieee-7000",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "nist-ai-rmf",
+      "b": "us-eo-ai",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "nist-ai-rmf",
+      "b": "us-omb-m2410",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "nist-ai-rmf",
+      "b": "us-co-ai-act",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "nist-ai-rmf",
+      "b": "us-ca-ai-transparency",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "nist-ai-rmf",
+      "b": "uk-aisi",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "nist-ai-rmf",
+      "b": "china-genai-measures",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "nist-ai-rmf",
+      "b": "china-deep-synthesis",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "nist-ai-rmf",
+      "b": "canada-aida",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "nist-ai-rmf",
+      "b": "brazil-bill-2338",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "nist-ai-rmf",
+      "b": "korea-ai-basic-act",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "nist-ai-rmf",
+      "b": "india-niti",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "nist-ai-rmf",
+      "b": "australia-ai-standard",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "nist-genai-600-1",
+      "b": "iso-42001",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "nist-genai-600-1",
+      "b": "iso-23894",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "nist-genai-600-1",
+      "b": "iso-23053",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "nist-genai-600-1",
+      "b": "iso-24029",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "nist-genai-600-1",
+      "b": "iso-24028",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "nist-genai-600-1",
+      "b": "oecd-ai-principles",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "nist-genai-600-1",
+      "b": "unesco-ai-ethics",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "nist-genai-600-1",
+      "b": "g7-hiroshima",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "nist-genai-600-1",
+      "b": "owasp-agentic",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "nist-genai-600-1",
+      "b": "mitre-atlas",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "nist-genai-600-1",
+      "b": "ieee-7000",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "nist-genai-600-1",
+      "b": "us-eo-ai",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "nist-genai-600-1",
+      "b": "us-omb-m2410",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "nist-genai-600-1",
+      "b": "us-co-ai-act",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "nist-genai-600-1",
+      "b": "uk-aisi",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "nist-genai-600-1",
+      "b": "canada-aida",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "nist-genai-600-1",
+      "b": "japan-ai-guidelines",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "nist-genai-600-1",
+      "b": "india-niti",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "nist-genai-600-1",
+      "b": "australia-ai-standard",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "nist-adversarial-ml",
+      "b": "iso-42001",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "nist-adversarial-ml",
+      "b": "iso-23894",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "nist-adversarial-ml",
+      "b": "iso-23053",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "nist-adversarial-ml",
+      "b": "iso-24029",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "nist-adversarial-ml",
+      "b": "iso-24028",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "nist-adversarial-ml",
+      "b": "oecd-ai-principles",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "nist-adversarial-ml",
+      "b": "unesco-ai-ethics",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "nist-adversarial-ml",
+      "b": "g7-hiroshima",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "nist-adversarial-ml",
+      "b": "ieee-7000",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "nist-adversarial-ml",
+      "b": "us-eo-ai",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "nist-adversarial-ml",
+      "b": "us-omb-m2410",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "nist-adversarial-ml",
+      "b": "us-co-ai-act",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "nist-adversarial-ml",
+      "b": "us-ca-ai-transparency",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "nist-adversarial-ml",
+      "b": "uk-aisi",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "nist-adversarial-ml",
+      "b": "china-genai-measures",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "nist-adversarial-ml",
+      "b": "china-deep-synthesis",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "nist-adversarial-ml",
+      "b": "canada-aida",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "nist-adversarial-ml",
+      "b": "brazil-bill-2338",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "nist-adversarial-ml",
+      "b": "singapore-model-framework",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "nist-adversarial-ml",
+      "b": "japan-ai-guidelines",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "nist-adversarial-ml",
+      "b": "korea-ai-basic-act",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "nist-adversarial-ml",
+      "b": "india-niti",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-42001",
+      "b": "iso-24029",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-42001",
+      "b": "iso-24028",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-42001",
+      "b": "oecd-ai-principles",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-42001",
+      "b": "unesco-ai-ethics",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-42001",
+      "b": "owasp-llm-top10",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-42001",
+      "b": "owasp-agentic",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-42001",
+      "b": "mitre-atlas",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-42001",
+      "b": "ieee-7000",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-42001",
+      "b": "us-eo-ai",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-42001",
+      "b": "us-omb-m2410",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-42001",
+      "b": "us-co-ai-act",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-42001",
+      "b": "us-ca-ai-transparency",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-42001",
+      "b": "uk-aisi",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-42001",
+      "b": "china-genai-measures",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-42001",
+      "b": "china-deep-synthesis",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-42001",
+      "b": "brazil-bill-2338",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-42001",
+      "b": "korea-ai-basic-act",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-42001",
+      "b": "australia-ai-standard",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-23894",
+      "b": "iso-23053",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-23894",
+      "b": "oecd-ai-principles",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-23894",
+      "b": "unesco-ai-ethics",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-23894",
+      "b": "g7-hiroshima",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-23894",
+      "b": "owasp-llm-top10",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-23894",
+      "b": "owasp-agentic",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-23894",
+      "b": "mitre-atlas",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-23894",
+      "b": "csa-ccm-ai",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-23894",
+      "b": "ieee-7000",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-23894",
+      "b": "us-eo-ai",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-23894",
+      "b": "us-omb-m2410",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-23894",
+      "b": "us-co-ai-act",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-23894",
+      "b": "us-ca-ai-transparency",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-23894",
+      "b": "uk-aisi",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-23894",
+      "b": "china-genai-measures",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-23894",
+      "b": "china-deep-synthesis",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-23894",
+      "b": "singapore-model-framework",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-23894",
+      "b": "japan-ai-guidelines",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-23894",
+      "b": "india-niti",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-23053",
+      "b": "iso-24029",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-23053",
+      "b": "iso-24028",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-23053",
+      "b": "oecd-ai-principles",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-23053",
+      "b": "unesco-ai-ethics",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-23053",
+      "b": "g7-hiroshima",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-23053",
+      "b": "owasp-llm-top10",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-23053",
+      "b": "owasp-agentic",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-23053",
+      "b": "mitre-atlas",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-23053",
+      "b": "csa-ccm-ai",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-23053",
+      "b": "ieee-7000",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-23053",
+      "b": "us-eo-ai",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-23053",
+      "b": "us-omb-m2410",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-23053",
+      "b": "us-co-ai-act",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-23053",
+      "b": "us-ca-ai-transparency",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-23053",
+      "b": "uk-aisi",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-23053",
+      "b": "china-genai-measures",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-23053",
+      "b": "china-deep-synthesis",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-23053",
+      "b": "canada-aida",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-23053",
+      "b": "brazil-bill-2338",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-23053",
+      "b": "singapore-model-framework",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-23053",
+      "b": "japan-ai-guidelines",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-23053",
+      "b": "korea-ai-basic-act",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-23053",
+      "b": "india-niti",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-23053",
+      "b": "australia-ai-standard",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-24029",
+      "b": "oecd-ai-principles",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-24029",
+      "b": "unesco-ai-ethics",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-24029",
+      "b": "g7-hiroshima",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-24029",
+      "b": "owasp-llm-top10",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-24029",
+      "b": "owasp-agentic",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-24029",
+      "b": "mitre-atlas",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-24029",
+      "b": "csa-ccm-ai",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-24029",
+      "b": "us-eo-ai",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-24029",
+      "b": "us-omb-m2410",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-24029",
+      "b": "us-co-ai-act",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-24029",
+      "b": "us-ca-ai-transparency",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-24029",
+      "b": "china-genai-measures",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-24029",
+      "b": "china-deep-synthesis",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-24029",
+      "b": "japan-ai-guidelines",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-24029",
+      "b": "india-niti",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-24028",
+      "b": "oecd-ai-principles",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-24028",
+      "b": "unesco-ai-ethics",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-24028",
+      "b": "g7-hiroshima",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-24028",
+      "b": "owasp-llm-top10",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-24028",
+      "b": "owasp-agentic",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-24028",
+      "b": "mitre-atlas",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-24028",
+      "b": "csa-ccm-ai",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-24028",
+      "b": "ieee-7000",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-24028",
+      "b": "us-eo-ai",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-24028",
+      "b": "us-omb-m2410",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-24028",
+      "b": "us-co-ai-act",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-24028",
+      "b": "us-ca-ai-transparency",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-24028",
+      "b": "uk-aisi",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-24028",
+      "b": "china-genai-measures",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-24028",
+      "b": "china-deep-synthesis",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-24028",
+      "b": "singapore-model-framework",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "iso-24028",
+      "b": "india-niti",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "oecd-ai-principles",
+      "b": "g7-hiroshima",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "oecd-ai-principles",
+      "b": "owasp-llm-top10",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "oecd-ai-principles",
+      "b": "owasp-agentic",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "oecd-ai-principles",
+      "b": "mitre-atlas",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "oecd-ai-principles",
+      "b": "csa-ccm-ai",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "oecd-ai-principles",
+      "b": "ieee-7000",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "oecd-ai-principles",
+      "b": "us-eo-ai",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "oecd-ai-principles",
+      "b": "us-co-ai-act",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "oecd-ai-principles",
+      "b": "us-ca-ai-transparency",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "oecd-ai-principles",
+      "b": "uk-aisi",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "oecd-ai-principles",
+      "b": "china-genai-measures",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "oecd-ai-principles",
+      "b": "china-deep-synthesis",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "oecd-ai-principles",
+      "b": "canada-aida",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "oecd-ai-principles",
+      "b": "brazil-bill-2338",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "oecd-ai-principles",
+      "b": "singapore-model-framework",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "oecd-ai-principles",
+      "b": "korea-ai-basic-act",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "oecd-ai-principles",
+      "b": "australia-ai-standard",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "unesco-ai-ethics",
+      "b": "g7-hiroshima",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "unesco-ai-ethics",
+      "b": "owasp-llm-top10",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "unesco-ai-ethics",
+      "b": "owasp-agentic",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "unesco-ai-ethics",
+      "b": "mitre-atlas",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "unesco-ai-ethics",
+      "b": "csa-ccm-ai",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "unesco-ai-ethics",
+      "b": "ieee-7000",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "unesco-ai-ethics",
+      "b": "us-eo-ai",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "unesco-ai-ethics",
+      "b": "us-co-ai-act",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "unesco-ai-ethics",
+      "b": "us-ca-ai-transparency",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "unesco-ai-ethics",
+      "b": "uk-aisi",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "unesco-ai-ethics",
+      "b": "china-genai-measures",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "unesco-ai-ethics",
+      "b": "china-deep-synthesis",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "unesco-ai-ethics",
+      "b": "canada-aida",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "unesco-ai-ethics",
+      "b": "singapore-model-framework",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "unesco-ai-ethics",
+      "b": "japan-ai-guidelines",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "unesco-ai-ethics",
+      "b": "korea-ai-basic-act",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "unesco-ai-ethics",
+      "b": "australia-ai-standard",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "g7-hiroshima",
+      "b": "owasp-llm-top10",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "g7-hiroshima",
+      "b": "owasp-agentic",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "g7-hiroshima",
+      "b": "mitre-atlas",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "g7-hiroshima",
+      "b": "csa-ccm-ai",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "g7-hiroshima",
+      "b": "ieee-7000",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "g7-hiroshima",
+      "b": "us-omb-m2410",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "g7-hiroshima",
+      "b": "us-co-ai-act",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "g7-hiroshima",
+      "b": "china-deep-synthesis",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "g7-hiroshima",
+      "b": "singapore-model-framework",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "g7-hiroshima",
+      "b": "japan-ai-guidelines",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "g7-hiroshima",
+      "b": "korea-ai-basic-act",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "g7-hiroshima",
+      "b": "australia-ai-standard",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "owasp-llm-top10",
+      "b": "ieee-7000",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "owasp-llm-top10",
+      "b": "us-omb-m2410",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "owasp-llm-top10",
+      "b": "us-co-ai-act",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "owasp-llm-top10",
+      "b": "uk-aisi",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "owasp-llm-top10",
+      "b": "china-deep-synthesis",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "owasp-llm-top10",
+      "b": "canada-aida",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "owasp-llm-top10",
+      "b": "japan-ai-guidelines",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "owasp-llm-top10",
+      "b": "india-niti",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "owasp-llm-top10",
+      "b": "australia-ai-standard",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "owasp-agentic",
+      "b": "csa-ccm-ai",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "owasp-agentic",
+      "b": "ieee-7000",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "owasp-agentic",
+      "b": "us-eo-ai",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "owasp-agentic",
+      "b": "us-omb-m2410",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "owasp-agentic",
+      "b": "us-co-ai-act",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "owasp-agentic",
+      "b": "us-ca-ai-transparency",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "owasp-agentic",
+      "b": "uk-aisi",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "owasp-agentic",
+      "b": "china-genai-measures",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "owasp-agentic",
+      "b": "china-deep-synthesis",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "owasp-agentic",
+      "b": "canada-aida",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "owasp-agentic",
+      "b": "brazil-bill-2338",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "owasp-agentic",
+      "b": "singapore-model-framework",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "owasp-agentic",
+      "b": "japan-ai-guidelines",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "owasp-agentic",
+      "b": "korea-ai-basic-act",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "owasp-agentic",
+      "b": "india-niti",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "owasp-agentic",
+      "b": "australia-ai-standard",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "mitre-atlas",
+      "b": "csa-ccm-ai",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "mitre-atlas",
+      "b": "ieee-7000",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "mitre-atlas",
+      "b": "us-eo-ai",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "mitre-atlas",
+      "b": "us-omb-m2410",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "mitre-atlas",
+      "b": "us-co-ai-act",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "mitre-atlas",
+      "b": "us-ca-ai-transparency",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "mitre-atlas",
+      "b": "uk-aisi",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "mitre-atlas",
+      "b": "china-genai-measures",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "mitre-atlas",
+      "b": "china-deep-synthesis",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "mitre-atlas",
+      "b": "canada-aida",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "mitre-atlas",
+      "b": "brazil-bill-2338",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "mitre-atlas",
+      "b": "singapore-model-framework",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "mitre-atlas",
+      "b": "japan-ai-guidelines",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "mitre-atlas",
+      "b": "korea-ai-basic-act",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "mitre-atlas",
+      "b": "india-niti",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "mitre-atlas",
+      "b": "australia-ai-standard",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "csa-ccm-ai",
+      "b": "ieee-7000",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "csa-ccm-ai",
+      "b": "us-eo-ai",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "csa-ccm-ai",
+      "b": "us-omb-m2410",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "csa-ccm-ai",
+      "b": "us-co-ai-act",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "csa-ccm-ai",
+      "b": "us-ca-ai-transparency",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "csa-ccm-ai",
+      "b": "uk-aisi",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "csa-ccm-ai",
+      "b": "china-genai-measures",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "csa-ccm-ai",
+      "b": "china-deep-synthesis",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "csa-ccm-ai",
+      "b": "canada-aida",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "csa-ccm-ai",
+      "b": "brazil-bill-2338",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "csa-ccm-ai",
+      "b": "singapore-model-framework",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "csa-ccm-ai",
+      "b": "japan-ai-guidelines",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "csa-ccm-ai",
+      "b": "korea-ai-basic-act",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "csa-ccm-ai",
+      "b": "india-niti",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "ieee-7000",
+      "b": "us-eo-ai",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "ieee-7000",
+      "b": "us-ca-ai-transparency",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "ieee-7000",
+      "b": "uk-aisi",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "ieee-7000",
+      "b": "china-genai-measures",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "ieee-7000",
+      "b": "china-deep-synthesis",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "ieee-7000",
+      "b": "canada-aida",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "ieee-7000",
+      "b": "singapore-model-framework",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "ieee-7000",
+      "b": "japan-ai-guidelines",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "ieee-7000",
+      "b": "india-niti",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "ieee-7000",
+      "b": "australia-ai-standard",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "us-eo-ai",
+      "b": "us-co-ai-act",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "us-eo-ai",
+      "b": "us-ca-ai-transparency",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "us-eo-ai",
+      "b": "china-genai-measures",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "us-eo-ai",
+      "b": "china-deep-synthesis",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "us-eo-ai",
+      "b": "canada-aida",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "us-eo-ai",
+      "b": "brazil-bill-2338",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "us-eo-ai",
+      "b": "singapore-model-framework",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "us-eo-ai",
+      "b": "japan-ai-guidelines",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "us-eo-ai",
+      "b": "korea-ai-basic-act",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "us-eo-ai",
+      "b": "india-niti",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "us-eo-ai",
+      "b": "australia-ai-standard",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "us-omb-m2410",
+      "b": "us-ca-ai-transparency",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "us-omb-m2410",
+      "b": "uk-aisi",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "us-omb-m2410",
+      "b": "china-genai-measures",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "us-omb-m2410",
+      "b": "china-deep-synthesis",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "us-omb-m2410",
+      "b": "canada-aida",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "us-omb-m2410",
+      "b": "singapore-model-framework",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "us-omb-m2410",
+      "b": "japan-ai-guidelines",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "us-omb-m2410",
+      "b": "australia-ai-standard",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "us-co-ai-act",
+      "b": "uk-aisi",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "us-co-ai-act",
+      "b": "china-genai-measures",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "us-co-ai-act",
+      "b": "china-deep-synthesis",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "us-co-ai-act",
+      "b": "singapore-model-framework",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "us-co-ai-act",
+      "b": "japan-ai-guidelines",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "us-co-ai-act",
+      "b": "india-niti",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "us-ca-ai-transparency",
+      "b": "uk-aisi",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "us-ca-ai-transparency",
+      "b": "canada-aida",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "us-ca-ai-transparency",
+      "b": "japan-ai-guidelines",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "us-ca-ai-transparency",
+      "b": "india-niti",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "us-ca-ai-transparency",
+      "b": "australia-ai-standard",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "uk-aisi",
+      "b": "china-genai-measures",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "uk-aisi",
+      "b": "china-deep-synthesis",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "uk-aisi",
+      "b": "canada-aida",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "uk-aisi",
+      "b": "brazil-bill-2338",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "uk-aisi",
+      "b": "japan-ai-guidelines",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "uk-aisi",
+      "b": "korea-ai-basic-act",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "uk-aisi",
+      "b": "india-niti",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "uk-aisi",
+      "b": "australia-ai-standard",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "china-genai-measures",
+      "b": "canada-aida",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "china-genai-measures",
+      "b": "japan-ai-guidelines",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "china-genai-measures",
+      "b": "india-niti",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "china-genai-measures",
+      "b": "australia-ai-standard",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "china-deep-synthesis",
+      "b": "canada-aida",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "china-deep-synthesis",
+      "b": "brazil-bill-2338",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "china-deep-synthesis",
+      "b": "singapore-model-framework",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "china-deep-synthesis",
+      "b": "japan-ai-guidelines",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "china-deep-synthesis",
+      "b": "india-niti",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "china-deep-synthesis",
+      "b": "australia-ai-standard",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "canada-aida",
+      "b": "singapore-model-framework",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "canada-aida",
+      "b": "japan-ai-guidelines",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "brazil-bill-2338",
+      "b": "japan-ai-guidelines",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "brazil-bill-2338",
+      "b": "india-niti",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "singapore-model-framework",
+      "b": "india-niti",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "singapore-model-framework",
+      "b": "australia-ai-standard",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "japan-ai-guidelines",
+      "b": "korea-ai-basic-act",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "japan-ai-guidelines",
+      "b": "india-niti",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "japan-ai-guidelines",
+      "b": "australia-ai-standard",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "korea-ai-basic-act",
+      "b": "india-niti",
+      "jaccard": 0,
+      "shared": []
+    },
+    {
+      "a": "india-niti",
+      "b": "australia-ai-standard",
+      "jaccard": 0,
+      "shared": []
+    }
+  ]
+}

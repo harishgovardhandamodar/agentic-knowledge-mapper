@@ -18,5 +18,22 @@ services:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
 
+  # 3rd tab ("AI Standards & Regulations"): static build of
+  # harishgovardhandamodar/AI-standards-regulations-dashboard (vendored under
+  # ./standards-dashboard, nginx.conf adjusted for backend-less mode).
+  # Served on :5173 and embedded in the :8204 UI via iframe.
+  standards:
+    build: ./standards-dashboard
+    container_name: ai-standards-dashboard
+    ports:
+      - "5173:80"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/ || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
 volumes:
   akm_data:

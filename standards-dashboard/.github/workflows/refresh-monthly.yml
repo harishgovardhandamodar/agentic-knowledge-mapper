@@ -1,0 +1,31 @@
+name: refresh-monthly
+on:
+  schedule:
+    - cron: "0 6 1 * *"   # 06:00 UTC on the 1st of each month
+  workflow_dispatch:
+    inputs:
+      refresh_dates:
+        description: "Bump lastChecked dates"
+        required: false
+        default: "true"
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: npm ci || npm install
+      - name: Refresh arXiv papers (live fetch, fallback on failure)
+        run: node scripts/fetch-arxiv.mjs --live
+      - name: Ingest + probe source URLs (non-blocking)
+        run: node scripts/ingest.mjs --check-urls ${{ inputs.refresh_dates == 'true' && '--refresh-dates' || '' }} || node scripts/ingest.mjs
+      - name: Rebuild dashboard data
+        run: npm run ingest
+      - name: Commit refreshed data
+        run: |
+          git config user.name "ai-standards-bot" && git config user.email "bot@example.com"
+          git add data/frameworks.json data/arxiv-papers.json public/data.json public/graph.json
+          git diff --cached --quiet || git commit -m "chore(data): monthly standards refresh"
+          git push || true

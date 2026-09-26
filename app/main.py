@@ -12,9 +12,12 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from .database import init_db, get_db
-from .models import Investigation, Artifact, Relationship, AgentRun, AgentEvent, Explanation
+from .models import (Investigation, Artifact, Relationship, AgentRun, AgentEvent,
+                     Explanation, SecurityAssessment)
 from . import llm, scheduler
 from .agent import launch_run, launch_run_with_goal
+from . import security_agent
+from . import security as sec_engine
 from .explainer import (launch_explanation, _extract_concepts, MODES,
                         DEPTH_PLAN, AUDIENCE_HINTS, _question_suggestions,
                         _quiz_from_answer, _save_explanation_to_graph,
@@ -40,7 +43,13 @@ if os.path.isdir(static_dir):
 
     @app.get("/")
     def serve_index():
-        return FileResponse(os.path.join(static_dir, "index.html"))
+        # Single-file app: markup + CSS + JS all live in index.html, so a
+        # stale copy means stale layout. Force revalidation (cheap 304 via
+        # etag when unchanged) instead of heuristic caching.
+        return FileResponse(
+            os.path.join(static_dir, "index.html"),
+            headers={"Cache-Control": "no-cache"},
+        )
 
 
 @app.on_event("startup")
@@ -122,6 +131,37 @@ class ExplainRequest(BaseModel):
     depth: str = "balanced"
     audience: str = "intermediate"
     max_hops: int = 0
+
+
+class SecurityAssessRequest(BaseModel):
+    product_name: Optional[str] = ""
+    product_url: Optional[str] = ""
+    exposure: Optional[str] = "confidential_data"
+    use_case: Optional[str] = ""
+    workflow_text: Optional[str] = ""
+    doc_urls: Optional[list[str]] = []
+    focus: Optional[list[str]] = ["accidental_copy", "misclassification"]
+    declared_controls: Optional[list[str]] = []
+    require_approval: bool = False
+
+
+class SecurityRescoreRequest(BaseModel):
+    active_controls: Optional[list[str]] = None
+    applicability: Optional[dict] = None
+    persist: bool = False
+
+
+class SecurityApprovalRequest(BaseModel):
+    decision: str = "approve"  # approve | reject
+    active_controls: Optional[list[str]] = None
+    applicability: Optional[dict] = None
+
+
+class AgentInvokeRequest(BaseModel):
+    to: str = "research-collector"
+    intent: str = "collect_research"
+    payload: Optional[dict] = None
+    task_id: Optional[str] = None
 
 
 # ---------- helpers ----------
@@ -900,6 +940,355 @@ def put_investigation_prefs(inv_id: int, req: PrefsRequest,
     db.commit()
     return {"preferred_domains": inv.preferred_domains or "",
             "auto_save_explanations": inv.auto_save_explanations}
+
+
+# ---------- AI security agent ----------
+
+def _security_json(rec: SecurityAssessment) -> dict:
+    def _load(raw, default):
+        try:
+            return json.loads(raw) if raw else default
+        except Exception:
+            return default
+
+    ev = _load(getattr(rec, "evidence_json", None), {})
+    tr = _load(getattr(rec, "a2a_trace_json", None), {})
+    ctl = _load(getattr(rec, "controls_json", None), {})
+    scoring = _load(getattr(rec, "scoring_json", None), {})
+    if not isinstance(ev, dict):
+        ev = {}
+    if not isinstance(tr, dict):
+        tr = {}
+    if not isinstance(ctl, dict):
+        ctl = {}
+    if not isinstance(scoring, dict):
+        scoring = {}
+    perspectives = _load(getattr(rec, "perspectives_json", None), [])
+    if not isinstance(perspectives, list):
+        perspectives = []
+    return {
+        "id": rec.id,
+        "investigation_id": rec.investigation_id,
+        "run_id": rec.run_id,
+        "product_name": rec.product_name,
+        "product_url": rec.product_url,
+        "exposure": rec.exposure,
+        "use_case": rec.use_case,
+        "workflow_text": getattr(rec, "workflow_text", None),
+        "doc_urls": _load(getattr(rec, "doc_urls_json", None), []),
+        "focus": _load(getattr(rec, "focus_json", None), []),
+        "require_approval": bool(getattr(rec, "require_approval", 0)),
+        "overall_pct": rec.overall_pct,
+        "inherent_pct": getattr(rec, "inherent_pct", None),
+        "residual_pct": getattr(rec, "residual_pct", None),
+        "delta": scoring.get("delta"),
+        "active_controls": ctl.get("active_controls", []),
+        "control_plan": ctl.get("control_plan", {}),
+        "scoring": scoring,
+        "perspectives": perspectives,
+        "artifact_count": next(
+            ((p.get("investigation") or {}).get("total_artifacts", 0)
+             for p in perspectives if isinstance(p, dict) and p.get("investigation")),
+            0,
+        ),
+        "posture": rec.posture,
+        "markdown": rec.markdown,
+        "diagrams": _load(rec.diagrams_json, {}),
+        "threats": _load(rec.threats_json, []),
+        "evidence": ev.get("evidence", []),
+        "queries_run": ev.get("queries_run", []),
+        "scope": ev.get("scope", ""),
+        "known_exploits": ev.get("known_exploits", []),
+        "exec_paragraph": ev.get("exec_paragraph", ""),
+        "a2a_task_id": tr.get("task_id", ""),
+        "a2a_trace": tr.get("trace", []),
+        "created_at": rec.created_at.isoformat() if rec.created_at else None,
+    }
+
+
+@app.get("/api/security/controls")
+def list_security_controls():
+    """Control catalogue for the GUI checklist + what-if re-scorer."""
+    return {"controls": sec_engine.control_catalog(),
+            "exposure_tiers": [{"id": k, **{kk: vv for kk, vv in v.items()}}
+                               for k, v in sec_engine.EXPOSURE_META.items()],
+            "scoring": {
+                "worst_weight": sec_engine._WORST_WEIGHT,
+                "breadth_weight": sec_engine._BREADTH_WEIGHT,
+                "top_n": sec_engine._TOP_N,
+                "min_residual_floor": sec_engine._MIN_RESIDUAL_LIKELIHOOD,
+                "min_applicability": sec_engine._MIN_APPLICABILITY,
+                "severity_bands": sec_engine.SEVERITY_BANDS,
+            }}
+
+
+@app.post("/api/security/assessments/{assessment_id}/rescore")
+def rescore_security_assessment(assessment_id: int, data: SecurityRescoreRequest,
+                                db: Session = Depends(get_db)):
+    """What-if re-score: pure deterministic function, no LLM, no research.
+
+    Takes the stored inherent threat rows and re-runs the scoring engine with a
+    different control set (and optionally applicability) so the GUI can show the
+    effect of enabling controls live. Optionally persists the new baseline.
+    """
+    rec = db.query(SecurityAssessment).filter(
+        SecurityAssessment.id == assessment_id).first()
+    if not rec:
+        raise HTTPException(404, "Assessment not found")
+    try:
+        stored_threats = json.loads(rec.threats_json or "[]")
+    except Exception:
+        stored_threats = []
+    if not stored_threats:
+        raise HTTPException(422, "Assessment has no stored threat rows to re-score")
+
+    # Rebuild the exposure-scaled inherent rows from the stored residual rows:
+    # inherent likelihood is recoverable (residual likelihood = L*(1-cov) or the
+    # floor), so we recompute the baseline exactly as build_assessment would.
+    from .security import _THREAT_CATALOG, _scale_likelihood, EXPOSURE_META
+    exposure = rec.exposure if rec.exposure in EXPOSURE_META else "confidential_data"
+    weight = float(EXPOSURE_META[exposure]["weight"])
+    inherent = [{"id": t[0], "title": t[1], "stride": t[2], "owasp": t[3],
+                 "likelihood": float(_scale_likelihood(t[4], weight)),
+                 "impact": float(t[5]), "description": t[6], "mitigations": t[7]}
+                for t in _THREAT_CATALOG]
+
+    ctl = {}
+    try:
+        ctl = json.loads(rec.controls_json or "{}")
+    except Exception:
+        ctl = {}
+    active = data.active_controls
+    if active is None:
+        active = ctl.get("active_controls", [])
+
+    result = sec_engine.score_assessment(
+        exposure, inherent,
+        active_controls=active,
+        applicability=data.applicability,
+    )
+    prev_residual = getattr(rec, "residual_pct", None)
+    if data.persist:
+        prior = _security_json(rec)
+        rec.controls_json = json.dumps({
+            "active_controls": result["active_controls"],
+            "control_plan": ctl.get("control_plan", {}),
+        })
+        rec.scoring_json = json.dumps(result)
+        rec.threats_json = json.dumps(result["threats"])
+        rec.residual_pct = result["residual_pct"]
+        rec.inherent_pct = result["inherent_pct"]
+        rec.overall_pct = result["residual_pct"]
+        rec.posture = result["posture"]
+        rec.perspectives_json = json.dumps(sec_engine._perspective_views({
+            "threats": result["threats"],
+            "scoring": result,
+            "control_plan": ctl.get("control_plan", {}),
+            "evidence": prior.get("evidence", []),
+            "known_exploits": prior.get("known_exploits", []),
+            "artifacts": sec_engine._load_investigation_artifacts(
+                db, getattr(rec, "investigation_id", None)),
+            "exposure": exposure,
+            "product_name": rec.product_name,
+            "inherent_pct": result["inherent_pct"],
+            "residual_pct": result["residual_pct"],
+            "posture": result["posture"],
+        }))
+        db.commit()
+    return {
+        "assessment_id": assessment_id,
+        "inherent_pct": result["inherent_pct"],
+        "residual_pct": result["residual_pct"],
+        "previous_residual_pct": prev_residual,
+        "delta": result["delta"],
+        "delta_vs_previous": (round(result["residual_pct"] - prev_residual, 1)
+                              if prev_residual is not None else None),
+        "posture": result["posture"],
+        "active_controls": result["active_controls"],
+        "distribution": result["distribution"],
+        "breakdown": result["breakdown"],
+        "threats": result["threats"],
+        "persisted": data.persist,
+    }
+
+
+@app.post("/api/investigations/{inv_id}/security/assess")
+def start_security_assessment(inv_id: int, data: SecurityAssessRequest,
+                              db: Session = Depends(get_db)):
+    """Launch the AI Security Engineering & Evaluation Agent as a background
+    run (polled via /api/runs/{run_id}). The run executes the agent-to-agent
+    workflow with agentic search over this investigation's knowledge graph."""
+    inv = db.query(Investigation).filter(Investigation.id == inv_id).first()
+    if not inv:
+        raise HTTPException(404, "Investigation not found")
+    if security_agent.security_run_busy(db, inv_id):
+        raise HTTPException(429, "A security assessment is already running here")
+    run_id = security_agent.launch_security_assessment(inv_id, {
+        "product_name": data.product_name or "Target product",
+        "product_url": data.product_url or "",
+        "exposure": data.exposure or "confidential_data",
+        "use_case": data.use_case or "",
+        "workflow_text": data.workflow_text or "",
+        "doc_urls": data.doc_urls or [],
+        "focus": data.focus or [],
+        "declared_controls": data.declared_controls or [],
+        "require_approval": bool(data.require_approval),
+    })
+    return {"status": "started", "run_id": run_id}
+
+
+@app.post("/api/security/runs/{run_id}/approval")
+def approve_security_run(run_id: int, data: SecurityApprovalRequest,
+                         db: Session = Depends(get_db)):
+    """Approve or reject a run parked at the control-plan gate.
+
+    On approval the operator may override the control set and applicability the
+    control-analyst proposed; the run then resumes from the next stage.
+    """
+    run = db.query(AgentRun).filter(AgentRun.id == run_id).first()
+    if not run:
+        raise HTTPException(404, "Run not found")
+    if run.status != "awaiting_approval":
+        raise HTTPException(409, "Run is not waiting for approval")
+    try:
+        stats = json.loads(run.stats or "{}")
+    except Exception:
+        stats = {}
+    plan = stats.get("control_plan", {}) or {}
+    decision = (data.decision or "approve").lower()
+
+    if decision == "reject":
+        run.status = "error"
+        run.error = "Control plan rejected by operator"
+        run.finished_at = datetime.now(timezone.utc)
+        db.commit()
+        security_agent._event(
+            db, run.id, "gate", "Control plan rejected by operator — assessment aborted.",
+            {"control_plan": plan})
+        return {"status": "rejected", "run_id": run_id}
+
+    if data.active_controls is not None:
+        plan["declared_controls"] = [c for c in data.active_controls]
+    if data.applicability is not None:
+        plan["applicability"] = data.applicability
+    try:
+        # Persist the operator-approved plan back onto the gate state; the
+        # resume path reads run.stats to rebuild its params.
+        stats["control_plan"] = plan
+        run.stats = json.dumps(stats)
+        run.plan = json.dumps({
+            **(json.loads(run.plan or "{}")),
+            "controls": plan.get("declared_controls", []),
+        })
+        db.commit()
+    except Exception:
+        db.rollback()
+    resumed = security_agent.resume_security_assessment(run.id)
+    if not resumed:
+        raise HTTPException(409, "Could not resume run")
+    return {"status": "resumed", "run_id": run_id,
+            "approved_controls": plan.get("declared_controls", [])}
+
+
+@app.get("/api/investigations/{inv_id}/security/assessments")
+def list_security_assessments(inv_id: int, db: Session = Depends(get_db)):
+    recs = (db.query(SecurityAssessment)
+            .filter(SecurityAssessment.investigation_id == inv_id)
+            .order_by(SecurityAssessment.id.desc()).limit(50).all())
+    items = []
+    for r in recs:
+        d = _security_json(r)
+        d.pop("markdown", None)
+        d["threat_count"] = len(d.get("threats", []))
+        d["exploit_count"] = len(d.get("known_exploits", []))
+        items.append(d)
+    return {"items": items}
+
+
+@app.get("/api/security/assessments/{assessment_id}")
+def get_security_assessment(assessment_id: int, db: Session = Depends(get_db)):
+    rec = db.query(SecurityAssessment).filter(
+        SecurityAssessment.id == assessment_id).first()
+    if not rec:
+        raise HTTPException(404, "Assessment not found")
+    return _security_json(rec)
+
+
+@app.get("/api/security/assessments/{assessment_id}/markdown")
+def get_security_markdown(assessment_id: int, db: Session = Depends(get_db)):
+    from fastapi.responses import PlainTextResponse
+
+    rec = db.query(SecurityAssessment).filter(
+        SecurityAssessment.id == assessment_id).first()
+    if not rec:
+        raise HTTPException(404, "Assessment not found")
+    return PlainTextResponse(rec.markdown, media_type="text/markdown")
+
+
+@app.get("/api/security/assessments/{assessment_id}/pdf")
+def get_security_pdf(assessment_id: int, db: Session = Depends(get_db)):
+    from fastapi.responses import Response
+
+    rec = db.query(SecurityAssessment).filter(
+        SecurityAssessment.id == assessment_id).first()
+    if not rec:
+        raise HTTPException(404, "Assessment not found")
+    try:
+        from datetime import datetime as _dt, timezone as _tz
+        try:
+            _persp = json.loads(getattr(rec, "perspectives_json", None) or "[]")
+            if not isinstance(_persp, list):
+                _persp = []
+        except Exception:
+            _persp = []
+        pdf = sec_engine.build_pdf(
+            rec.markdown, title=f"AI Security Assessment — {rec.product_name}",
+            meta={
+                "product": rec.product_name,
+                "exposure_label": dict(
+                    getattr(sec_engine, "EXPOSURE_META", {}).get(rec.exposure or "", {})
+                ).get("label", rec.exposure),
+                "overall": rec.overall_pct,
+                "posture": rec.posture,
+                "perspectives": _persp,
+                "task_id": (json.loads(rec.a2a_trace_json or "{}") or {}).get("task_id", ""),
+                "date": (rec.created_at.isoformat()[:10] if rec.created_at else
+                         _dt.now(_tz.utc).date().isoformat()),
+            })
+    except RuntimeError as exc:
+        raise HTTPException(501, str(exc))
+    return Response(
+        content=pdf, media_type="application/pdf",
+        headers={"Content-Disposition":
+                 f"attachment; filename=security-assessment-{rec.id}.pdf"})
+
+
+@app.get("/.well-known/agents")
+def well_known_agents():
+    from .agents import get_agent_cards, PROTOCOL
+
+    return {"protocol": PROTOCOL, "agents": get_agent_cards()}
+
+
+@app.get("/api/agents/cards")
+def agent_cards():
+    from .agents import get_agent_cards, PROTOCOL
+
+    return {"protocol": PROTOCOL, "agents": get_agent_cards()}
+
+
+@app.post("/api/agents/invoke")
+def agent_invoke(data: AgentInvokeRequest, db: Session = Depends(get_db)):
+    """Invoke one A2A protocol hop directly (debugging / agent-to-agent calls)."""
+    from .agents import new_envelope, dispatch
+
+    env = new_envelope("api-caller", data.to, data.intent,
+                       data.payload or {}, task_id=data.task_id,
+                       note="direct invoke")
+    try:
+        return dispatch(env, db)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
 
 
 # ---------- graph ----------

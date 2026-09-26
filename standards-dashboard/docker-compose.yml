@@ -1,0 +1,106 @@
+# Canonical deploy: dashboard + finetuned model (Ollama) + Open WebUI chat.
+# Data protection: named volumes persist across `down`, rebuilds, and image
+# deletion. ONLY `down -v` destroys them — use scripts/backup-volumes.sh first.
+# GPU: on NVIDIA Linux hosts (e.g. axiom), uncomment the ollama `deploy` block.
+# Image pins: frozen by digest on 2026-09-20 so rebuilds are reproducible.
+# Refresh with: docker image inspect <image> --format '{{.RepoDigests}}'.
+services:
+  dashboard:
+    build:
+      context: .
+    image: ai-standards-dashboard:latest
+    container_name: ai-standards-dashboard
+    ports:
+      - "5173:80"
+    healthcheck:
+      # 127.0.0.1, not localhost: nginx listens on IPv4 and busybox wget
+      # resolves localhost to ::1 first without falling back to 127.0.0.1.
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/ || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    depends_on:
+      benchmark-api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama@sha256:f1a705f2bd113fb8d15f85f7c217f0dc5f6bebda6b0cc42b82c3ad165ffcb9dc
+    container_name: ai-standards-ollama
+    ports:
+      # Host 11434 is typically taken by native Ollama — container API is on 11437.
+      - "11437:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+      - ./models:/models:ro
+      - ./openwebui/ollama-entrypoint.sh:/entrypoint-seed.sh:ro
+      - ./openwebui/Modelfile.base:/Modelfile.base:ro
+    entrypoint: ["/bin/sh", "/entrypoint-seed.sh"]
+    # NVIDIA Linux (axiom) only — uncomment for GPU inference:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices: [{driver: nvidia, count: all, capabilities: [gpu]}]
+    healthcheck:
+      # Same readiness probe the entrypoint uses: exit 0 only when the server answers.
+      test: ["CMD", "ollama", "list"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 300s
+    restart: unless-stopped
+
+  # Upstream image; swap to your fork (harishgovardhandamodar/open-webui) when published:
+  #   image: ghcr.io/harishgovardhandamodar/open-webui:main
+  open-webui:
+    image: ghcr.io/open-webui/open-webui@sha256:6a773e5c3a246b65cbe74ce942b294292c0e5f81c138f703d111bc162f7d7c3d
+    container_name: ai-standards-open-webui
+    ports:
+      - "8080:8080"
+    environment:
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - WEBUI_NAME=AI Standards Assistant
+      - DEFAULT_MODELS=ai-standards:latest
+    volumes:
+      - open-webui-data:/app/backend/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://127.0.0.1:8080/ || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 180s
+    depends_on:
+      ollama:
+        condition: service_healthy
+    restart: unless-stopped
+
+  benchmark-api:
+    image: python@sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea
+    container_name: ai-standards-benchmark-api
+    working_dir: /app
+    command: bash -c "apt-get update -qq && apt-get install -y -qq procps && pip install -q -r benchmark-api/requirements.txt && uvicorn benchmark-api.app:app --host 0.0.0.0 --port 5250"
+    environment:
+      # Mutations (run/rerun) require this token. Set it to protect the
+      # benchmark backend from LAN peers; without it only loopback may mutate.
+      - BENCH_API_TOKEN=${BENCH_API_TOKEN:-}
+      - BENCH_ALLOW_ORIGIN=http://localhost:5173
+    ports:
+      - "5250:5250"
+    volumes:
+      - .:/app
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      # Pure-stdlib probe: python:3.12-slim ships no curl/wget.
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:5250/health')\" || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      # First boot runs apt-get + pip install before uvicorn starts.
+      start_period: 300s
+    restart: unless-stopped
+
+volumes:
+  ollama-data:      # models + blobs; survives down/rebuild (deleted only by `down -v`)
+  open-webui-data:  # users, chats, settings; same guarantee

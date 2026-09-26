@@ -1,0 +1,17 @@
+node_modules/
+dist/
+outputs/
+models/
+*.gguf
+.DS_Store
+
+# graft's local graph cache — regenerable, not committed (run `graft build`).
+graft/
+backups/
+eval-*.log
+*.log
+data/eval-report*.json
+public/eval-report*.json
+.venv/
+__pycache__/
+*.pyc

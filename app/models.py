@@ -158,3 +158,35 @@ class CorpusPage(Base):
     published = Column(String(40), nullable=True)  # ISO-ish date string, best effort
     images = Column(Text, nullable=True)  # JSON list
     fetched_at = Column(DateTime, default=_now)
+
+
+class SecurityAssessment(Base):
+    """AI Security Engineering & Evaluation Agent output, scoped to an investigation."""
+    __tablename__ = "security_assessments"
+
+    id = Column(Integer, primary_key=True, index=True)
+    investigation_id = Column(Integer, ForeignKey("investigations.id", ondelete="CASCADE"),
+                              nullable=False, index=True)
+    run_id = Column(Integer, ForeignKey("agent_runs.id", ondelete="SET NULL"),
+                    nullable=True, index=True)
+    product_name = Column(String(500), nullable=False)
+    product_url = Column(String(1000), nullable=True)
+    exposure = Column(String(100), nullable=False, default="confidential_data")
+    use_case = Column(Text, nullable=True)
+    workflow_text = Column(Text, nullable=True)
+    doc_urls_json = Column(Text, nullable=True)  # JSON: documentation URLs supplied at run time
+    focus_json = Column(Text, nullable=True)  # JSON: focus areas supplied at run time
+    require_approval = Column(Integer, nullable=True, default=0)
+    overall_pct = Column(Float, nullable=False, default=0)
+    inherent_pct = Column(Float, nullable=True)  # pre-control score
+    residual_pct = Column(Float, nullable=True)  # post-control score (headline)
+    controls_json = Column(Text, nullable=True)  # JSON: active controls + control plan
+    scoring_json = Column(Text, nullable=True)  # JSON: breakdown/distribution/breakdown
+    perspectives_json = Column(Text, nullable=True)  # JSON: per-audience highlight panels
+    posture = Column(String(500), nullable=True)
+    markdown = Column(Text, nullable=False)
+    diagrams_json = Column(Text, nullable=True)  # JSON-encoded mermaid sources
+    threats_json = Column(Text, nullable=True)  # JSON-encoded threat list
+    evidence_json = Column(Text, nullable=True)  # JSON: evidence/queries/known_exploits/scope
+    a2a_trace_json = Column(Text, nullable=True)  # JSON: task_id + hop trace
+    created_at = Column(DateTime, default=_now)

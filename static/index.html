@@ -21,18 +21,36 @@ html.light {
 }
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
-.layout { display: grid; grid-template-columns: 340px 1fr; grid-template-rows: auto 1fr; height: 100vh; }
+.layout { display: grid; grid-template-columns: 340px 1fr; grid-template-rows: auto auto 1fr; height: 100vh; }
 .header { grid-column: 1 / -1; padding: 14px 24px; background: var(--bg2); border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
 .header h1 { font-size: 19px; font-weight: 600; display: flex; align-items: center; gap: 10px; }
 .header h1 i { color: var(--teal); }
 .header-right { display: flex; gap: 12px; align-items: center; }
+/* top-level application tabs (AKM | AI Security) */
+.app-tabs { grid-column: 1 / -1; display: flex; gap: 4px; background: var(--bg); border-bottom: 1px solid var(--border); padding: 0 12px; flex-shrink: 0; }
+.app-tab { display: flex; align-items: center; gap: 9px; padding: 11px 20px; font-size: 13.5px; font-weight: 600; cursor: pointer; color: var(--text2); background: transparent; border: none; border-bottom: 3px solid transparent; font-family: inherit; }
+.app-tab:hover { color: var(--text); background: var(--bg2); }
+.app-tab.active { color: var(--text); border-bottom-color: var(--teal); background: var(--bg2); }
+.app-tab i { font-size: 14px; }
+.app-tab .app-tab-sub { font-size: 10.5px; font-weight: 400; color: var(--text2); }
+.app-tab.active .app-tab-sub { color: var(--teal); }
+.app-tab-badge { font-size: 9.5px; font-weight: 700; padding: 1px 7px; border-radius: 9px; background: var(--bg3); color: var(--text2); }
+/* panes */
+#akmPane { grid-column: 1 / -1; display: grid; grid-template-columns: 340px 1fr; grid-template-rows: 1fr; min-height: 0; }
+#akmPane.hidden { display: none; }
+#akmPane > .sidebar, #akmPane > .main { min-height: 0; }
+#securityPane { grid-column: 1 / -1; min-height: 0; overflow: hidden; display: none; }
+#securityPane.visible { display: flex; flex-direction: column; }
+#standardsPane { grid-column: 1 / -1; min-height: 0; overflow: auto; display: none; }
+#standardsPane.visible { display: flex; flex-direction: column; }
+#standardsFrame { flex: 1 1 auto; min-height: 0; min-height: min(70vh, 600px); width: 100%; border: none; background: var(--bg); display: block; }
+.sidebar { background: var(--bg2); border-right: 1px solid var(--border); padding: 16px; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; }
 .llm-dot { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text2); }
 .llm-dot .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--orange); }
 .llm-dot.ok .dot { background: var(--green); }
 .llm-dot.bad .dot { background: var(--red); }
 .search-box { background: var(--bg3); border: 1px solid var(--border); border-radius: 6px; padding: 6px 12px; color: var(--text); width: 220px; font-size: 13px; }
 .search-box:focus { outline: none; border-color: var(--accent); }
-.sidebar { background: var(--bg2); border-right: 1px solid var(--border); padding: 16px; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; }
 .sidebar h3 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text2); margin-bottom: 8px; font-weight: 600; }
 .inv-item { padding: 9px 11px; background: var(--bg3); border-radius: 7px; cursor: pointer; border: 1px solid transparent; margin-bottom: 6px; font-size: 12px; }
 .inv-item:hover { border-color: var(--accent); }
@@ -195,9 +213,9 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .ev-src { margin-top: 3px; font-size: 11px; color: var(--text2); }
 .ev-src a { color: var(--accent); text-decoration: none; }
 /* Mermaid diagrams */
-.diagram-wrap { background: var(--bg3); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; margin: 12px 0; }
-.diagram-wrap .mermaid, .diagram-wrap pre.mermaid { background: transparent; text-align: center; }
-.diagram-wrap pre.mermaid svg { max-width: 100%; height: auto; }
+.diagram-wrap { background: var(--bg3); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; margin: 12px 0; overflow-x: auto; }
+.diagram-wrap .mermaid, .diagram-wrap pre.mermaid { background: transparent; text-align: center; min-width: min-content; }
+.diagram-wrap div.mermaid svg, .diagram-wrap pre.mermaid svg { max-width: 100%; height: auto; }
 /* Follow-ups + threads */
 .fu-row { display: flex; gap: 6px; margin: 14px 0 4px; }
 .fu-row input { flex: 1; padding: 7px 12px; background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-size: 12px; }
@@ -247,6 +265,150 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .source-btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px; border-radius: 6px; font-size: 12px; font-weight: 500; background: var(--bg3); border: 1px solid var(--border); color: var(--accent); cursor: pointer; text-decoration: none; }
 .source-btn:hover { background: var(--accent); color: var(--bg); border-color: var(--accent); }
 .similar-item { padding: 8px 10px; background: var(--bg3); border-radius: 6px; margin-bottom: 4px; cursor: pointer; border: 1px solid transparent; font-size: 12px; }
+/* AI Security agent view */
+#securityView { overflow-y: auto; padding: 20px 24px; }
+.sec-grid { display: grid; grid-template-columns: 360px 1fr; gap: 16px; align-items: start; }
+.sec-right { min-width: 0; }
+.sec-ctl-card { position: sticky; top: 0; z-index: 2; }
+.sec-ctl-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
+.sec-ctl-head.collapsed { margin-bottom: 0; }
+.sec-ctl-toggle { display: flex; align-items: flex-start; gap: 8px; flex: 1; min-width: 0; background: none; border: none; padding: 0; margin: 0; font: inherit; color: inherit; text-align: left; cursor: pointer; border-radius: 6px; }
+.sec-ctl-toggle:hover .sec-ctl-title { color: var(--accent); }
+.sec-ctl-toggle:focus-visible { outline: 2px solid var(--teal); outline-offset: 3px; }
+.sec-ctl-caret { font-size: 11px; color: var(--text2); margin-top: 3px; transition: transform 0.15s ease; flex-shrink: 0; }
+.sec-ctl-card.collapsed .sec-ctl-caret { transform: rotate(-90deg); }
+.sec-ctl-card.collapsed .sec-ctl-list { display: none; }
+.sec-ctl-title { display: block; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text2); font-weight: 600; }
+.sec-ctl-title i { color: var(--teal); margin-right: 5px; }
+.sec-ctl-sub { font-size: 11px; color: var(--text2); }
+.sec-ctl-actions { display: flex; gap: 6px; align-items: center; flex-shrink: 0; }
+.sec-ctl-list { display: flex; flex-direction: column; gap: 5px; max-height: 304px; overflow-y: auto; padding-right: 4px; }
+.sec-ctl { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 10px; padding: 8px 11px; border: 1px solid var(--border); border-radius: 8px; cursor: pointer; background: var(--bg2); transition: border-color 0.12s, background 0.12s; }
+.sec-ctl:hover { border-color: var(--accent); }
+.sec-ctl.on { border-color: var(--teal); background: rgba(88,166,255,0.08); }
+.sec-ctl input[type="checkbox"] { width: 15px; height: 15px; margin: 0; accent-color: var(--teal); flex-shrink: 0; }
+.sec-ctl-main { min-width: 0; }
+.sec-ctl-top { display: flex; align-items: baseline; gap: 7px; }
+.sec-ctl-id { font-size: 9.5px; font-weight: 700; color: var(--teal); background: rgba(88,166,255,0.14); border-radius: 4px; padding: 1px 5px; letter-spacing: 0.3px; flex-shrink: 0; }
+.sec-ctl-name { font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sec-ctl-meta { font-size: 10px; color: var(--text2); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sec-ctl-eff { display: flex; align-items: center; gap: 7px; flex-shrink: 0; }
+.sec-ctl-bar { width: 42px; height: 5px; border-radius: 3px; background: var(--bg3); overflow: hidden; }
+.sec-ctl-bar span { display: block; height: 100%; background: var(--teal); border-radius: 3px; }
+.sec-ctl-effnum { font-size: 10.5px; font-weight: 700; color: var(--teal); width: 30px; text-align: right; }
+.sec-ctl-empty { padding: 18px; text-align: center; font-size: 12px; color: var(--text2); }
+@media (max-width: 1100px) { .sec-grid { grid-template-columns: 1fr; } }
+.sec-card { background: var(--bg2); border: 1px solid var(--border); border-radius: 10px; padding: 16px 18px; margin-bottom: 14px; }
+.sec-card h3 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text2); margin-bottom: 10px; font-weight: 600; }
+.sec-card h4 { font-size: 13px; margin: 12px 0 6px; }
+.sec-card p, .sec-card li { font-size: 12.5px; line-height: 1.6; }
+.sec-score { display: flex; align-items: center; gap: 14px; margin-bottom: 8px; }
+.sec-score-num { font-size: 32px; font-weight: 800; }
+.sec-posture { font-size: 13px; font-weight: 600; }
+.sec-table { width: 100%; border-collapse: collapse; font-size: 11.5px; margin-top: 8px; }
+.sec-table th, .sec-table td { border: 1px solid var(--border); padding: 6px 8px; text-align: left; vertical-align: top; }
+.sec-table th { background: var(--bg3); color: var(--text2); font-size: 10.5px; text-transform: uppercase; }
+.sev-Critical { background: rgba(248,81,73,0.18); color: var(--red); font-weight: 700; padding: 1px 8px; border-radius: 8px; font-size: 10.5px; white-space: nowrap; }
+.sev-High { background: rgba(210,153,34,0.18); color: var(--orange); font-weight: 700; padding: 1px 8px; border-radius: 8px; font-size: 10.5px; white-space: nowrap; }
+.sev-Medium { background: rgba(88,166,255,0.15); color: var(--accent); font-weight: 700; padding: 1px 8px; border-radius: 8px; font-size: 10.5px; white-space: nowrap; }
+.sev-Low { background: rgba(139,148,158,0.15); color: var(--text2); font-weight: 700; padding: 1px 8px; border-radius: 8px; font-size: 10.5px; white-space: nowrap; }
+.sec-md { font-size: 12.5px; line-height: 1.65; }
+.sec-md h2, .sec-md h3 { margin: 14px 0 8px; font-size: 14px; }
+.sec-md h4 { font-size: 13px; }
+.sec-md table { width: 100%; border-collapse: collapse; font-size: 11.5px; margin: 8px 0; display: block; overflow-x: auto; }
+.sec-md th, .sec-md td { border: 1px solid var(--border); padding: 5px 8px; }
+.sec-md code { background: var(--bg3); padding: 1px 5px; border-radius: 4px; font-size: 11px; }
+.sec-md blockquote { border-left: 3px solid var(--accent); padding: 6px 12px; background: var(--bg3); border-radius: 0 6px 6px 0; margin: 8px 0; }
+.sec-btn-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+.sec-log { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+/* security sub-view tabs */
+.sec-subtabs { display: flex; gap: 2px; flex-wrap: wrap; border-bottom: 1px solid var(--border); margin: 14px 0 0; }
+.sec-subtab { background: none; border: none; border-bottom: 2px solid transparent; color: var(--text2); font: inherit; font-size: 11.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.4px; padding: 8px 12px; cursor: pointer; display: flex; align-items: center; gap: 6px; }
+.sec-subtab:hover { color: var(--text); }
+.sec-subtab.on { color: var(--accent); border-bottom-color: var(--accent); }
+.sec-subtab .sec-subtab-n { background: var(--bg3); border-radius: 8px; padding: 0 6px; font-size: 10px; color: var(--text2); }
+.sec-subtab.on .sec-subtab-n { background: rgba(88,166,255,0.18); color: var(--accent); }
+.sec-pane[hidden] { display: none; }
+/* audience highlights */
+.sec-audbar { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
+.sec-aud-chip { background: var(--bg3); border: 1px solid var(--border); border-radius: 999px; color: var(--text2); font: inherit; font-size: 11.5px; padding: 5px 12px; cursor: pointer; display: flex; align-items: center; gap: 6px; }
+.sec-aud-chip:hover { color: var(--text); border-color: var(--accent); }
+.sec-aud-chip.on { background: rgba(88,166,255,0.16); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.sec-aud-panel { margin-top: 12px; border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 8px; background: var(--bg3); padding: 12px 14px; }
+.sec-aud-head { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 700; color: var(--accent); }
+.sec-aud-headline { font-size: 13.5px; font-weight: 600; line-height: 1.5; margin: 6px 0 10px; }
+.sec-aud-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; margin-bottom: 10px; }
+.sec-aud-metric { background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
+.sec-aud-metric-v { font-size: 16px; font-weight: 800; line-height: 1.2; }
+.sec-aud-metric-v.critical { color: var(--red); }
+.sec-aud-metric-v.high { color: var(--orange); }
+.sec-aud-metric-v.medium { color: var(--accent); }
+.sec-aud-metric-v.good { color: var(--green); }
+.sec-aud-metric-k { font-size: 10px; color: var(--text2); text-transform: uppercase; letter-spacing: 0.4px; margin-top: 2px; }
+.sec-aud-bullets { margin: 0; padding-left: 18px; }
+.sec-aud-bullets li { font-size: 12.5px; line-height: 1.6; margin-bottom: 4px; }
+.sec-aud-bullets li.critical { color: var(--red); }
+.sec-aud-bullets li.high { color: var(--orange); }
+.sec-aud-focus { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+.sec-aud-focus span { background: var(--bg2); border: 1px solid var(--border); border-radius: 6px; font-size: 10.5px; color: var(--text2); padding: 2px 8px; }
+.sec-aud-role { font-size: 10.5px; color: var(--text2); background: var(--bg2); border: 1px solid var(--border); border-radius: 6px; padding: 3px 8px; margin-bottom: 8px; }
+.sec-role-tag { display: inline-block; background: rgba(88,166,255,0.15); color: var(--accent); border-radius: 6px; font-size: 9.5px; font-weight: 700; padding: 0 5px; margin-left: 6px; vertical-align: middle; }
+.sec-role-hi { background: rgba(88,166,255,0.07); }
+/* per-role investigation view */
+.sec-inv-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px; margin: 10px 0 4px; }
+.sec-inv-stat { background: var(--bg3); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
+.sec-inv-stat-v { font-size: 17px; font-weight: 800; line-height: 1.2; }
+.sec-inv-stat-k { font-size: 10px; color: var(--text2); text-transform: uppercase; letter-spacing: 0.4px; margin-top: 2px; }
+.sec-art { display: flex; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--border); }
+.sec-art:last-child { border-bottom: none; }
+.sec-art-id { flex: 0 0 auto; font-size: 10.5px; font-weight: 700; color: var(--text2); background: var(--bg3); border: 1px solid var(--border); border-radius: 6px; height: fit-content; padding: 2px 6px; }
+.sec-art-main { min-width: 0; }
+.sec-art-title { font-size: 12.5px; font-weight: 600; line-height: 1.45; overflow-wrap: anywhere; }
+.sec-art-title a { color: var(--accent); text-decoration: none; }
+.sec-art-title a:hover { text-decoration: underline; }
+.sec-art-meta { font-size: 10.5px; color: var(--text2); margin-top: 2px; }
+.sec-art-snip { font-size: 11.5px; color: var(--text2); line-height: 1.5; margin-top: 3px; }
+.sec-art-hits { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 5px; }
+.sec-art-hits span { background: rgba(88,166,255,0.12); color: var(--accent); border-radius: 5px; font-size: 9.5px; font-weight: 600; padding: 1px 6px; }
+/* score explainer: inherent -> residual gauge */
+.sec-gauge { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; margin: 10px 0 4px; }
+.sec-gauge-track { position: relative; flex: 1 1 260px; height: 26px; background: var(--bg3); border-radius: 13px; overflow: hidden; border: 1px solid var(--border); }
+.sec-gauge-inherent { position: absolute; inset: 0 auto 0 0; background: rgba(248,81,73,0.30); }
+.sec-gauge-residual { position: absolute; inset: 0 auto 0 0; background: rgba(210,153,34,0.45); border-right: 2px solid var(--orange); }
+.sec-gauge-label { position: absolute; inset: 0; display: flex; align-items: center; padding: 0 10px; font-size: 11px; font-weight: 700; color: var(--text); text-shadow: 0 1px 2px rgba(0,0,0,0.6); }
+.sec-metric { min-width: 86px; }
+.sec-metric-v { font-size: 20px; font-weight: 800; line-height: 1.1; }
+.sec-metric-k { font-size: 10px; color: var(--text2); text-transform: uppercase; letter-spacing: 0.4px; }
+.sec-formula { font-size: 11px; color: var(--text2); background: var(--bg3); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; margin-top: 10px; line-height: 1.6; }
+.sec-formula code { background: var(--bg2); padding: 1px 5px; border-radius: 4px; color: var(--teal); }
+/* control checklist + what-if */
+.sec-whatif { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 10px; padding: 10px; border: 1px dashed var(--border); border-radius: 8px; }
+.sec-delta { font-size: 13px; font-weight: 700; }
+.sec-delta.down { color: var(--green); }
+.sec-delta.up { color: var(--red); }
+/* agent pipeline */
+.sec-pipe { display: flex; align-items: stretch; gap: 6px; flex-wrap: wrap; }
+.sec-hop { flex: 1 1 130px; border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; background: var(--bg2); position: relative; }
+.sec-hop.done { border-color: rgba(63,185,80,0.55); }
+.sec-hop.active { border-color: var(--teal); box-shadow: 0 0 0 1px var(--teal) inset; }
+.sec-hop.wait { border-color: var(--border); opacity: 0.6; }
+.sec-hop-name { font-size: 11px; font-weight: 700; }
+.sec-hop-intent { font-size: 9.5px; color: var(--text2); text-transform: uppercase; letter-spacing: 0.3px; }
+.sec-hop-note { font-size: 10.5px; color: var(--text2); margin-top: 4px; line-height: 1.45; }
+.sec-hop-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 5px; background: var(--text2); }
+.sec-hop.done .sec-hop-dot { background: var(--green); }
+.sec-hop.active .sec-hop-dot { background: var(--teal); animation: secPulse 1s infinite; }
+@keyframes secPulse { 0%,100% { opacity: 1; } 50% { opacity: 0.25; } }
+.sec-dist { display: flex; gap: 6px; flex-wrap: wrap; }
+.sec-dist span { font-size: 10.5px; padding: 2px 8px; border-radius: 8px; font-weight: 700; }
+/* top-level AI Security shell */
+.sec-shell { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+.sec-topbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 20px; background: var(--bg2); border-bottom: 1px solid var(--border); flex-shrink: 0; }
+.sec-topbar h2 { font-size: 16px; font-weight: 600; display: flex; align-items: center; gap: 9px; margin: 0; }
+.sec-topbar h2 i { color: var(--teal); }
+.sec-topbar-sub { font-size: 11.5px; color: var(--text2); margin-top: 3px; }
+.sec-topbar-right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.sec-shell .sec-grid { flex: 1; min-height: 0; overflow-y: auto; align-items: start; }
 .similar-item:hover { border-color: var(--accent); }
 .sim-item-row { display: flex; align-items: center; gap: 10px; }
 .sim-score-ring { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: 50%; font-size: 10px; font-weight: 700; flex-shrink: 0; }
@@ -256,25 +418,69 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .overlay-body video, .overlay-body iframe { max-width: 100% !important; display: block; margin: 8px auto; border-radius: 8px; }
 .overlay-body figure { max-width: 100%; margin: 8px auto; text-align: center; }
 .overlay-body table { display: block; max-width: 100%; overflow-x: auto; }
+/* collapsible panes: left + top chrome give the main panel more room */
+.pane-restore { display: none; position: absolute; z-index: 6; background: var(--bg2); border: 1px solid var(--border); color: var(--text2); cursor: pointer; font: inherit; align-items: center; justify-content: center; }
+.pane-restore:hover { color: var(--accent); border-color: var(--accent); }
+.pane-restore-inline { display: none; margin-left: auto; align-self: center; background: transparent; border: 1px solid var(--border); border-radius: 6px; color: var(--text2); cursor: pointer; padding: 3px 8px; }
+.pane-restore-inline:hover { color: var(--accent); border-color: var(--accent); }
+.vertical { writing-mode: vertical-rl; }
+#akmPane, .sec-shell { position: relative; }
+#akmLeftRestore { top: 10px; left: 0; width: 22px; height: 52px; border-left: none; border-radius: 0 8px 8px 0; }
+body.pane-akm-left-collapsed #akmPane { grid-template-columns: 0 1fr; }
+body.pane-akm-left-collapsed #akmPane > .sidebar { display: none; }
+body.pane-akm-left-collapsed #akmLeftRestore { display: flex; }
+body.pane-top-collapsed .header { display: none; }
+body.pane-top-collapsed .app-tabs { padding: 0 8px; }
+body.pane-top-collapsed .app-tab { padding: 7px 14px; }
+body.pane-top-collapsed .app-tab .app-tab-sub { display: none; }
+body.pane-top-collapsed #topRestore { display: inline-flex; }
+#secLeftRestore { top: 58px; left: 0; width: 22px; height: 52px; border-left: none; border-radius: 0 8px 8px 0; }
+body.pane-sec-left-collapsed .sec-grid { grid-template-columns: 0 1fr; }
+body.pane-sec-left-collapsed .sec-setup { display: none; }
+body.pane-sec-left-collapsed #secLeftRestore { display: flex; }
+body.pane-sec-top-collapsed .sec-topbar { padding: 5px 20px; }
+body.pane-sec-top-collapsed .sec-topbar h2 { font-size: 12.5px; }
+body.pane-sec-top-collapsed .sec-topbar-sub { display: none; }
 .overlay-section p { overflow-wrap: anywhere; }
 </style>
 </head>
 <body>
 <div class="layout">
   <div class="header">
-    <h1><i class="fas fa-diagram-project"></i> Agentic Knowledge Mapper</h1>
+    <h1><i class="fas fa-diagram-project"></i> <span id="appTitle">Agentic Knowledge Mapper</span></h1>
     <div class="header-right">
       <span class="llm-dot" id="llmDot" title="LLM gateway status"><span class="dot"></span><span id="llmLabel">llm: …</span></span>
       <input class="search-box" id="searchInput" placeholder="Search this investigation..." />
       <button onclick="toggleTheme()" class="btn btn-ghost btn-sm"><i id="themeIcon" class="fas fa-moon"></i></button>
+      <button onclick="togglePane('top')" class="btn btn-ghost btn-sm" title="Collapse header to give the main panel more room"><i class="fas fa-chevron-up"></i></button>
     </div>
   </div>
 
+  <div class="app-tabs" role="tablist">
+    <button class="app-tab active" data-app="akm" onclick="switchApp('akm')" role="tab">
+      <i class="fas fa-diagram-project"></i> Agentic Knowledge Mapper
+      <span class="app-tab-sub">collect · map · explain</span>
+    </button>
+    <button class="app-tab" data-app="security" onclick="switchApp('security')" role="tab">
+      <i class="fas fa-shield-halved"></i> AI Security
+      <span class="app-tab-sub">assess · score · control</span>
+      <span class="app-tab-badge" id="secTabBadge" style="display:none;"></span>
+    </button>
+    <button class="app-tab" data-app="standards" onclick="switchApp('standards')" role="tab">
+      <i class="fas fa-scale-balanced"></i> AI Standards &amp; Regulations
+      <span class="app-tab-sub">frameworks · coverage · advisor</span>
+    </button>
+    <button class="pane-restore-inline" id="topRestore" onclick="togglePane('top')" title="Show header"><i class="fas fa-chevron-down"></i></button>
+  </div>
+
+  <div id="akmPane">
+  <button class="pane-restore vertical" id="akmLeftRestore" onclick="togglePane('akmLeft')" title="Show the investigations sidebar"><i class="fas fa-angles-right"></i></button>
   <div class="sidebar">
     <div>
       <h3><i class="fas fa-folder-open"></i> Investigations</h3>
       <div id="invList"></div>
       <button class="btn btn-ghost btn-sm" onclick="newInvestigation()" style="width:100%;"><i class="fas fa-plus"></i> New investigation</button>
+      <button class="btn btn-ghost btn-sm" onclick="togglePane('akmLeft')" style="width:100%;margin-top:6px;" title="Collapse this sidebar"><i class="fas fa-angles-left"></i> Collapse sidebar</button>
     </div>
     <div id="briefPanel" style="display:none;">
       <h3><i class="fas fa-file-lines"></i> Collection brief</h3>
@@ -426,8 +632,82 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
       </div>
     </div>
   </div>
-</div>
+  </div><!-- /akmPane -->
 
+  <div id="securityPane">
+    <div class="sec-shell">
+      <button class="pane-restore vertical" id="secLeftRestore" onclick="togglePane('secLeft')" title="Show the setup panel"><i class="fas fa-angles-right"></i></button>
+      <div class="sec-topbar">
+        <div>
+          <h2><i class="fas fa-shield-halved"></i> AI Security Engineering &amp; Evaluation Agent</h2>
+          <div class="sec-topbar-sub">Threat modelling and residual-risk scoring for AI-assisted data workflows.</div>
+        </div>
+        <div class="sec-topbar-right">
+          <label for="secInvSelect" style="font-size:11px;color:var(--text2);">Investigation</label>
+          <select id="secInvSelect" onchange="secSwitchInvestigation(this.value)" style="min-width:220px;"></select>
+          <button class="btn btn-ghost btn-sm" onclick="loadSecurityHistory()"><i class="fas fa-history"></i> History</button>
+          <button class="btn btn-ghost btn-sm" onclick="togglePane('secTop')" title="Collapse this bar"><i class="fas fa-chevron-up"></i></button>
+        </div>
+      </div>
+      <div class="sec-grid">
+        <div class="sec-setup">
+          <div class="sec-card">
+            <div style="font-size:11.5px;color:var(--text2);margin-bottom:10px;">Scoped to investigation: <strong id="secInvName">—</strong>. The agent searches <em>this investigation's knowledge graph</em> for related research, maps known attacks, and writes the report.</div>
+            <div class="form-group"><label>Product name</label><input id="secProduct" placeholder="e.g. Cognition Devin &amp; Windsurf on confidential repositories" /></div>
+            <div class="form-group"><label>Product link</label><input id="secUrl" placeholder="https://vendor.example/security" /></div>
+            <div class="form-group"><label>Exposure setting</label>
+              <select id="secExposure">
+                <option value="restricted_data">Restricted data (highest sensitivity)</option>
+                <option value="confidential_data" selected>Confidential data</option>
+                <option value="internal">Internal</option>
+                <option value="public">Public / synthetic only</option>
+              </select>
+            </div>
+            <div class="form-group"><label>Use case / data in scope</label><textarea id="secUseCase" style="min-height:60px;" placeholder="What AI feature is in scope, what data does it touch, and which repositories or records are classified restricted or confidential?"></textarea></div>
+            <div class="form-group"><label>Workflow notes (optional)</label><textarea id="secWorkflow" style="min-height:60px;" placeholder="End-to-end path: who triggers it, what data enters context, which systems it reaches, what is retained and for how long."></textarea></div>
+            <div class="form-group"><label>Documentation URLs (one per line)</label><textarea id="secDocs" style="min-height:60px;" placeholder="https://vendor.example/security&#10;https://vendor.example/legal/privacy"></textarea></div>
+            <div class="form-group"><label>Focus areas</label>
+              <div style="font-size:12px;display:flex;flex-direction:column;gap:4px;">
+                <label><input type="checkbox" id="secFocusCopy" checked /> Accidental copy of sensitive info by employees</label>
+                <label><input type="checkbox" id="secFocusMisclass" checked /> Misclassified / mislabelled files</label>
+              </div>
+            </div>
+            <button class="btn btn-primary" onclick="runSecurityAssessment()" style="width:100%;" id="secRunBtn"><i class="fas fa-play"></i> Run deep security assessment</button>
+            <label style="display:flex;align-items:center;gap:7px;margin-top:8px;font-size:11.5px;color:var(--text2);cursor:pointer;">
+              <input type="checkbox" id="secRequireApproval" />
+              <i class="fas fa-user-check"></i> Require my approval of the control plan before the agent continues
+            </label>
+            <div id="secHistory" style="margin-top:10px;font-size:12px;"></div>
+          </div>
+          <button class="btn btn-ghost btn-sm" onclick="togglePane('secLeft')" style="width:100%;"><i class="fas fa-angles-left"></i> Collapse setup panel</button>
+        </div>
+        <div class="sec-right">
+          <div class="sec-card sec-ctl-card">
+            <div class="sec-ctl-head">
+              <button class="sec-ctl-toggle" id="secCtlToggle" onclick="secToggleControls()" aria-expanded="true" aria-controls="secControls" title="Show / hide the control catalogue">
+                <i class="fas fa-chevron-down sec-ctl-caret" id="secCtlCaret"></i>
+                <span>
+                  <span class="sec-ctl-title"><i class="fas fa-shield-halved"></i> Security controls in place</span>
+                  <span class="sec-ctl-sub" id="secCtlCount">No controls selected — score equals inherent risk</span>
+                </span>
+              </button>
+              <div class="sec-ctl-actions">
+                <button class="btn btn-primary btn-sm" onclick="secApplyRecommended()" title="Apply the recommended baseline for AI-assisted data workflows"><i class="fas fa-wand-magic-sparkles"></i> Recommended</button>
+                <button class="btn btn-ghost btn-sm" onclick="secSelectAllControls()">All</button>
+                <button class="btn btn-ghost btn-sm" onclick="secSelectNoControls()">None</button>
+              </div>
+            </div>
+            <div id="secControls" class="sec-ctl-list">Loading control catalogue…</div>
+          </div>
+          <div id="secResult"><div class="sec-card"><p style="color:var(--text2)">Pick an investigation, configure the product and exposure, then run the agent. The report includes an executive summary, illustrated data-flow / threat-path / workflow diagrams, a full threat &amp; risk register, a Known Exploits section grounded in this app's graph, and Markdown + PDF export.</p></div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div id="standardsPane">
+    <iframe id="standardsFrame" title="AI Standards &amp; Regulations Dashboard" loading="lazy"></iframe>
+  </div>
+</div>
 <div class="overlay" id="detailOverlay">
   <div class="overlay-panel">
     <button class="overlay-close" onclick="closeOverlay()"><i class="fas fa-times"></i></button>
@@ -519,6 +799,7 @@ async function loadInvestigations() {
   const res = await fetch(`${API}/investigations`);
   const data = await res.json();
   investigations = data.items || [];
+  if (typeof renderSecInvestigationOptions === 'function') renderSecInvestigationOptions();
   const list = document.getElementById('invList');
   if (!investigations.length) {
     list.innerHTML = '<div class="empty-state"><i class="fas fa-folder-open"></i><br/>No investigations yet.<br/>Create one to start collecting.</div>';
@@ -554,6 +835,9 @@ async function newInvestigation() {
 
 async function selectInvestigation(id) {
   currentInv = id;
+  const secSel = document.getElementById('secInvSelect');
+  if (secSel && secSel.value !== String(id)) secSel.value = String(id);
+  if (typeof updateSecInvName === 'function') updateSecInvName();
   clusterCache = { category: null, similarity: null };
   clusterMode = 'off'; updateClusterButtons();
   stopPolling(); stopExpPoll();
@@ -1113,7 +1397,7 @@ function clearHighlight() {
 let activeExpId = null, pollExpTimer = null, activeArticle = null;
 
 function escHtml(s) {
-  return (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 function mdInline(s) {
   s = escHtml(s);
@@ -2028,15 +2312,1009 @@ function fillSchedule(sched) {
 
 function onSearch() { if (currentInv) loadArtifacts(); }
 
+let currentApp = 'akm';
+
+const APP_TITLES = {
+  akm: 'Agentic Knowledge Mapper',
+  security: 'AI Security',
+  standards: 'AI Standards & Regulations',
+};
+
+function standardsUrl() {
+  return 'http://' + (window.location.hostname || 'localhost') + ':5173/';
+}
+
+function sizeStandardsFrame() {
+  const pane = document.getElementById('standardsPane');
+  const frame = document.getElementById('standardsFrame');
+  if (!pane || !frame || currentApp !== 'standards') return;
+  const host = pane.parentElement;
+  const w = Math.max(320, Math.floor(host && host.clientWidth ? host.clientWidth : window.innerWidth));
+  const h = Math.max(320, Math.floor(window.innerHeight - pane.getBoundingClientRect().top));
+  pane.style.width = w + 'px';
+  frame.style.width = w + 'px';
+  pane.style.height = h + 'px';
+  frame.style.height = h + 'px';
+}
+
+window.addEventListener('resize', () => { sizeStandardsFrame(); });
+
+function switchApp(app) {
+  if (!APP_TITLES[app]) app = 'akm';
+  currentApp = app;
+  document.querySelectorAll('.app-tab').forEach(t => t.classList.toggle('active', t.dataset.app === app));
+  const akm = document.getElementById('akmPane');
+  const sec = document.getElementById('securityPane');
+  const std = document.getElementById('standardsPane');
+  akm.classList.toggle('hidden', app !== 'akm');
+  sec.classList.toggle('visible', app === 'security');
+  if (std) std.classList.toggle('visible', app === 'standards');
+  document.getElementById('searchInput').style.display = (app === 'akm') ? '' : 'none';
+  const title = document.getElementById('appTitle');
+  if (title) title.textContent = APP_TITLES[app];
+  document.title = APP_TITLES[app];
+  if (app === 'security') {
+    renderSecInvestigationOptions();
+    updateSecInvName();
+    if (!secControlCatalog.length) loadSecurityControls();
+    if (!secAssessmentId) secLoadLatestForInvestigation();
+  } else if (app === 'standards') {
+    const frame = document.getElementById('standardsFrame');
+    if (frame && !frame.src) frame.src = standardsUrl();
+    setTimeout(sizeStandardsFrame, 0);
+    setTimeout(sizeStandardsFrame, 150);
+  } else if (network) {
+    setTimeout(() => network.fit({ animation: true }), 100);
+  }
+  try { history.replaceState(null, '', '#' + app); } catch (e) {}
+}
+
+function renderSecInvestigationOptions() {
+  const sel = document.getElementById('secInvSelect');
+  if (!sel) return;
+  const opts = (typeof investigations !== 'undefined' ? investigations : [])
+    .map(i => `<option value="${i.id}">${escHtml(i.title || ('Investigation ' + i.id))}</option>`).join('');
+  sel.innerHTML = opts || '<option value="">No investigations</option>';
+  if (currentInv) sel.value = String(currentInv);
+}
+
+function secSwitchInvestigation(id) {
+  if (id) selectInvestigation(Number(id));
+  secLoadLatestForInvestigation();
+}
+
+function secClearForm() {
+  ['secProduct', 'secUrl', 'secUseCase', 'secWorkflow', 'secDocs'].forEach(secSetField.bind(null));
+  const exp = document.getElementById('secExposure');
+  if (exp) exp.value = 'confidential_data';
+  const ap = document.getElementById('secRequireApproval');
+  if (ap) ap.checked = false;
+  const copy = document.getElementById('secFocusCopy');
+  const mis = document.getElementById('secFocusMisclass');
+  if (copy) copy.checked = false;
+  if (mis) mis.checked = false;
+  secSetControls([]);
+  const el = document.getElementById('secResult');
+  if (el) el.innerHTML = '<div class="sec-card"><p style="color:var(--text2)">No assessment stored for this investigation yet. Configure the product and run the agent.</p></div>';
+}
+
+async function secLoadLatestForInvestigation() {
+  if (!currentInv) return;
+  secAssessmentId = null;
+  secLastScore = null;
+  try {
+    const data = await (await fetch(`${API}/investigations/${currentInv}/security/assessments`)).json();
+    const items = data.items || [];
+    if (!items.length) { secClearForm(); loadSecurityHistory(); return; }
+    await loadSecurityById(items[0].id);
+  } catch (e) { secClearForm(); loadSecurityHistory(); }
+}
+
 function switchView(view) {
+  if (view === 'security') { switchApp('security'); return; }
   document.querySelectorAll('.main-tab').forEach(t => t.classList.toggle('active', t.dataset.view === view));
   document.querySelectorAll('.view').forEach(v => v.classList.remove('visible'));
-  document.getElementById(view + 'View').classList.add('visible');
+  const el = document.getElementById(view + 'View');
+  if (el) el.classList.add('visible');
   if (view === 'graph' && network) setTimeout(() => network.fit({ animation: true }), 100);
   if (view === 'explainer') loadPrefs();
 }
 
+
 loadExplDefaults();
+
+/* ---------- AI Security agent ---------- */
+let secRunId = null;
+let secPollTimer = null;
+let secAssessmentId = null;
+let secControlCatalog = [];
+let secLastScore = null;
+let secWhatIfTimer = null;
+let secSubTab = 'overview';
+let secPerspectives = [];
+let secAudience = 'executive';
+let secSubPanes = null;
+
+const SEC_SUBTABS = [
+  { key: 'overview', label: 'Overview', icon: 'fa-gauge-high' },
+  { key: 'threats', label: 'Threats', icon: 'fa-triangle-exclamation', count: 'threats' },
+  { key: 'controls', label: 'Controls', icon: 'fa-shield-halved', count: 'controls' },
+  { key: 'investigation', label: 'Investigation', icon: 'fa-diagram-project', count: 'artifacts' },
+  { key: 'evidence', label: 'Evidence', icon: 'fa-magnifying-glass', count: 'evidence' },
+  { key: 'agents', label: 'Agents', icon: 'fa-route' },
+  { key: 'report', label: 'Report', icon: 'fa-file-lines' },
+];
+
+const SEC_ROLE_THREATS = {
+  executive: [],
+  ciso: ['T05', 'T10', 'T12'],
+  security_engineer: ['T05', 'T07', 'T10', 'T08'],
+  data_scientist: ['T02', 'T03', 'T11', 'T09'],
+  dpo: ['T02', 'T06', 'T07', 'T11'],
+  legal: ['T12', 'T02', 'T07', 'T06'],
+  compliance: ['T08', 'T12', 'T02'],
+};
+
+const PANE_CLASS = {
+  akmLeft: 'pane-akm-left-collapsed',
+  top: 'pane-top-collapsed',
+  secLeft: 'pane-sec-left-collapsed',
+  secTop: 'pane-sec-top-collapsed',
+};
+const PANE_KEYS = Object.keys(PANE_CLASS);
+
+function loadPaneState() {
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem('akm.panes') || '{}') || {}; } catch (e) { saved = {}; }
+  PANE_KEYS.forEach(k => { if (saved[k]) document.body.classList.add(PANE_CLASS[k]); });
+}
+
+function paneCollapsed(name) {
+  return document.body.classList.contains(PANE_CLASS[name]);
+}
+
+function togglePane(name) {
+  if (!PANE_CLASS[name]) return;
+  document.body.classList.toggle(PANE_CLASS[name]);
+  const state = {};
+  PANE_KEYS.forEach(k => { state[k] = document.body.classList.contains(PANE_CLASS[k]); });
+  try { localStorage.setItem('akm.panes', JSON.stringify(state)); } catch (e) { /* storage unavailable */ }
+  const el = document.getElementById('securityPane');
+  if (el) secEnsureMermaid(el);
+  sizeStandardsFrame();
+}
+
+loadPaneState();
+
+if (['#security', '#standards'].includes(location.hash)) switchApp(location.hash.slice(1));
+
+async function loadSecurityControls() {
+  const box = document.getElementById('secControls');
+  if (!box) return;
+  try {
+    const data = await (await fetch(`${API}/security/controls`)).json();
+    secControlCatalog = data.controls || [];
+    renderControlChecklist();
+  } catch (e) {
+    box.innerHTML = '<span style="color:var(--red)">Failed to load control catalogue</span>';
+  }
+}
+
+function renderControlChecklist() {
+  const box = document.getElementById('secControls');
+  if (!box || !secControlCatalog.length) return;
+  box.innerHTML = secControlCatalog.map(c => {
+    const eff = Math.round((c.efficacy || 0) * 100);
+    const threats = Object.keys(c.threats || {}).join(' ');
+    const meta = [c.standard, threats ? 'covers ' + threats : ''].filter(Boolean).join(' · ');
+    return `<label class="sec-ctl" data-cid="${escHtml(c.id)}" title="${escHtml(c.description || '')}">
+      <input type="checkbox" id="ctl_${escHtml(c.id)}" onchange="secToggleControl('${escHtml(c.id)}')" />
+      <span class="sec-ctl-main">
+        <span class="sec-ctl-top">
+          <span class="sec-ctl-id">${escHtml(c.id)}</span>
+          <span class="sec-ctl-name">${escHtml(c.name)}</span>
+        </span>
+        <span class="sec-ctl-meta">${escHtml(meta)}</span>
+      </span>
+      <span class="sec-ctl-eff">
+        <span class="sec-ctl-bar"><span style="width:${eff}%"></span></span>
+        <span class="sec-ctl-effnum">${eff}%</span>
+      </span>
+    </label>`;
+  }).join('');
+  secUpdateCtlCount();
+}
+
+let secControlsCollapsed = false;
+
+function secToggleControls(force) {
+  const card = document.querySelector('.sec-ctl-card');
+  if (!card) return;
+  secControlsCollapsed = (typeof force === 'boolean') ? force : !secControlsCollapsed;
+  card.classList.toggle('collapsed', secControlsCollapsed);
+  const head = card.querySelector('.sec-ctl-head');
+  if (head) head.classList.toggle('collapsed', secControlsCollapsed);
+  const btn = document.getElementById('secCtlToggle');
+  if (btn) btn.setAttribute('aria-expanded', String(!secControlsCollapsed));
+}
+
+function secUpdateCtlCount() {
+  const el = document.getElementById('secCtlCount');
+  if (!el) return;
+  const n = secGetControls().length;
+  const total = secControlCatalog.length;
+  el.textContent = n === 0
+    ? `None of ${total} selected — score equals inherent risk`
+    : `${n} of ${total} selected — these reduce the residual score`;
+}
+
+function secToggleControl(cid) {
+  const cb = document.getElementById('ctl_' + cid);
+  if (!cb) return;
+  const row = document.querySelector(`.sec-ctl[data-cid="${cid}"]`);
+  if (row) row.classList.toggle('on', cb.checked);
+  secUpdateCtlCount();
+  secScheduleWhatIf();
+}
+
+function secSetControls(ids) {
+  const set = new Set((ids || []).map(s => String(s).toUpperCase()));
+  secControlCatalog.forEach(c => {
+    const on = set.has(c.id);
+    const cb = document.getElementById('ctl_' + c.id);
+    const row = document.querySelector(`.sec-ctl[data-cid="${c.id}"]`);
+    if (cb) cb.checked = on;
+    if (row) row.classList.toggle('on', on);
+  });
+  secUpdateCtlCount();
+  secScheduleWhatIf();
+}
+
+function secGetControls() {
+  return secControlCatalog.filter(c => {
+    const cb = document.getElementById('ctl_' + c.id);
+    return cb && cb.checked;
+  }).map(c => c.id);
+}
+
+function secSelectAllControls() { secSetControls(secControlCatalog.map(c => c.id)); }
+function secSelectNoControls() { secSetControls([]); }
+function secApplyRecommended() {
+  // Highest-impact controls for a confidential-data AI writing assistant.
+  secSetControls(['C01', 'C02', 'C03', 'C06', 'C07']);
+}
+
+function secScheduleWhatIf() {
+  if (!secAssessmentId || !secLastScore) return;
+  clearTimeout(secWhatIfTimer);
+  secWhatIfTimer = setTimeout(secRunWhatIf, 250);
+}
+
+async function secRunWhatIf() {
+  const out = document.getElementById('secWhatIfOut');
+  if (!out || !secAssessmentId) return;
+  const active = secGetControls();
+  out.innerHTML = '<span style="color:var(--text2)">Recomputing…</span>';
+  try {
+    const res = await fetch(`${API}/security/assessments/${secAssessmentId}/rescore`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ active_controls: active, persist: false }),
+    });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const r = await res.json();
+    const prev = secLastScore.residual_pct;
+    const d = (r.residual_pct - prev);
+    const color = r.residual_pct >= 75 ? 'var(--red)' : r.residual_pct >= 50 ? 'var(--orange)' : r.residual_pct >= 30 ? 'var(--accent)' : 'var(--green)';
+    out.innerHTML = `
+      <div class="sec-metric"><div class="sec-metric-v" style="color:${color}">${r.residual_pct}</div><div class="sec-metric-k">if applied</div></div>
+      <div class="sec-delta ${d < 0 ? 'down' : d > 0 ? 'up' : ''}">${d > 0 ? '+' : ''}${d} vs current</div>
+      <div style="font-size:11px;color:var(--text2);flex:1 1 200px;">${escHtml(r.posture)} · ${active.length} control(s) active · inherent stays ${r.inherent_pct}</div>
+      <button class="btn btn-ghost btn-sm" onclick="secPersistWhatIf()"><i class="fas fa-check"></i> Save as new baseline</button>`;
+  } catch (e) {
+    out.innerHTML = '<span style="color:var(--red)">What-if failed</span>';
+  }
+}
+
+async function secPersistWhatIf() {
+  if (!secAssessmentId) return;
+  const active = secGetControls();
+  try {
+    const res = await fetch(`${API}/security/assessments/${secAssessmentId}/rescore`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ active_controls: active, persist: true }),
+    });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    showNotif('Baseline updated', 'success');
+    loadSecurityById(secAssessmentId);
+  } catch (e) { showNotif('Failed to save baseline', 'error'); }
+}
+
+function updateSecInvName() {
+  const el = document.getElementById('secInvName');
+  if (!el) return;
+  const inv = (typeof investigations !== 'undefined' && investigations || []).find(i => i.id === currentInv);
+  el.textContent = inv ? `#${inv.id} ${inv.title}` : '— (select one in the sidebar)';
+}
+
+function secSeverityColor(pct) {
+  if (pct >= 75) return 'var(--red)';
+  if (pct >= 50) return 'var(--orange)';
+  if (pct >= 30) return 'var(--accent)';
+  return 'var(--green)';
+}
+
+async function runSecurityAssessment() {
+  if (!currentInv) { showNotif('Select an investigation first', 'error'); return; }
+  const btn = document.getElementById('secRunBtn');
+  const el = document.getElementById('secResult');
+  btn.disabled = true;
+  el.innerHTML = '<div class="sec-card"><p style="color:var(--text2)"><i class="fas fa-spinner fa-spin"></i> Starting security agent run…</p><div class="sec-log" id="secLog"></div></div>';
+  const docs = document.getElementById('secDocs').value.split('\n').map(s => s.trim()).filter(Boolean);
+  const focus = [];
+  if (document.getElementById('secFocusCopy').checked) focus.push('accidental_copy');
+  if (document.getElementById('secFocusMisclass').checked) focus.push('misclassification');
+  const controls = secGetControls();
+  renderSecPipeline([], 'starting');
+  try {
+    const res = await fetch(`${API}/investigations/${currentInv}/security/assess`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        product_name: document.getElementById('secProduct').value,
+        product_url: document.getElementById('secUrl').value,
+        exposure: document.getElementById('secExposure').value,
+        use_case: document.getElementById('secUseCase').value,
+        workflow_text: document.getElementById('secWorkflow').value,
+        doc_urls: docs, focus, declared_controls: controls,
+        require_approval: document.getElementById('secRequireApproval').checked,
+      }),
+    });
+    if (res.status === 429) { showNotif('A security assessment is already running here', 'error'); btn.disabled = false; return; }
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    secRunId = data.run_id;
+    secTabBadge('running', 'running…');
+    showNotif(`Security agent started (${controls.length} control(s) declared) — orchestrator → control-analyst → collector → intel → writer`, 'success');
+    pollSecurityRun();
+    secPollTimer = setInterval(pollSecurityRun, 2500);
+  } catch (e) {
+    el.innerHTML = '<div class="sec-card"><p style="color:var(--red)">Failed to start assessment.</p></div>';
+    btn.disabled = false;
+  }
+}
+
+const SEC_PIPELINE = [
+  { agent: 'control-analyst', intent: 'analyse_controls' },
+  { agent: 'research-collector', intent: 'collect_research' },
+  { agent: 'threat-intel', intent: 'map_attacks' },
+  { agent: 'scoring engine', intent: 'deterministic' },
+  { agent: 'report-writer', intent: 'write_section' },
+];
+
+function renderSecPipeline(trace, currentStage) {
+  const box = document.getElementById('secPipe');
+  if (!box) return;
+  const notes = {};
+  (trace || []).forEach(h => { if (h && h.agent) notes[h.agent] = h.note || ''; });
+  const doneAgents = new Set((trace || []).map(h => h.agent).filter(Boolean));
+  box.innerHTML = SEC_PIPELINE.map((hop, i) => {
+    let cls = 'wait';
+    if (doneAgents.has(hop.agent)) cls = 'done';
+    if (currentStage === hop.agent) cls = 'active';
+    return `<div class="sec-hop ${cls}">
+      <div class="sec-hop-intent"><span class="sec-hop-dot"></span>${i + 1}. ${escHtml(hop.intent)}</div>
+      <div class="sec-hop-name">${escHtml(hop.agent)}</div>
+      <div class="sec-hop-note">${escHtml(notes[hop.agent] || (cls === 'wait' ? 'pending' : 'done'))}</div>
+    </div>`;
+  }).join('');
+}
+
+async function pollSecurityRun() {
+  if (!secRunId) return;
+  try {
+    const ev = await (await fetch(`${API}/runs/${secRunId}/events?after_id=${secLastEvent || 0}`)).json();
+    const log = document.getElementById('secLog');
+    const stages = [];
+    for (const e of ev.events || []) {
+      secLastEvent = Math.max(secLastEvent || 0, e.id);
+      if (log) log.insertAdjacentHTML('beforeend',
+        `<div style="font-size:12px;"><span style="color:var(--teal);font-weight:600;">${escHtml(e.stage)}</span> — ${escHtml(e.message)}</div>`);
+      if (e.stage === 'controls') stages.push('control-analyst');
+      if (e.stage === 'search') stages.push('research-collector');
+      if (e.stage === 'analyze') stages.push('threat-intel');
+      if (e.stage === 'score') stages.push('scoring engine');
+      if (e.stage === 'map') stages.push('report-writer');
+    }
+    if (stages.length) {
+      const box = document.getElementById('secPipe');
+      if (box) renderSecPipeline(
+        SEC_PIPELINE.filter(h => stages.includes(h.agent)).map(h => ({ agent: h.agent, note: '' })),
+        stages[stages.length - 1]);
+    }
+    if (ev.status === 'awaiting_approval') {
+      renderSecGate(secRunId, log ? log.innerHTML : '');
+      secTabBadge('approval', 'approval needed');
+      return;
+    }
+    if (ev.status === 'done' || ev.status === 'error') {
+      clearInterval(secPollTimer); secPollTimer = null;
+      document.getElementById('secRunBtn').disabled = false;
+      if (ev.status === 'done') {
+        const full = await (await fetch(`${API}/runs/${secRunId}`)).json();
+        const aid = full.stats && full.stats.assessment_id;
+        if (aid) { loadSecurityById(aid); showNotif('Security assessment complete', 'success'); }
+      } else showNotif('Security assessment failed — see Agent console run #' + secRunId, 'error');
+      secTabBadge('');
+      loadSecurityHistory();
+    }
+  } catch (e) {}
+}
+let secLastEvent = 0;
+
+function secTabBadge(kind, text) {
+  const b = document.getElementById('secTabBadge');
+  if (!b) return;
+  if (!kind || !text) { b.style.display = 'none'; b.textContent = ''; return; }
+  b.style.display = '';
+  b.textContent = text;
+  b.style.background = kind === 'approval' ? 'var(--orange)' : 'var(--teal)';
+  b.style.color = kind === 'approval' ? '#1a1a1a' : '#fff';
+}
+
+async function renderSecGate(runId, logHtml) {
+  let plan = {};
+  try {
+    const run = await (await fetch(`${API}/runs/${runId}`)).json();
+    plan = (run.stats && run.stats.control_plan) || {};
+  } catch (e) {}
+  const declared = plan.declared_controls || [];
+  const proposed = plan.proposed_controls || [];
+  const conf = plan.confidence !== undefined ? Math.round(plan.confidence * 100) + '%' : '—';
+  const el = document.getElementById('secResult');
+  el.innerHTML = `
+    <div class="sec-card" style="border-color:var(--teal);">
+      <h3><i class="fas fa-user-check"></i> Approval required — control plan</h3>
+      <p>The <strong>control-analyst</strong> agent finished and is waiting for your confirmation before research, threat mapping, scoring and reporting continue.</p>
+      <div class="sec-formula">source: <code>${escHtml(plan.source || 'n/a')}</code> · confidence: <strong>${conf}</strong></div>
+      <h4>Controls it will treat as in place (${declared.length})</h4>
+      <div class="sec-dist">${declared.length ? declared.map(c => `<span style="background:rgba(88,166,255,0.15);color:var(--accent)">${escHtml(c)}</span>`).join('') : '<span style="color:var(--text2)">none — residual will equal inherent</span>'}</div>
+      ${proposed.length ? `<h4>Recommended additions (${proposed.length})</h4>
+        <div style="font-size:12px;">${proposed.map(p => `<div style="padding:4px 0;border-bottom:1px solid var(--border)"><strong>${escHtml(p.id)}</strong> ${escHtml(p.name || '')} <button class="btn btn-ghost btn-sm" onclick="secGateAddControl('${escHtml(p.id)}')">add</button></div>`).join('')}</div>` : ''}
+      <div class="sec-btn-row">
+        <button class="btn btn-primary btn-sm" onclick="secGateResolve(${runId}, 'approve')"><i class="fas fa-check"></i> Approve &amp; continue</button>
+        <button class="btn btn-ghost btn-sm" onclick="secGateResolve(${runId}, 'reject')" style="color:var(--red);"><i class="fas fa-times"></i> Reject</button>
+      </div>
+    </div>
+    <div class="sec-card"><h3><i class="fas fa-terminal"></i> Agent log so far</h3><div class="sec-log">${logHtml || ''}</div></div>`;
+}
+
+function secGateAddControl(cid) {
+  const cb = document.getElementById('ctl_' + cid);
+  if (cb && !cb.checked) { cb.checked = true; secToggleControl(cid); }
+}
+
+async function secGateResolve(runId, decision) {
+  const active = secGetControls();
+  try {
+    const res = await fetch(`${API}/security/runs/${runId}/approval`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ decision, active_controls: active }),
+    });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    if (decision === 'reject') {
+      clearInterval(secPollTimer); secPollTimer = null;
+      document.getElementById('secRunBtn').disabled = false;
+      showNotif('Control plan rejected', 'info');
+      return;
+    }
+    secLastEvent = 0;
+    document.getElementById('secRunBtn').disabled = true;
+    showNotif('Approved — agent continuing', 'success');
+    pollSecurityRun();
+    secPollTimer = setInterval(pollSecurityRun, 2500);
+  } catch (e) { showNotif('Gate action failed', 'error'); }
+}
+
+function secEnsureMermaid(root) {
+  const nodes = root.querySelectorAll('.mermaid');
+  if (!nodes.length) return;
+  const run = () => {
+    try {
+      window.mermaid.initialize({ startOnLoad: false, theme: 'dark', securityLevel: 'strict' });
+      window.mermaid.run({ nodes: [...nodes], suppressErrors: true });
+    } catch (e) { console.warn('mermaid render failed', e); }
+  };
+  if (window.mermaid) { run(); return; }
+  if (document.getElementById('mermaid-lib')) { const t = setInterval(() => { if (window.mermaid) { clearInterval(t); run(); } }, 500); return; }
+  const s = document.createElement('script');
+  s.id = 'mermaid-lib';
+  s.src = 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js';
+  s.onload = run;
+  document.head.appendChild(s);
+}
+
+function secRoleThreats() {
+  return SEC_ROLE_THREATS[secAudience] || [];
+}
+
+function secIsRoleThreat(id) {
+  return secRoleThreats().includes(id);
+}
+
+function secInvTotal() {
+  const p = secPerspectives.find(x => x.investigation);
+  return p ? ((p.investigation || {}).total_artifacts || 0) : 0;
+}
+
+function secSubtabBar() {
+  const counts = {
+    threats: (secLastScore && secLastScore.threats ? secLastScore.threats.length : 0),
+    controls: (secControlCatalog || []).length,
+    artifacts: secInvTotal(),
+    evidence: (secLastScore ? ((secLastScore.evidence || []).length + (secLastScore.known_exploits || []).length) : 0),
+  };
+  return '<div class="sec-subtabs">' + SEC_SUBTABS.map(t => {
+    const n = t.count ? counts[t.count] : null;
+    return `<button class="sec-subtab${t.key === secSubTab ? ' on' : ''}" data-key="${t.key}" onclick="secSwitchSubTab('${t.key}')">` +
+      `<i class="fas ${t.icon}"></i>${escHtml(t.label)}` +
+      (n !== null && n !== undefined ? `<span class="sec-subtab-n">${n}</span>` : '') + '</button>';
+  }).join('') + '</div>';
+}
+
+function secSwitchSubTab(key) {
+  if (!SEC_SUBTABS.some(t => t.key === key)) return;
+  secSubTab = key;
+  document.querySelectorAll('.sec-subtab').forEach(b => {
+    b.classList.toggle('on', b.dataset.key === key);
+  });
+  if (secSubPanes) {
+    secSubPanes.forEach(p => { p.hidden = p.dataset.sub !== key; });
+  }
+  const el = document.getElementById('secResult');
+  if (el) secEnsureMermaid(el);
+}
+
+function secAudienceBar() {
+  if (!secPerspectives.length) return '';
+  return '<div class="sec-audbar">' + secPerspectives.map(p =>
+    `<button class="sec-aud-chip${p.key === secAudience ? ' on' : ''}" data-key="${escHtml(p.key)}" onclick="secSwitchAudience('${escHtml(p.key)}')">` +
+    `<i class="fas ${escHtml(p.icon || 'fa-user')}"></i>${escHtml(p.label)}</button>`).join('') + '</div>';
+}
+
+function secSwitchAudience(key) {
+  if (!secPerspectives.some(p => p.key === key)) return;
+  secAudience = key;
+  document.querySelectorAll('.sec-aud-chip').forEach(b => {
+    b.classList.toggle('on', b.dataset.key === key);
+  });
+  const host = document.getElementById('secAudPanel');
+  if (host) host.innerHTML = secAudiencePanel();
+  const invHost = document.getElementById('secInvPane');
+  if (invHost) invHost.innerHTML = secInvestigationPane();
+  secApplyRoleHighlights();
+}
+
+function secInvestigationPane() {
+  const p = secPerspectives.find(x => x.key === secAudience);
+  const inv = (p && p.investigation) || null;
+  if (!inv || !inv.total_artifacts) {
+    return '<div class="sec-card"><h3><i class="fas fa-diagram-project"></i> Investigation view</h3>' +
+      '<p style="color:var(--text2);font-size:12px;">No investigation artifacts are attached to this assessment. ' +
+      'Re-run the agent from an investigation that has collected sources, then the per-role view will populate.</p></div>';
+  }
+  const stats = [
+    { v: inv.total_artifacts, k: 'Artifacts in scope' },
+    { v: inv.matched, k: 'Match this role' },
+    { v: inv.coverage_pct + '%', k: 'Role coverage' },
+    { v: inv.cited, k: 'Cited as evidence' },
+  ].map(s => `<div class="sec-inv-stat"><div class="sec-inv-stat-v">${escHtml(String(s.v))}</div>` +
+             `<div class="sec-inv-stat-k">${escHtml(s.k)}</div></div>`).join('');
+  const domains = (inv.domains || []).map(d => `<span>${escHtml(d)}</span>`).join('');
+  const arts = (inv.artifacts || []).map(a => {
+    const title = a.url
+      ? `<a href="${escHtml(a.url)}" target="_blank" rel="noopener">${escHtml(a.title)}</a>`
+      : escHtml(a.title);
+    const hits = (a.hits || []).map(h => `<span>${escHtml(h)}</span>`).join('');
+    return '<div class="sec-art">' +
+      `<div class="sec-art-id">#${escHtml(String(a.id))}</div>` +
+      '<div class="sec-art-main">' +
+        `<div class="sec-art-title">${title}</div>` +
+        `<div class="sec-art-meta">${escHtml(a.type || '')} · relevance ${Number(a.relevance || 0).toFixed(2)}</div>` +
+        (a.snippet ? `<div class="sec-art-snip">${escHtml(String(a.snippet).slice(0, 180))}…</div>` : '') +
+        (hits ? `<div class="sec-art-hits">${hits}</div>` : '') +
+      '</div></div>';
+  }).join('');
+  return '<div class="sec-card">' +
+    `<h3><i class="fas fa-diagram-project"></i> Investigation — ${escHtml(p.label)} lens</h3>` +
+    '<p style="font-size:12px;color:var(--text2);">Artifacts from this investigation ranked for the selected role. ' +
+    'Switch the audience above to re-rank; the underlying corpus is shared, only the lens changes.</p>' +
+    `<div class="sec-inv-stats">${stats}</div>` +
+    (domains ? `<div class="sec-aud-focus">${domains}</div>` : '') +
+    (arts || '<p style="color:var(--text2);font-size:12px;">No artifacts matched this role\'s terms.</p>') +
+    '</div>';
+}
+
+function secAudiencePanel() {
+  const p = secPerspectives.find(x => x.key === secAudience);
+  if (!p) return '<div class="sec-aud-panel"><span style="color:var(--text2);font-size:12px;">No audience highlights available for this assessment.</span></div>';
+  const metrics = (p.metrics || []).map(m =>
+    `<div class="sec-aud-metric"><div class="sec-aud-metric-v ${escHtml(m.tone || '')}">${escHtml(String(m.v))}</div>` +
+    `<div class="sec-aud-metric-k">${escHtml(m.k)}</div></div>`).join('');
+  const bullets = (p.bullets || []).map(b =>
+    `<li class="${escHtml(b.tone || '')}">${escHtml(b.text)}</li>`).join('');
+  const focus = (p.focus || []).map(f => `<span>${escHtml(f)}</span>`).join('');
+  const inv = p.investigation || {};
+  const invLine = inv.total_artifacts
+    ? `<div class="sec-aud-role"><i class="fas fa-diagram-project"></i> ${inv.matched} of ${inv.total_artifacts} ` +
+      `investigation artifacts match this role (${inv.coverage_pct}%), ${inv.cited} cited as evidence.` +
+      (inv.domains && inv.domains.length ? ' Domains: ' + escHtml(inv.domains.slice(0, 3).join(', ')) : '') + '</div>'
+    : '';
+  return '<div class="sec-aud-panel">' +
+    `<div class="sec-aud-head"><i class="fas ${escHtml(p.icon || 'fa-user')}"></i>${escHtml(p.label)}</div>` +
+    `<div class="sec-aud-headline">${escHtml(p.headline || '')}</div>` +
+    (metrics ? `<div class="sec-aud-metrics">${metrics}</div>` : '') +
+    (bullets ? `<ul class="sec-aud-bullets">${bullets}</ul>` : '') +
+    (focus ? `<div class="sec-aud-focus">${focus}</div>` : '') +
+    invLine +
+    '</div>';
+}
+
+function secApplyRoleHighlights() {
+  const role = secRoleThreats();
+  document.querySelectorAll('[data-tid]').forEach(node => {
+    node.classList.toggle('sec-role-hi', role.includes(node.dataset.tid));
+  });
+  document.querySelectorAll('.sec-role-tag').forEach(node => { node.remove(); });
+  if (!role.length) return;
+  document.querySelectorAll('tr[data-tid]').forEach(tr => {
+    if (!role.includes(tr.dataset.tid)) return;
+    const cell = tr.querySelector('td');
+    if (cell && !cell.querySelector('.sec-role-tag')) {
+      cell.insertAdjacentHTML('beforeend', '<span class="sec-role-tag">role</span>');
+    }
+  });
+}
+
+function secThreatScore(t) {
+  // backward compat with pre-residual rows
+  if (t.residual_score !== undefined) return t.residual_score;
+  return t.score !== undefined ? t.score : 0;
+}
+function secThreatInherent(t) {
+  if (t.inherent_score !== undefined) return t.inherent_score;
+  return (t.likelihood || 0) * (t.impact || 0);
+}
+function secThreatSeverity(t) {
+  return t.residual_severity || t.severity || 'Low';
+}
+function secThreatCoverage(t) {
+  return t.coverage !== undefined ? t.coverage : 0;
+}
+function secThreatApplicable(t) {
+  return t.applicable !== undefined ? t.applicable : true;
+}
+
+function renderSecurityReport(data) {
+  const el = document.getElementById('secResult');
+  secPerspectives = Array.isArray(data.perspectives) ? data.perspectives : [];
+  if (!secPerspectives.some(p => p && p.key === secAudience)) {
+    secAudience = secPerspectives.length ? secPerspectives[0].key : 'executive';
+  }
+  secLastScore = {
+    inherent_pct: data.inherent_pct !== null && data.inherent_pct !== undefined ? data.inherent_pct : data.overall_pct,
+    residual_pct: data.residual_pct !== null && data.residual_pct !== undefined ? data.residual_pct : data.overall_pct,
+    threats: data.threats || [],
+    evidence: data.evidence || [],
+    known_exploits: data.known_exploits || [],
+  };
+  const residual = secLastScore.residual_pct;
+  const inherent = secLastScore.inherent_pct;
+  const color = secSeverityColor(residual);
+  const inhColor = secSeverityColor(inherent);
+  const threats = data.threats || [];
+  const dg = data.diagrams || {};
+  const bd = (data.scoring && data.scoring.breakdown) || {};
+  const dist = (data.scoring && data.scoring.distribution) || {};
+  const activeCtrls = data.active_controls || [];
+  const plan = data.control_plan || {};
+  const explo = data.known_exploits || [];
+  const resDist = dist.residual || {};
+  const inhDist = dist.inherent || {};
+  const distHtml = (d) => Object.entries(d).map(([k, v]) => {
+    const col = k === 'Critical' ? 'var(--red)' : k === 'High' ? 'var(--orange)' : k === 'Medium' ? 'var(--accent)' : 'var(--text2)';
+    return `<span style="background:${col}22;color:${col}">${k} ${v}</span>`;
+  }).join('');
+
+  // ---- score explainer ----
+  const gauge = `
+    <div class="sec-gauge">
+      <div class="sec-metric"><div class="sec-metric-v" style="color:${inhColor}">${inhColor ? inherent : '—'}</div><div class="sec-metric-k">inherent</div></div>
+      <div class="sec-gauge-track" title="inherent ${inherent} → residual ${residual}">
+        <div class="sec-gauge-inherent" style="width:${Math.min(100, inherent)}%"></div>
+        <div class="sec-gauge-residual" style="width:${Math.min(100, residual)}%"></div>
+        <div class="sec-gauge-label">residual ${residual} / 100</div>
+      </div>
+      <div class="sec-metric"><div class="sec-metric-v" style="color:${color}">${residual}</div><div class="sec-metric-k">residual</div></div>
+      <div class="sec-metric"><div class="sec-metric-v" style="color:var(--green)">${(inherent - residual).toFixed(1)}</div><div class="sec-metric-k">risk removed</div></div>
+      <div class="sec-metric"><div class="sec-metric-v" style="font-size:14px;">${activeCtrls.length}</div><div class="sec-metric-k">controls</div></div>
+      <div class="sec-metric"><div class="sec-metric-v" style="font-size:14px;">${plan.confidence !== undefined ? Math.round(plan.confidence * 100) + '%' : '—'}</div><div class="sec-metric-k">confidence</div></div>
+    </div>
+    <div class="sec-dist" style="margin-top:8px;">${distHtml(inhDist)}<span style="color:var(--text2)">→</span>${distHtml(resDist)}<span style="color:var(--text2);font-size:10.5px;">(inherent → residual severity mix)</span></div>
+    <div class="sec-formula">
+      <strong>How this score is derived</strong> (deterministic — same inputs, same number):<br/>
+      • per threat <code>inherent = L × I</code> on a 1–5 matrix, <code>L</code> scaled by exposure weight (${bd.exposure_label || data.exposure} = ${bd.exposure_weight !== undefined ? bd.exposure_weight : '—'})<br/>
+      • <code>residual = L × (1 − coverage) × I</code>, coverage = declared controls for that threat combined with diminishing returns; likelihood floors at ${Math.round((bd.min_residual_floor || 0.35) * 100)}% of inherent<br/>
+      • <code>overall = 100 × (${bd.worst_weight || 0.55} × mean(top-${bd.top_n || 5}) + ${bd.breadth_weight || 0.45} × mean(all))</code> over ${bd.applicable_threats || threats.length} applicable threats (${bd.n_threats_excluded || 0} out of scope)<br/>
+      • severity bands: ≥20 Critical · ≥12 High · ≥6 Medium · else Low
+      ${plan.source ? `<br/>• control plan from <code>control-analyst</code>: ${escHtml(plan.source)}` : ''}
+    </div>`;
+
+  // ---- what-if ----
+  const whatIf = `
+    <div class="sec-whatif">
+      <strong style="font-size:12px;"><i class="fas fa-flask"></i> What-if:</strong>
+      <span style="font-size:11.5px;color:var(--text2)">tick controls on the left to recompute instantly (no LLM, no re-run).</span>
+      <div id="secWhatIfOut" style="display:flex;align-items:center;gap:12px;flex:1 1 100%;flex-wrap:wrap;"></div>
+    </div>`;
+
+  // ---- threat register ----
+  const rows = threats.map(t => {
+    const sev = secThreatSeverity(t);
+    const app_ = secThreatApplicable(t);
+    const cov = secThreatCoverage(t);
+    return `<tr${app_ ? '' : ' style="opacity:0.55;"'}>
+      <td><strong>${escHtml(t.id)}</strong>${app_ ? '' : '<br/><span style="font-size:9.5px;color:var(--text2)">out of scope</span>'}</td>
+      <td>${escHtml(t.title)}<br/><span style="color:var(--text2);font-size:10.5px;">${escHtml(t.owasp || '')}</span></td>
+      <td style="white-space:nowrap;">L${t.likelihood}×I${t.impact}<br/><span style="color:var(--text2)">=${secThreatInherent(t)}</span></td>
+      <td style="white-space:nowrap;">${cov}%<br/><span style="color:var(--text2);font-size:10px;">${escHtml((t.controls || []).join(', ') || 'none')}</span></td>
+      <td style="white-space:nowrap;"><strong>${secThreatScore(t)}</strong></td>
+      <td><span class="sev-${sev}">${sev}</span></td>
+    </tr>`;
+  }).join('');
+
+  const details = threats.map(t => {
+    const sev = secThreatSeverity(t);
+    return `<div class="sec-card"><h4>${escHtml(t.id)} — ${escHtml(t.title)} <span class="sev-${sev}">${sev}</span></h4>
+      <p style="color:var(--text2)"><em>${escHtml(t.stride || '')} · ${escHtml(t.owasp || '')} · inherent ${secThreatInherent(t)} → residual ${secThreatScore(t)} (${secThreatCoverage(t)}% covered${t.applicability !== undefined ? `, applicability ${Math.round(t.applicability * 100)}%` : ''})</em></p>
+      <p>${escHtml(t.description || '')}</p>
+      ${(t.controls || []).length ? `<p style="color:var(--teal)"><i class="fas fa-shield-halved"></i> Covered by: ${escHtml(t.controls.join(', '))}</p>` : ''}
+      <ul style="margin-left:18px;">${(t.mitigations || []).map(m => `<li>${escHtml(m)}</li>`).join('')}</ul></div>`;
+  }).join('');
+
+  let exploitsHtml;
+  if (!explo.length) {
+    exploitsHtml = '<p style="color:var(--text2)">No known-attack catalogue entries matched — see §6 of the full report.</p>';
+  } else {
+    exploitsHtml = '<div style="overflow-x:auto;"><table class="sec-table"><tr><th>ID</th><th>Known attack</th><th>Maps to</th><th>In-app research</th></tr>' +
+      explo.map(k => {
+        const refs = (k.local_refs || []).map(r => `#${r.artifact_id} ${escHtml(r.title)}`).join('<br/>') || '<span style="color:var(--text2)">none — run the collector on this topic</span>';
+        return `<tr><td><strong>${escHtml(k.id)}</strong></td><td>${escHtml(k.title)}<br/><span style="color:var(--text2);font-size:10.5px;">${escHtml(k.attack_class || '')}</span><br/><span style="font-size:11px;">${escHtml(k.relevance || '')}</span></td><td>${(k.threat_ids || []).join(', ')}</td><td>${refs}</td></tr>`;
+      }).join('') + '</table></div>';
+    const evd = data.evidence || [];
+    if (evd.length) {
+      exploitsHtml += `<h4>Top in-app evidence (agentic search${data.scope ? ' — ' + escHtml(data.scope) : ''})</h4><ul style="margin-left:18px;font-size:12px;">` +
+        evd.slice(0, 6).map(e => `<li>#${e.artifact_id} ${escHtml(e.title)} <span style="color:var(--text2)">· relevance ${e.relevance} · ${escHtml(e.reason || '')}</span></li>`).join('') + '</ul>';
+    }
+  }
+
+  const trace = data.a2a_trace || [];
+  const traceHtml = trace.length
+    ? '<ol style="margin-left:18px;font-size:12px;">' + trace.map(h => {
+        const io = (h.inputs || h.outputs)
+          ? `<div style="font-size:10.5px;color:var(--text2);margin-top:2px;">`
+            + (h.inputs ? `<div><span style="color:var(--teal)">in:</span> ${escHtml(h.inputs)}</div>` : '')
+            + (h.outputs ? `<div><span style="color:var(--teal)">out:</span> ${escHtml(h.outputs)}</div>` : '')
+            + '</div>' : '';
+        return `<li><strong>${escHtml(h.agent)}</strong> · ${escHtml(h.intent)} <span style="color:var(--text2)">· ${escHtml(h.at || '')}${h.note ? ' — ' + escHtml(h.note) : ''}</span>${io}</li>`;
+      }).join('') + '</ol>'
+    : '<span style="color:var(--text2)">No A2A trace recorded.</span>';
+  const queries = data.queries_run || [];
+  const queriesHtml = queries.length
+    ? '<h4>Agentic search queries (research-collector)</h4><ul style="margin-left:18px;font-size:12px;">' + queries.map(q => `<li><code>${escHtml(q)}</code></li>`).join('') + '</ul>'
+    : '';
+  const execPara = data.exec_paragraph ? `<p style="border-left:3px solid var(--teal);padding:6px 12px;background:var(--bg3);border-radius:0 6px 6px 0;">${escHtml(data.exec_paragraph)}</p>` : '';
+
+  // controls-in-place summary
+  const controlsHtml = secControlCatalog.length ? secControlCatalog.map(c => {
+    const on = activeCtrls.includes(c.id);
+    return `<tr><td><strong>${escHtml(c.id)}</strong></td><td>${escHtml(c.name)}<br/><span style="color:var(--text2);font-size:10.5px;">${escHtml(c.description || '')}</span></td>
+      <td>${Math.round((c.efficacy || 0) * 100)}%</td><td>${escHtml(Object.keys(c.threats || {}).join(', '))}</td>
+      <td>${on ? '<span style="color:var(--green);font-weight:700">in place</span>' : '<span style="color:var(--text2)">—</span>'}</td></tr>`;
+  }).join('') : '';
+  const proposed = plan.proposed_controls || [];
+
+  const paneOverview = `
+    <div class="sec-card"><h3><i class="fas fa-user-group"></i> Highlights for this audience</h3>
+      ${secPerspectives.length ? '' : '<div style="color:var(--text2);font-size:12px;">This assessment predates audience highlights — re-run to generate them.</div>'}
+      <div id="secAudPanel"></div>
+    </div>
+    ${execPara}
+    ${whatIf}
+    <div class="sec-card"><h3><i class="fas fa-diagram-project"></i> Agent pipeline</h3><div class="sec-pipe" id="secPipe"></div>
+      <div class="sec-formula">A2A protocol <code>a2a/1.0</code>: orchestrator → <strong>control-analyst</strong> (applicability + controls) → research-collector (in-app graph search) → threat-intel (attacks + confidence) → <strong>scoring engine</strong> (deterministic L×I math) → report-writer.</div>
+    </div>
+    <div class="sec-card"><h3><i class="fas fa-diagram-project"></i> Data-flow &amp; trust boundary</h3><div class="diagram-wrap"><div class="mermaid">${escHtml(dg.dataflow || '')}</div></div>
+      <h4>Threat paths</h4><div class="diagram-wrap"><div class="mermaid">${escHtml(dg.threat_paths || '')}</div></div>
+      <h4>Secure workflow</h4><div class="diagram-wrap"><div class="mermaid">${escHtml(dg.workflow || '')}</div></div>
+    </div>`;
+
+  const paneThreats = `
+    <div class="sec-card"><h3><i class="fas fa-triangle-exclamation"></i> Threat &amp; risk register</h3>
+      ${secRoleThreats().length ? `<div class="sec-aud-role">Rows highlighted are the ones this role owns — switch audience above to change the lens.</div>` : ''}
+      <div style="overflow-x:auto;"><table class="sec-table"><tr><th>ID</th><th>Threat</th><th>L×I (inherent)</th><th>Coverage</th><th>Residual</th><th>Severity</th></tr>${rows}</table></div>
+    </div>
+    ${details}`;
+
+  const paneControls = `
+    <div class="sec-card"><h3><i class="fas fa-shield-halved"></i> Security controls in scope</h3>
+      <div style="overflow-x:auto;"><table class="sec-table"><tr><th>ID</th><th>Control</th><th>Efficacy</th><th>Threats</th><th>Status</th></tr>${controlsHtml}</table></div>
+      ${proposed.length ? `<h4>Recommended additions</h4><ul style="margin-left:18px;font-size:12px;">${proposed.map(p => `<li><strong>${escHtml(p.id)}</strong> ${escHtml(p.name || '')}</li>`).join('')}</ul>` : ''}
+    </div>`;
+
+  const paneInvestigation = `<div id="secInvPane">${secInvestigationPane()}</div>`;
+
+  const paneEvidence = `
+    <div class="sec-card"><h3><i class="fas fa-bug"></i> Known exploits &amp; research evidence</h3>${exploitsHtml}
+      ${queriesHtml}</div>`;
+
+  const paneAgents = `
+    <div class="sec-card"><h3><i class="fas fa-route"></i> Agent-to-agent trail</h3>${traceHtml}</div>`;
+
+  const paneReport = `
+    <div class="sec-card"><h3><i class="fas fa-file-lines"></i> Full report (Markdown)</h3><div class="sec-md" id="secMarkdown"></div></div>`;
+
+  el.innerHTML = `
+    <div class="sec-card">
+      <h3><i class="fas fa-file-shield"></i> Executive summary — ${escHtml(data.product_name)}</h3>
+      <div class="sec-score"><div class="sec-score-num" style="color:${color}">${residual}<span style="font-size:14px;">/100</span></div>
+      <div><div class="sec-posture" style="color:${color}">${escHtml(data.posture || '')}</div>
+      <div style="font-size:11.5px;color:var(--text2)">Residual after controls · inherent was ${inherent} · exposure <strong>${escHtml(data.exposure || '')}</strong> · ${threats.length} threats · ${explo.length} known exploits · run #${data.run_id || '—'}${data.a2a_task_id ? ' · A2A ' + escHtml(data.a2a_task_id) : ''}</div></div></div>
+      ${gauge}
+      <div class="sec-btn-row">
+        <button class="btn btn-primary btn-sm" onclick="downloadSecurityMarkdown()"><i class="fas fa-file-lines"></i> Markdown</button>
+        <button class="btn btn-ghost btn-sm" onclick="downloadSecurityPDF()"><i class="fas fa-file-pdf"></i> PDF</button>
+        <button class="btn btn-ghost btn-sm" onclick="window.print()"><i class="fas fa-print"></i> Print</button>
+      </div>
+      ${secAudienceBar()}
+      ${secSubtabBar()}
+    </div>
+    <div class="sec-pane" data-sub="overview"${secSubTab === 'overview' ? '' : ' hidden'}>${paneOverview}</div>
+    <div class="sec-pane" data-sub="threats"${secSubTab === 'threats' ? '' : ' hidden'}>${paneThreats}</div>
+    <div class="sec-pane" data-sub="controls"${secSubTab === 'controls' ? '' : ' hidden'}>${paneControls}</div>
+    <div class="sec-pane" data-sub="investigation"${secSubTab === 'investigation' ? '' : ' hidden'}>${paneInvestigation}</div>
+    <div class="sec-pane" data-sub="evidence"${secSubTab === 'evidence' ? '' : ' hidden'}>${paneEvidence}</div>
+    <div class="sec-pane" data-sub="agents"${secSubTab === 'agents' ? '' : ' hidden'}>${paneAgents}</div>
+    <div class="sec-pane" data-sub="report"${secSubTab === 'report' ? '' : ' hidden'}>${paneReport}</div>`;
+  const mdEl = document.getElementById('secMarkdown');
+  if (mdEl) mdEl.innerHTML = renderMarkdownLite(data.markdown || '');
+  secSubPanes = Array.from(el.querySelectorAll('.sec-pane'));
+  const audHost = document.getElementById('secAudPanel');
+  if (audHost) audHost.innerHTML = secAudiencePanel();
+  secApplyRoleHighlights();
+  renderSecPipeline(trace, null);
+  // reflect the stored control set in the controls panel
+  if (activeCtrls.length || (data.active_controls || []).length === 0) {
+    secControlCatalog.forEach(c => {
+      const cb = document.getElementById('ctl_' + c.id);
+      const row = document.querySelector(`.sec-ctl[data-cid="${c.id}"]`);
+      const on = activeCtrls.includes(c.id);
+      if (cb) cb.checked = on;
+      if (row) row.classList.toggle('on', on);
+    });
+    secUpdateCtlCount();
+  }
+  secRunWhatIf();
+  secEnsureMermaid(el);
+}
+
+function mdTableBlock(block) {
+  const rows = block.map(r => r.trim().replace(/^\||\|$/g, '').split('|').map(c => c.trim()));
+  const isSep = cells => cells.length && cells.every(c => /^:?-{1,}:?$/.test(c));
+  const sepIdx = rows.findIndex(isSep);
+  const head = sepIdx === 1 ? rows[0] : null;
+  const body = rows.filter((_, idx) => idx !== sepIdx && !(sepIdx === 1 && idx === 0));
+  let html = '<table class="sec-table">';
+  if (head) html += '<tr>' + head.map(c => `<th>${c}</th>`).join('') + '</tr>';
+  for (const r of body) html += '<tr>' + r.map(c => `<td>${c}</td>`).join('') + '</tr>';
+  return html + '</table>';
+}
+
+function renderMarkdownLite(md) {
+  let h = escHtml(md);
+  h = h.replace(/^### (.*)$/gm, '<h4>$1</h4>').replace(/^## (.*)$/gm, '<h3>$1</h3>').replace(/^# (.*)$/gm, '<h2>$1</h2>');
+  h = h.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  h = h.replace(/^&gt; (.*)$/gm, '<blockquote>$1</blockquote>');
+  h = h.replace(/```mermaid[\s\S]*?```/g, '<p><em>(diagram — see illustrated panels above)</em></p>');
+  // pipe tables: consecutive |...| lines → <table> (first row = header when followed by separator)
+  const lines = h.split('\n');
+  const out = [];
+  const isRow = l => /^\|.+\|\s*$/.test(l.trim());
+  let i = 0;
+  while (i < lines.length) {
+    if (isRow(lines[i])) {
+      const block = [];
+      while (i < lines.length && isRow(lines[i])) { block.push(lines[i]); i++; }
+      out.push(mdTableBlock(block));
+    } else { out.push(lines[i]); i++; }
+  }
+  h = out.join('\n');
+  h = h.replace(/^- (.*)$/gm, '<li>$1</li>');
+  h = h.replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>');
+  h = h.replace(/\n\n/g, '<br/><br/>');
+  return h;
+}
+
+function downloadSecurityMarkdown() {
+  if (!secAssessmentId) return;
+  window.open(`${API}/security/assessments/${secAssessmentId}/markdown`, '_blank');
+}
+
+async function downloadSecurityPDF() {
+  if (!secAssessmentId) return;
+  const res = await fetch(`${API}/security/assessments/${secAssessmentId}/pdf`);
+  if (res.status === 501) { showNotif('Server PDF needs reportlab — use Print → Save as PDF', 'error'); window.print(); return; }
+  if (!res.ok) { showNotif('PDF export failed', 'error'); return; }
+  const blob = await res.blob();
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `security-assessment-${secAssessmentId}.pdf`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+
+async function loadSecurityHistory() {
+  if (!currentInv) { showNotif('Select an investigation first', 'error'); return; }
+  const el = document.getElementById('secHistory');
+  el.innerHTML = '<span style="color:var(--text2)">Loading…</span>';
+  try {
+    const data = await (await fetch(`${API}/investigations/${currentInv}/security/assessments`)).json();
+    if (!data.items || !data.items.length) { el.innerHTML = '<span style="color:var(--text2)">No assessments yet for this investigation.</span>'; return; }
+    el.innerHTML = data.items.map(i => `<div style="padding:6px 0;border-bottom:1px solid var(--border);"><a href="#" onclick="loadSecurityById(${i.id});return false;" style="color:var(--accent);">#${i.id} ${escHtml(i.product_name)}</a> <span style="color:var(--text2)">· ${escHtml(i.exposure)} · ${i.overall_pct}/100 · ${i.exploit_count} exploits</span></div>`).join('');
+  } catch (e) { el.innerHTML = '<span style="color:var(--red)">Failed to load history</span>'; }
+}
+
+function secSetField(id, value) {
+  const el = document.getElementById(id);
+  if (el) el.value = (value == null) ? '' : String(value);
+}
+
+function secPopulateForm(d) {
+  if (!d) return;
+  secSetField('secProduct', d.product_name);
+  secSetField('secUrl', d.product_url);
+  secSetField('secUseCase', d.use_case);
+  secSetField('secWorkflow', d.workflow_text);
+  secSetField('secDocs', (d.doc_urls || []).join('\n'));
+  const exp = document.getElementById('secExposure');
+  if (exp && d.exposure) {
+    const known = Array.from(exp.options).some(o => o.value === d.exposure);
+    if (known) exp.value = d.exposure;
+  }
+  const ap = document.getElementById('secRequireApproval');
+  if (ap) ap.checked = !!d.require_approval;
+  const focus = new Set(d.focus || []);
+  const copy = document.getElementById('secFocusCopy');
+  const mis = document.getElementById('secFocusMisclass');
+  if (copy || mis) {
+    if (copy) copy.checked = focus.has('sensitive_disclosure') || focus.has('accidental_copy') || focus.has('data_extraction');
+    if (mis) mis.checked = focus.has('misclassification') || focus.has('governance');
+  }
+  secUpdateCtlCount();
+}
+
+async function loadSecurityById(id) {
+  try {
+    const data = await (await fetch(`${API}/security/assessments/${id}`)).json();
+    secAssessmentId = data.id;
+    if (data.investigation_id && data.investigation_id !== currentInv) {
+      currentInv = data.investigation_id;
+      const sel = document.getElementById('secInvSelect');
+      if (sel) sel.value = String(currentInv);
+      updateSecInvName();
+    }
+    secPopulateForm(data);
+    renderSecurityReport(data);
+  } catch (e) { showNotif('Failed to load assessment', 'error'); }
+}
 
 window.addEventListener('resize', () => { if (network) network.fit({ animation: false }); });
 </script>

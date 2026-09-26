@@ -1,0 +1,7 @@
+node_modules
+dist
+outputs
+models
+.git
+.DS_Store
+backups

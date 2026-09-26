@@ -63,6 +63,15 @@ _MIGRATIONS = [
     ("explanations", "watched", "INTEGER NOT NULL DEFAULT 0"),
     ("investigations", "preferred_domains", "VARCHAR(500)"),
     ("investigations", "auto_save_explanations", "INTEGER NOT NULL DEFAULT 1"),
+    ("security_assessments", "inherent_pct", "FLOAT"),
+    ("security_assessments", "residual_pct", "FLOAT"),
+    ("security_assessments", "controls_json", "TEXT"),
+    ("security_assessments", "scoring_json", "TEXT"),
+    ("security_assessments", "workflow_text", "TEXT"),
+    ("security_assessments", "doc_urls_json", "TEXT"),
+    ("security_assessments", "focus_json", "TEXT"),
+    ("security_assessments", "require_approval", "INTEGER"),
+    ("security_assessments", "perspectives_json", "TEXT"),
 ]
 
 
@@ -71,5 +80,7 @@ def ensure_columns():
         for table, column, ddl in _MIGRATIONS:
             cols = [r[1] for r in
                     conn.execute(text(f"PRAGMA table_info({table})")).fetchall()]
+            if not cols:
+                continue  # table not created yet (model not imported); create_all will make it
             if column not in cols:
                 conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"))
