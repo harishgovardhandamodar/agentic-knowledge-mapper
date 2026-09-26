@@ -200,18 +200,74 @@ def chat(messages: list, model: str = MODEL, temperature: float = 0.2,
     return text
 
 
-def chat_json(messages: list, model: str = MODEL, temperature: float = 0.2,
-              max_tokens: int = 2048) -> dict | list:
-    """Chat completion parsed as JSON (tolerates code fences / prose)."""
-    text = chat(messages, model=model, temperature=temperature, max_tokens=max_tokens)
-    cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", text.strip(), flags=re.IGNORECASE)
+def _parse_json_lenient(text: str):
+    """Parse model output as JSON, tolerating the ways models actually break it.
+
+    Small models in particular emit pretty-printed JSON with literal newlines
+    inside strings, trailing commas, and prose around the payload. Strict
+    parsing turns any of that into a total failure -- and for a 15KB deep-dive
+    answer, *some* deviation is the norm, not the exception. Each repair is
+    tried in order of fidelity: the first parse that succeeds wins, so clean
+    output takes exactly the same path as before.
+    """
+    cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", (text or "").strip(),
+                     flags=re.IGNORECASE)
+    attempts = []
     try:
         return json.loads(cleaned)
-    except json.JSONDecodeError:
-        m = re.search(r"(\{.*\}|\[.*\])", cleaned, flags=re.DOTALL)
-        if m:
-            return json.loads(m.group(1))
-        raise LLMError(f"LLM did not return JSON: {text[:300]}")
+    except json.JSONDecodeError as e:
+        attempts.append(f"strict: {e}")
+    try:
+        # Literal control characters (real newlines/tabs) inside strings: the
+        # single most common model-JSON defect. Still exact otherwise.
+        return json.loads(cleaned, strict=False)
+    except json.JSONDecodeError as e:
+        attempts.append(f"lenient-controls: {e}")
+    # Find the first balanced {...} or [...] span instead of the greedy
+    # first-brace-to-last-brace regex, which breaks when trailing prose
+    # contains braces of its own. When several spans parse (e.g. citation
+    # markers like "[1], [2]" in leading prose), the longest one wins: the
+    # real payload dwarfs any accidental fragment.
+    decoder = json.JSONDecoder(strict=False)
+    best = None
+    for i, ch in enumerate(cleaned):
+        if ch not in "{[":
+            continue
+        try:
+            obj, end = decoder.raw_decode(cleaned[i:])
+        except json.JSONDecodeError as e:
+            attempts.append(f"span@{i}: {e}")
+            continue
+        if best is None or end > best[1]:
+            best = (obj, end)
+    if best is not None:
+        return best[0]
+    # Last resort: drop trailing commas before } and ], then re-try the span.
+    repaired = re.sub(r",\s*([}\]])", r"\1", cleaned)
+    if repaired != cleaned:
+        best = None
+        for i, ch in enumerate(repaired):
+            if ch not in "{[":
+                continue
+            try:
+                obj, end = decoder.raw_decode(repaired[i:])
+            except json.JSONDecodeError:
+                continue
+            if best is None or end > best[1]:
+                best = (obj, end)
+        if best is not None:
+            return best[0]
+        attempts.append("trailing-comma repair failed")
+    raise LLMError(f"LLM did not return JSON ({'; '.join(attempts[:3])}): "
+                   f"{(text or '')[:300]}")
+
+
+def chat_json(messages: list, model: str = MODEL, temperature: float = 0.2,
+              max_tokens: int = 2048) -> dict | list:
+    """Chat completion parsed as JSON (tolerates code fences / prose / the
+    usual model formatting defects -- see _parse_json_lenient)."""
+    text = chat(messages, model=model, temperature=temperature, max_tokens=max_tokens)
+    return _parse_json_lenient(text)
 
 
 def health() -> dict:

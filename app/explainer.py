@@ -6,6 +6,7 @@ Runs in a background thread; the GUI polls the Explanation record.
 import json
 import re
 import contextvars
+import io
 import threading
 import time
 import traceback
@@ -96,6 +97,22 @@ def _graph_pages(artifacts: list) -> list:
     return out
 
 
+def _artifact_candidates(db, inv_id: int, limit: int = 10) -> list:
+    """The investigation's own artifacts as attachable items: most relevant
+    first. Fail-open (empty list) so a DB hiccup never breaks composition."""
+    try:
+        rows = (db.query(Artifact)
+                .filter(Artifact.investigation_id == inv_id)
+                .order_by(Artifact.relevance.desc().nulls_last(),
+                          Artifact.id.desc())
+                .limit(limit).all())
+        return [{"id": r.id, "title": r.title or f"artifact {r.id}",
+                 "url": r.url or "", "kind": r.artifact_type or "link"}
+                for r in rows]
+    except Exception:
+        return []
+
+
 def _abs_url(base: str, src: str) -> str:
     try:
         u = urllib.parse.urljoin(base, (src or "").strip())
@@ -106,11 +123,112 @@ def _abs_url(base: str, src: str) -> str:
     return ""
 
 
-def _fetch_page(url: str) -> dict | None:
+# Documents worth attaching, not just reading: presentations, reports, papers.
+_DOC_EXTS = {"pdf": "pdf", "pptx": "slides", "ppt": "slides",
+             "docx": "doc", "doc": "doc", "txt": "text"}
+_DOC_MIMES = {"application/pdf": "pdf",
+              "application/vnd.ms-powerpoint": "slides",
+              "application/vnd.openxmlformats-officedocument.presentationml.presentation": "slides",
+              "application/msword": "doc",
+              "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "doc",
+              "text/plain": "text"}
+_DOC_MAX_BYTES = 15 * 1024 * 1024
+_DOC_MAX_PAGES = 15
+
+
+def _doc_kind(url: str, content_type: str = "") -> str:
+    """Classify a URL as an attachable document ('', 'pdf', 'slides', 'doc',
+    'text'). Extension first (works before downloading), MIME as backup."""
+    try:
+        path = urllib.parse.urlparse(url or "").path.lower()
+        ext = path.rsplit(".", 1)[-1] if "." in path.rsplit("/", 1)[-1] else ""
+        if ext in _DOC_EXTS:
+            return _DOC_EXTS[ext]
+    except Exception:
+        pass
+    ctype = (content_type or "").split(";")[0].strip().lower()
+    return _DOC_MIMES.get(ctype, "")
+
+
+def _pretty_doc_title(url: str, hint: str = "") -> str:
+    if hint and hint.strip():
+        return hint.strip()[:200]
+    try:
+        stem = urllib.parse.unquote(
+            urllib.parse.urlparse(url).path.rsplit("/", 1)[-1])
+        stem = re.sub(r"\.(pdf|pptx?|docx?|txt)$", "", stem, flags=re.I)
+        stem = re.sub(r"[-_+]+", " ", stem).strip()
+        if stem:
+            return stem[:200]
+    except Exception:
+        pass
+    return url
+
+
+def _extract_pptx_text(content: bytes, limit_chars: int = TEXT_CAP) -> tuple:
+    """Slide text from a .pptx with stdlib only (a pptx is a zip of XML;
+    slide copy lives in <a:t> nodes). Returns (text, slide_count)."""
+    import zipfile
+    import xml.etree.ElementTree as ET
+    try:
+        slides = []
+        with zipfile.ZipFile(io.BytesIO(content)) as z:
+            names = sorted(n for n in z.namelist()
+                           if re.fullmatch(r"ppt/slides/slide\d+\.xml", n))
+            for name in names:
+                try:
+                    root = ET.fromstring(z.read(name))
+                except ET.ParseError:
+                    continue
+                texts = [t.text for t in root.iter()
+                         if t.tag.endswith("}t") and (t.text or "").strip()]
+                if texts:
+                    slides.append("\n".join(texts))
+        text = re.sub(r"\s+", " ", "\n\n".join(slides))[:limit_chars]
+        return text, len(slides)
+    except Exception:
+        return "", 0
+
+
+def _fetch_document(url: str, kind: str, content: bytes,
+                    hint_title: str = "") -> dict:
+    """Fetch result for a document URL. Text is extracted when a parser exists
+    (PDF via pypdf, PPTX via stdlib); anything else attaches as metadata-only
+    so the user can still open it. Never raises: worst case is a link."""
+    title = _pretty_doc_title(url, hint_title)
+    text, npages = "", None
+    if content and len(content) <= _DOC_MAX_BYTES:
+        try:
+            if kind == "pdf":
+                from pypdf import PdfReader
+                reader = PdfReader(io.BytesIO(content))
+                npages = len(reader.pages)
+                parts = []
+                for page in reader.pages[:_DOC_MAX_PAGES]:
+                    try:
+                        parts.append(page.extract_text() or "")
+                    except Exception:
+                        continue
+                text = re.sub(r"\s+", " ", "\n\n".join(parts))[:TEXT_CAP]
+            elif kind == "slides" and url.lower().endswith(".pptx"):
+                text, npages = _extract_pptx_text(content)
+        except Exception:
+            text, npages = "", None
+    return {"url": url, "title": title, "text": text, "images": [],
+            "published": None, "doc_kind": kind, "doc_pages": npages}
+
+
+def _fetch_page(url: str, hint_title: str = "") -> dict | None:
     try:
         with httpx.Client(timeout=PAGE_TIMEOUT, headers=UA, follow_redirects=True) as client:
-            r = client.get(url, headers={"Accept": "text/html"})
-            if r.status_code != 200 or "html" not in (r.headers.get("content-type") or ""):
+            r = client.get(url, headers={"Accept": "text/html,application/pdf;q=0.9,*/*;q=0.5"})
+            if r.status_code != 200:
+                return None
+            ctype = r.headers.get("content-type") or ""
+            kind = _doc_kind(url, ctype)
+            if kind:
+                return _fetch_document(url, kind, r.content, hint_title)
+            if "html" not in ctype:
                 return None
             soup = BeautifulSoup(r.text[:500000], "html.parser")
     except Exception:
@@ -133,8 +251,23 @@ def _fetch_page(url: str) -> dict | None:
                                               "pixel", "tracking", "badge")):
             continue
         alt = (img.get("alt") or "")[:200]
+        # Context the filename filters cannot see: figcaption, or the nearest
+        # heading / paragraph. A hero stock photo on an SEO page has none of
+        # these pointing at the article topic, which is exactly what lets the
+        # relevance gate below tell it apart from a real figure.
+        caption = ""
+        fig = img.find_parent("figure")
+        if fig is not None:
+            cap = fig.find("figcaption")
+            if cap is not None:
+                caption = cap.get_text(" ", strip=True)[:300]
+        if not caption:
+            prev = img.find_previous(["h1", "h2", "h3", "p"])
+            if prev is not None:
+                caption = prev.get_text(" ", strip=True)[:300]
         if all(i["src"] != src for i in images):
-            images.append({"src": src, "alt": alt, "hero": False})
+            images.append({"src": src, "alt": alt, "caption": caption,
+                           "hero": False})
         if len(images) >= 6:
             break
     return {"url": url, "title": title or url, "text": text, "images": images,
@@ -174,7 +307,7 @@ def _research(question: str, max_pages: int = MAX_PAGES, trace: dict | None = No
               extra_queries: list | None = None, preferred_domains: list | None = None,
               corpus: dict | None = None, expand_terms: list | None = None
               ) -> tuple[list, list, int]:
-    """Returns (pages, image_candidates, corpus_hits_used)."""
+    """Returns (pages, image_candidates, document_candidates, corpus_hits_used)."""
     trace = trace if trace is not None else {}
     if extra_queries:
         queries = extra_queries[:3]
@@ -238,10 +371,14 @@ def _research(question: str, max_pages: int = MAX_PAGES, trace: dict | None = No
         else:
             results.append({"kind": "fetch", "url": url})
     to_fetch = [r["url"] for r in results if r["kind"] == "fetch"]
+    hit_titles = {}
+    for h in hits:
+        hit_titles.setdefault((h.get("url") or "").lower(), h.get("title") or "")
     fetched_map = {}
     if to_fetch:
         with ThreadPoolExecutor(max_workers=6) as pool:
-            for page in pool.map(_fetch_page, to_fetch):
+            jobs = [(u, hit_titles.get(u.lower(), "")) for u in to_fetch]
+            for page in pool.map(lambda t: _fetch_page(*t), jobs):
                 if page and page.get("url"):
                     fetched_map[page["url"].lower()] = page
     for r in results:
@@ -255,11 +392,25 @@ def _research(question: str, max_pages: int = MAX_PAGES, trace: dict | None = No
             if page:
                 pages.append(page)
     kept = [p for p in pages if p.get("text") and len(p.get("text") or "") >= MIN_PAGE_CHARS]
+    # Document attachments: every fetched PDF/deck/doc becomes a candidate,
+    # even text-less ones (metadata-only still opens for the user). HTML pages
+    # are already covered by the sources list, so they stay out of here.
+    documents = []
+    for p in pages:
+        if p.get("doc_kind"):
+            if all(d["url"] != p["url"] for d in documents):
+                documents.append({"url": p["url"],
+                                  "title": p.get("title") or p["url"],
+                                  "kind": p["doc_kind"],
+                                  "pages": p.get("doc_pages")})
+            if len(documents) >= 10:
+                break
     pages = kept[:max_pages]
     reject_urls = [u for u in tried if u.lower() not in {p["url"].lower() for p in pages}]
     trace.setdefault("timings_ms", {})["fetch"] = int((time.time() - t0) * 1000)
     trace.setdefault("fetched", []).extend({
-        "url": page["url"], "title": page["title"], "kept": True, "reason": "page",
+        "url": page["url"], "title": page["title"], "kept": True,
+        "reason": "document" if page.get("doc_kind") else "page",
         "chars": len(page["text"]), "images": len(page["images"]),
         "cached": bool(page.get("cached")),
     } for page in pages)
@@ -267,6 +418,8 @@ def _research(question: str, max_pages: int = MAX_PAGES, trace: dict | None = No
         "url": u, "title": "", "kept": False, "reason": "unreadable",
         "chars": 0, "images": 0,
     } for u in reject_urls)
+    trace.setdefault("documents", []).extend(
+        {"url": d["url"], "title": d["title"], "kind": d["kind"]} for d in documents)
     images = []
     for p in pages:
         for img in p.get("images") or []:
@@ -274,7 +427,7 @@ def _research(question: str, max_pages: int = MAX_PAGES, trace: dict | None = No
                 images.append({**img, "page": p.get("title", "")[:80], "page_url": p.get("url")})
             if len(images) >= 14:
                 break
-    return pages[:max_pages], images, cached
+    return pages[:max_pages], images, documents, cached
 
 
 MODES = {
@@ -340,6 +493,151 @@ def _norm(s):
     return re.sub(r"\s+", " ", (s or "").lower()).strip()
 
 
+def _coerce_answer(raw):
+    """Accept the envelope object, a bare top-level array of sections, or a
+    single section object.
+
+    Small models return all three shapes in the wild; coercing beats failing.
+    Anything else keeps failing loudly so the repair ladder can try a simpler
+    schema instead of crashing downstream.
+    """
+    if isinstance(raw, dict):
+        if isinstance(raw.get("sections"), list):
+            return raw
+        if isinstance(raw.get("heading"), str) and isinstance(raw.get("body"), str):
+            env = dict(raw)
+            sec = {k: env.pop(k) for k in ("heading", "body", "image", "claims")
+                   if k in env}
+            env["sections"] = [sec]
+            return env
+        raise ValueError("explanation object has no sections")
+    if isinstance(raw, list):
+        sections = [x for x in raw if isinstance(x, dict)]
+        if sections:
+            return {"sections": sections}
+    raise ValueError(f"expected an explanation object, got {type(raw).__name__}")
+
+
+_STOPWORDS = set(
+    "the a an and or of to in on for with as at by from is are was were be been "
+    "it its this that these those they them their he she we you your our ours "
+    "his her him us our they than then than so such no nor not only own same too "
+    "very can will just should now how what when where which who whom why all any "
+    "both each few more most other some into over after before between out about "
+    "up down off above below during including using used use uses often also may "
+    "might must shall per via within without within".split())
+
+
+def _valid_documents(proposed: list, candidates: list, limit: int = 6) -> list:
+    """Keep only model-proposed documents that match a fetched candidate URL.
+    Normalizes trailing slashes so equivalent URLs agree."""
+    by_url = {(c.get("url") or "").rstrip("/").lower(): c for c in (candidates or [])}
+    out = []
+    for d in (proposed or [])[:limit]:
+        if not isinstance(d, dict):
+            continue
+        key = (d.get("url") or "").rstrip("/").lower()
+        cand = by_url.get(key)
+        if cand and cand.get("url"):
+            out.append({"title": (d.get("title") or cand.get("title") or cand["url"])[:200],
+                        "url": cand["url"], "kind": cand.get("kind") or "link",
+                        "pages": cand.get("pages")})
+    return out
+
+
+def _valid_artifacts(proposed: list, candidates: list, limit: int = 6) -> list:
+    """Keep only model-proposed artifacts whose id was offered as a candidate."""
+    by_id = {c.get("id"): c for c in (candidates or []) if c.get("id") is not None}
+    out = []
+    for a in (proposed or [])[:limit]:
+        if not isinstance(a, dict):
+            continue
+        cand = by_id.get(a.get("id"))
+        if cand:
+            out.append({"id": cand["id"], "title": cand["title"],
+                        "url": cand.get("url") or "", "kind": cand.get("kind") or "link"})
+    return out
+
+
+def _content_tokens(s: str) -> list:
+    """Lowercased word tokens minus stopwords; short tokens dropped so 'AI'
+    and 'de' don't manufacture relevance out of nothing."""
+    return [w for w in re.findall(r"[a-z0-9]{3,}", (s or "").lower())
+            if w not in _STOPWORDS]
+
+
+def _image_score(heading: str, body: str, img: dict) -> tuple:
+    """Shared-vocabulary score between a section and one image candidate.
+
+    Signals are the image's alt text, its caption/context, and its page title
+    -- everything except pixels. The heading counts double: a figure captioned
+    with the section's own topic is the strongest non-visual signal available.
+    Returns (score, matched_tokens).
+    """
+    from collections import Counter
+    sec = Counter(_content_tokens(heading) * 2 + _content_tokens(body))
+    sig = Counter(_content_tokens(img.get("alt") or "") +
+                  _content_tokens(img.get("caption") or "") +
+                  _content_tokens(img.get("page") or ""))
+    shared = sum(min(sec[t], sig[t]) for t in sig if t in sec)
+    matched = sorted(t for t in sig if t in sec)
+    return shared, matched
+
+
+def _assign_images(answer: dict, images: list, min_score: int = 3) -> dict:
+    """Deterministically (re)assign one image per section, or none.
+
+    The model picks images from a bag of candidates and will happily attach a
+    stock hero from an SEO page to an unrelated section. So the model's pick
+    only survives if it scores; otherwise the best-scoring candidate wins, and
+    sections with no candidate above the bar get no image at all. Images from
+    pages the section actually cites get a bonus, grounding the figure to the
+    section's evidence. Also stamps ``image_caption`` for display.
+    """
+    by_url = {i.get("src"): i for i in (images or []) if i.get("src")}
+    src_urls = [s.get("url") for s in (answer.get("sources") or [])
+                if isinstance(s, dict) and s.get("url")]
+    for sec in (answer.get("sections") or []):
+        if not isinstance(sec, dict):
+            continue
+        heading = sec.get("heading") or ""
+        body = sec.get("body") or ""
+        cited = set()
+        for c in (sec.get("claims") or []):
+            if not isinstance(c, dict):
+                continue
+            for cit in (c.get("citations") or []):
+                idx = cit.get("sourceIndex") if isinstance(cit, dict) else None
+                if isinstance(idx, int) and 0 <= idx < len(src_urls):
+                    cited.add(src_urls[idx])
+        ranked = []
+        for img in by_url.values():
+            score, matched = _image_score(heading, body, img)
+            if img.get("page_url") in cited:
+                score += 2
+            ranked.append((score, img.get("hero", False), matched, img))
+        ranked.sort(key=lambda r: (r[0], r[1]), reverse=True)
+        pick = sec.get("image")
+        if pick in by_url:
+            img = by_url[pick]
+            score, _ = _image_score(heading, body, img)
+            if img.get("page_url") in cited:
+                score += 2
+            if score >= min_score:
+                sec["image_caption"] = (img.get("caption")
+                                        or img.get("alt") or "")[:200]
+                continue
+        if ranked and ranked[0][0] >= min_score:
+            best = ranked[0][3]
+            sec["image"] = best.get("src")
+            sec["image_caption"] = (best.get("caption")
+                                    or best.get("alt") or "")[:200]
+        else:
+            sec["image"] = None
+            sec.pop("image_caption", None)
+    return answer
+
+
 def _quote_valid(text: str, quote: str) -> bool:
     nq = _norm(quote)
     nt = _norm(text)
@@ -359,8 +657,12 @@ def _verify_grounding(answer: dict, pages: list) -> dict:
              "corroboration": {"strong": 0, "moderate": 0, "weak": 0}}
     texts = [p["text"] for p in pages]
     for sec in (answer.get("sections") or []):
+        if not isinstance(sec, dict):
+            continue
         new_claims = []
         for c in (sec.get("claims") or []):
+            if not isinstance(c, dict):
+                continue
             stats["claims_total"] += 1
             kept = []
             for cit in (c.get("citations") or [])[:3]:
@@ -392,7 +694,8 @@ def _verify_grounding(answer: dict, pages: list) -> dict:
 
 def _compose(question: str, pages: list, images: list, mode: str = "explain",
              depth: str = "balanced", audience: str = "intermediate",
-             max_tokens: int = 4096, section_plan: list | None = None) -> dict:
+             max_tokens: int = 4096, section_plan: list | None = None,
+             documents: list | None = None, artifact_cands: list | None = None) -> dict:
     m = mode or "explain"
     ctx = []
     for i, p in enumerate(pages):
@@ -402,8 +705,17 @@ def _compose(question: str, pages: list, images: list, mode: str = "explain",
         line += f"\n{p['text'][:2500]}"
         ctx.append(line)
     img_list = "\n".join(
-        f"- {img['src']} (from: {img['page']}; alt: {img['alt'][:100]})"
+        f"- {img['src']} (from: {img['page']}; alt: {img.get('alt', '')[:100]}"
+        f"{'; context: ' + img['caption'][:150] if img.get('caption') else ''})"
         for img in images)
+    doc_list = "\n".join(
+        f"- {d['url']} ({d.get('kind') or 'link'}; {d.get('title', '')[:120]}"
+        f"{'; ' + str(d['pages']) + ' pages' if d.get('pages') else ''})"
+        for d in (documents or []))
+    art_list = "\n".join(
+        f"- id {a['id']}: {a.get('title', '')[:120]}"
+        f"{' (' + a['url'] + ')' if a.get('url') else ''}"
+        for a in (artifact_cands or []))
     mode_rules = _mode_rules(m, depth)
     aud_hint = AUDIENCE_HINTS.get(audience, AUDIENCE_HINTS["intermediate"])
     section_hint = ""
@@ -433,7 +745,7 @@ def _compose(question: str, pages: list, images: list, mode: str = "explain",
     answer = None
     for step in schema_steps:
         try:
-            answer = llm.chat_json([
+            answer = _coerce_answer(llm.chat_json([
                 {"role": "system",
                  "content": ("You are a technical explainer. Write a clear, accurate explanation "
                              "grounded ONLY in the provided sources (prefix graph:// = this project's "
@@ -444,15 +756,23 @@ def _compose(question: str, pages: list, images: list, mode: str = "explain",
                  "content": (f"Question: {question}\n\nAudience: {aud_hint}\n\n{mode_rules}"
                              f"{section_hint}\n\n"
                              f"Source budget: {len(pages)} sources.\n\nSources:\n" + "\n\n".join(ctx) +
-                             f"\n\nCandidate images (reference EXACT URLs, don't invent):\n{img_list or '(none)'}\n\n"
+                              f"\n\nCandidate images (reference EXACT URLs, don't invent; set a section's "
+                              f"\"image\" only when the image actually depicts that section's topic, else null):\n{img_list or '(none)'}\n\n"
+                              f"Candidate documents, attach the ones that help understand this topic "
+                              f"(reference EXACT URLs, don't invent):\n{doc_list or '(none)'}\n\n"
+                              f"This investigation's own artifacts, attach the relevant ones by id:\n{art_list or '(none)'}\n\n"
                              "Reply JSON: {\"summary\": str (2-3 sentences), " + step["json"] + ", "
                              "\"as_of\": str (today's date YYYY-MM-DD), "
                              "\"conflicts\": [{\"topic\": str, \"view_a\": str, \"view_b\": str, "
                              "\"sources_a\": [int], \"sources_b\": [int]}] (only include when sources "
                              "disagree on a substantive point, max 3), "
                              "\"key_points\": [str x3-6], plus any additional keys your mode rules require. "
-                             "\"sources\": [{\"title\": str, \"url\": str}] (only URLs from the sources above)}")}],
-                max_tokens=max_tokens)
+                             "\"sources\": [{\"title\": str, \"url\": str}] (only URLs from the sources above), "
+                             "\"documents\": [{\"title\": str, \"url\": str}] (only URLs from the candidate "
+                             "documents above, max 6 — PDFs, decks, reports that help understand the topic), "
+                             "\"artifacts\": [{\"id\": int, \"title\": str}] (only ids from this investigation's "
+                             "artifacts above, max 6)}")}],
+                max_tokens=max_tokens))
             break
         except Exception as e:
             answer = None
@@ -460,14 +780,18 @@ def _compose(question: str, pages: list, images: list, mode: str = "explain",
     if answer is None:
         raise RuntimeError(f"LLM could not produce valid JSON explanation ({last_err})")
     valid_srcs = {p["url"] for p in pages}
-    valid_imgs = {i["src"] for i in images}
-    for s in (answer.get("sections") or []):
-        if s.get("image") not in valid_imgs:
-            s["image"] = None
     answer["sources"] = [s for s in (answer.get("sources") or [])
                          if isinstance(s, dict) and s.get("url") in valid_srcs][: len(pages)]
     if not answer.get("sources"):
         answer["sources"] = [{"title": p["title"], "url": p["url"]} for p in pages]
+    # Deterministic image gate: the model's per-section picks survive only if
+    # they actually match the section; otherwise the best-scoring candidate
+    # wins, or the section gets no image rather than a random one.
+    _assign_images(answer, images)
+    # Attachments are validated the same strict way as sources: invented URLs
+    # and unknown artifact ids are dropped, never rendered.
+    answer["documents"] = _valid_documents(answer.get("documents"), documents)
+    answer["artifacts"] = _valid_artifacts(answer.get("artifacts"), artifact_cands)
     n_src = len(answer["sources"])
     conflicts = []
     for c in (answer.get("conflicts") or [])[:3]:
@@ -1029,7 +1353,7 @@ def run_explainer(exp_id: int, max_pages: int = MAX_PAGES, max_hops: int = 0):
                 db.rollback()
 
         set_phase("researching")
-        pages, images, answer, grounding = [], [], None, None
+        pages, images, documents, answer, grounding = [], [], [], None, None
         seen_urls = set()
         hop_list = []
         for hop in range(max_hops + 1):
@@ -1050,10 +1374,13 @@ def run_explainer(exp_id: int, max_pages: int = MAX_PAGES, max_hops: int = 0):
                         sq = [s.get("sub_question") for s in section_plan[:3]
                               if s.get("sub_question")]
                         extra = list(dict.fromkeys((extra or []) + sq))
-                    hop_pages, images, cached_n = _research(
+                    hop_pages, images, new_docs, cached_n = _research(
                         exp.question, max_pages, trace=trace, extra_queries=extra,
                         corpus=corpus_map, expand_terms=expand_terms,
                         preferred_domains=pref_domains)
+                    for d in new_docs:
+                        if all(x["url"] != d["url"] for x in documents):
+                            documents.append(d)
                     trace["corpus_cache_hits"] += cached_n
                     if corpus_ctx:
                         have = {p["url"] for p in hop_pages}
@@ -1065,11 +1392,14 @@ def run_explainer(exp_id: int, max_pages: int = MAX_PAGES, max_hops: int = 0):
                 missing = hop_list[-1].get("missing_topics", [])[:2]
                 if not missing:
                     break
-                hop_pages, new_img, cached_n = _research(
+                hop_pages, new_img, new_docs, cached_n = _research(
                     exp.question, max(int(max_pages * 0.4), 2), trace=trace,
                     extra_queries=missing, corpus=corpus_map, expand_terms=expand_terms,
                     preferred_domains=pref_domains)
                 images += new_img
+                for d in new_docs:
+                    if all(x["url"] != d["url"] for x in documents):
+                        documents.append(d)
                 trace["corpus_cache_hits"] += cached_n
                 hop_list[-1]["new_pages"] = len(
                     [p for p in hop_pages if p["url"] not in seen_urls])
@@ -1090,9 +1420,11 @@ def run_explainer(exp_id: int, max_pages: int = MAX_PAGES, max_hops: int = 0):
                           "images": [], "explanation_id": parent.id, "graph_id": None}] + pages
                 parent = None  # only once
             set_phase("composing")
+            artifact_cands = _artifact_candidates(db, exp.investigation_id)
             answer = _compose(exp.question, pages[:12], images, mode=mode, depth=depth,
                               audience=audience, max_tokens=max_tokens,
-                              section_plan=section_plan)
+                              section_plan=section_plan, documents=documents,
+                              artifact_cands=artifact_cands)
             grounding = _verify_grounding(answer, pages)
             eval_res = _eval_answer(exp.question, answer)
             if eval_res.get("needs_more") and (hop + 1) <= max_hops:

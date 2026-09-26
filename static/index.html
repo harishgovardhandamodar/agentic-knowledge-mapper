@@ -806,6 +806,13 @@ body.pane-sec-top-collapsed .sec-topbar-sub { display: none; }
     <div class="overlay-body" id="overlayBody"></div>
   </div>
 </div>
+<div class="overlay" id="secSevOverlay">
+  <div class="overlay-panel">
+    <button class="overlay-close" onclick="closeSecSeverityOverlay()"><i class="fas fa-times"></i></button>
+    <div class="overlay-header" id="secSevHeader"></div>
+    <div class="overlay-body" id="secSevBody"></div>
+  </div>
+</div>
 
 <div class="notif" id="notif"></div>
 
@@ -1340,6 +1347,7 @@ function closeOverlay() {
 
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape' && overlayOpen) closeOverlay();
+  if (e.key === 'Escape') closeSecSeverityOverlay();
 });
 
 function fitGraph() { network?.fit({ animation: true }); }
@@ -1756,7 +1764,8 @@ function renderExplanation(exp) {
     if (s.image) {
       let host = '';
       try { host = new URL(s.image).hostname; } catch (e) {}
-      html += `<figure><img src="${escHtml(s.image)}" loading="lazy" alt="${escHtml(s.heading || 'illustration')}" onerror="this.closest('figure').remove()" /><figcaption>Illustration · ${escHtml(host)}</figcaption></figure>`;
+      const cap = s.image_caption || ('Illustration · ' + host);
+      html += `<figure><img src="${escHtml(s.image)}" loading="lazy" alt="${escHtml(s.image_caption || s.heading || 'illustration')}" onerror="this.closest('figure').remove()" /><figcaption>${escHtml(cap)}${s.image_caption && host ? ` · ${escHtml(host)}` : ''}</figcaption></figure>`;
     }
   });
   if (a.comparison && a.comparison.length) {
@@ -1788,6 +1797,16 @@ function renderExplanation(exp) {
   if (a.practice) html += `<div style="margin:10px 0;background:var(--bg3);border-radius:6px;padding:10px 12px;"><b><i class="fas fa-pen-nib"></i> Practice</b><br/>${mdInline(a.practice)}</div>`;
   if (a.key_points && a.key_points.length) {
     html += `<div class="kp-box"><strong><i class="fas fa-key"></i> Key points</strong><ul style="margin:6px 0 0 18px;">${a.key_points.map(k => `<li>${mdInline(k)}</li>`).join('')}</ul></div>`;
+  }
+  if ((a.documents && a.documents.length) || (a.artifacts && a.artifacts.length)) {
+    const docIcon = k => k === 'pdf' ? '<i class="fas fa-file-pdf" style="color:var(--red)"></i>'
+      : k === 'slides' ? '<i class="fas fa-file-powerpoint" style="color:var(--orange)"></i>'
+      : k === 'doc' ? '<i class="fas fa-file-word" style="color:var(--accent)"></i>'
+      : '<i class="fas fa-file-lines" style="color:var(--text2)"></i>';
+    const docHost = u => { try { return new URL(u).hostname; } catch (e) { return ''; } };
+    html += `<h4 style="font-size:11px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text2);margin:12px 0 6px;">Attached documents &amp; artifacts</h4>` +
+      (a.documents || []).map(d => `<div class="src-row">${docIcon(d.kind)} <a href="${escHtml(d.url)}" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none;">${escHtml(d.title || d.url)}</a> <span style="color:var(--text2);font-size:10.5px;">${escHtml(docHost(d.url))}${d.pages ? ` · ${d.pages} pages` : ''}</span></div>`).join('') +
+      (a.artifacts || []).map(t => `<div class="src-row"><i class="fas fa-database" style="color:var(--text2)"></i> ${t.id ? `<a href="#" onclick="openDetailOverlay(${t.id});return false" style="color:var(--accent);">` : ''}${escHtml(t.title || ('artifact ' + t.id))}${t.id ? '</a>' : ''} <span style="color:var(--text2);font-size:10.5px;">${t.url ? `<a href="${escHtml(t.url)}" target="_blank" rel="noopener" style="color:var(--text2);">open source</a> · ` : ''}from this investigation</span></div>`).join('');
   }
   if (a.sources && a.sources.length) {
     html += `<h4 style="font-size:11px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text2);margin:12px 0 6px;">Sources</h4>` +
@@ -3857,11 +3876,43 @@ function secThreatInherent(t) {
 function secThreatSeverity(t) {
   return t.residual_severity || t.severity || 'Low';
 }
+function secBand(score) {
+  // Same bands the report prints under the mix: ≥20 Critical · ≥12 High · ≥6 Medium · else Low.
+  const s = Number(score) || 0;
+  return s >= 20 ? 'Critical' : s >= 12 ? 'High' : s >= 6 ? 'Medium' : 'Low';
+}
 function secThreatCoverage(t) {
   return t.coverage !== undefined ? t.coverage : 0;
 }
 function secThreatApplicable(t) {
   return t.applicable !== undefined ? t.applicable : true;
+}
+
+function openSecSeverityOverlay(band, side) {
+  // Lists the threat-register items behind one severity-mix chip, e.g. the
+  // "High 8" on the residual side. Reads the current report's threats, so the
+  // overlay always matches what the mix was computed from.
+  const threats = (secLastScore && secLastScore.threats) || [];
+  const match = threats.filter(t =>
+    (side === 'inherent' ? secBand(secThreatInherent(t)) : secThreatSeverity(t)) === band);
+  const head = document.getElementById('secSevHeader');
+  const body = document.getElementById('secSevBody');
+  head.innerHTML = `<div style="font-size:14px;font-weight:600;">
+      <span class="sev-${band}">${band}</span> findings · ${side}
+      <span style="color:var(--text2);font-weight:400;">(${match.length})</span></div>`;
+  body.innerHTML = match.length ? match.map(t => {
+    const app_ = secThreatApplicable(t);
+    const sev = side === 'inherent' ? secBand(secThreatInherent(t)) : secThreatSeverity(t);
+    return `<div class="overlay-section"${app_ ? '' : ' style="opacity:0.55;"'}>
+      <h4><span class="sev-${sev}">${sev}</span> ${escHtml(t.id)}${app_ ? '' : ' · out of scope'}</h4>
+      <p><strong>${escHtml(t.title)}</strong>${t.owasp ? `<br/><span style="color:var(--text2);font-size:11.5px;">${escHtml(t.owasp)}</span>` : ''}</p>
+      <p style="font-size:11.5px;color:var(--text2);">L${t.likelihood}×I${t.impact} = ${secThreatInherent(t)} inherent · ${secThreatCoverage(t)}% coverage · residual <strong style="color:var(--text);">${secThreatScore(t)}</strong>${(t.controls || []).length ? ` · ${escHtml(t.controls.join(', '))}` : ''}</p>
+    </div>`;
+  }).join('') : '<div class="overlay-section"><p>No findings in this band.</p></div>';
+  document.getElementById('secSevOverlay').classList.add('visible');
+}
+function closeSecSeverityOverlay() {
+  document.getElementById('secSevOverlay').classList.remove('visible');
 }
 
 function renderSecurityReport(data) {
@@ -3891,9 +3942,9 @@ function renderSecurityReport(data) {
   const explo = data.known_exploits || [];
   const resDist = dist.residual || {};
   const inhDist = dist.inherent || {};
-  const distHtml = (d) => Object.entries(d).map(([k, v]) => {
+  const distHtml = (d, side) => Object.entries(d).map(([k, v]) => {
     const col = k === 'Critical' ? 'var(--red)' : k === 'High' ? 'var(--orange)' : k === 'Medium' ? 'var(--accent)' : 'var(--text2)';
-    return `<span style="background:${col}22;color:${col}">${k} ${v}</span>`;
+    return `<span style="background:${col}22;color:${col};cursor:pointer;padding:1px 8px;border-radius:8px;white-space:nowrap;" title="Show the ${v} ${k} finding(s) (${side})" onclick="openSecSeverityOverlay('${k}','${side}')">${k} ${v}</span>`;
   }).join('');
 
   // ---- score explainer ----
@@ -3910,7 +3961,7 @@ function renderSecurityReport(data) {
       <div class="sec-metric"><div class="sec-metric-v" style="font-size:14px;">${activeCtrls.length}</div><div class="sec-metric-k">controls</div></div>
       <div class="sec-metric"><div class="sec-metric-v" style="font-size:14px;">${plan.confidence !== undefined ? Math.round(plan.confidence * 100) + '%' : '—'}</div><div class="sec-metric-k">confidence</div></div>
     </div>
-    <div class="sec-dist" style="margin-top:8px;">${distHtml(inhDist)}<span style="color:var(--text2)">→</span>${distHtml(resDist)}<span style="color:var(--text2);font-size:10.5px;">(inherent → residual severity mix)</span></div>
+    <div class="sec-dist" style="margin-top:8px;">${distHtml(inhDist, 'inherent')}<span style="color:var(--text2)">→</span>${distHtml(resDist, 'residual')}<span style="color:var(--text2);font-size:10.5px;">(inherent → residual severity mix · click a band to list its findings)</span></div>
     <div class="sec-formula">
       <strong>How this score is derived</strong> (deterministic — same inputs, same number):<br/>
       • per threat <code>inherent = L × I</code> on a 1–5 matrix, <code>L</code> scaled by exposure weight (${bd.exposure_label || data.exposure} = ${bd.exposure_weight !== undefined ? bd.exposure_weight : '—'})<br/>
