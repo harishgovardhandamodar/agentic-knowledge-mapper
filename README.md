@@ -261,18 +261,31 @@ an action are provable afterwards:
 | GET/POST | `/api/ledger/runs/{id}/export`, `/api/ledger/verify-export` | Self-contained bundle + offline verification |
 | POST | `/api/ledger/runs/{id}/actions`, `…/approvals`, `/api/ledger/approvals/{id}/decide` | Land an MCP / human / peer action on the chain; decide a gate |
 
-## Running
+## Setup
+
+Prerequisites: Docker with compose, NVIDIA drivers (for GPU Ollama hosts),
+and the sibling `fox-services` checkout (the LLM gateway; lives at
+`../fox-services` relative to this repo).
 
 ```bash
-docker compose up -d --build
-# GUI at http://localhost:8204
+# 1. Start the LLM gateway first (port 8210: OpenAI-compat /v1, Ollama proxy,
+#    usage/proof logging, mesh discovery)
+cd ../fox-services && docker compose up -d --build
+
+# 2. Start this app (port 8204)
+cd ../agentic-knowledge-mapper && docker compose up -d --build
+
+# 3. Verify
+curl http://localhost:8210/health   # gateway + model inventory
+curl http://localhost:8204/api/health  # app + which LLM backend is active
+# GUI at http://localhost:8204 — pick the "frontier model" investigation
+# to see a populated graph immediately
 ```
 
-Requires **fox-services** reachable (compose default: mesh peer Ollama,
-fallback `http://host.docker.internal:8210/v1`).
 Config via env: `LLM_BASE_URL`, `LLM_FALLBACK_URL`, `LLM_MODEL`,
 `LLM_FALLBACK_MODEL`, `LLM_TIMEOUT_S` (default 180), optional `FOX_TELEMETRY_URL`
-for digest-only gateway proof linkage on direct-backend calls. Local dev:
+for digest-only gateway proof linkage on direct-backend calls. Local dev
+(without Docker):
 
 ```bash
 pip install -r requirements.txt
@@ -280,6 +293,51 @@ LLM_BASE_URL=http://localhost:8210/v1 python -m uvicorn app.main:app --port 8204
 ```
 
 Operations (deploy, scheduler, failover, recovery): [operations](docs/operations.md).
+
+## Local compute
+
+This app is built to run **solely on local hardware — no cloud GPUs, no
+external model APIs, no API keys anywhere**:
+
+- **NVIDIA DGX Spark** (GB10 Grace Blackwell Superchip, 128 GB unified
+  memory, `linux aarch64`) — primary development and serving host.
+- **2× RTX 5080 16 GB** mesh peer (`axiom-1`) — Ollama inference over the
+  Fox mesh; the app's default `LLM_BASE_URL` points at this peer, with the
+  local fox-services gateway as automatic fallback.
+- **Model routing, not model lock-in**: fox-services prefers VRAM-resident
+  models, rewrites to loaded equivalents when cheaper, and reports every
+  decision in response headers (`X-Served-Model`, `X-Original-Model`,
+  `X-Served-Node`, `X-Routing-Reason`). The audit record always names the
+  model that *actually* served the call.
+- Every LLM call, token count, latency, and proof digest is logged per
+  service/model in the gateway's usage DB and visible in the fox-services
+  dashboard (Services → Content Proofs), so local compute is metered like a
+  cloud bill — without the cloud.
+
+## Privacy from the ground up
+
+Privacy is architectural here, not a toggle:
+
+- **Local-first**: prompts, artifacts, reports, and the ledger never leave
+  your machines. There is no external API to leak to — inference runs on
+  the DGX Spark / RTX 5080 mesh behind your own network.
+- **Nothing sensitive at rest**: credentials are redacted *before* anything
+  reaches immutable storage; prompts persist only as hashes (AKM) or as
+  one-way synthetic twins that preserve shape but not values (fox-services);
+  PII survives only as aggregate counts.
+- **Digests travel, content does not**: proof hashes, request IDs, and token
+  counts cross service and peer boundaries — prompts and completions never
+  do. Peer log views are redacted + PII-syntheticized by default while local
+  operator views stay clear, each explicitly labeled.
+- **Fail-open auditing**: if the ledger or gateway goes down, the product
+  keeps working unaudited instead of failing closed and blocking you.
+- **Your data is not the repo**: investigations, artifacts, reports, and
+  chains live in SQLite (local `data/akm.db`, Docker `akm_data` volume) and
+  are git-ignored — `git status` stays clean of runtime state by construction.
+- **Pairing + least privilege**: mesh peer proxying is path-whitelisted and
+  pairing-gated; state-changing gateway endpoints sit behind an opt-in admin
+  token; security reports render from stored Markdown with no report files
+  written to disk.
 
 Runtime data (investigations, artifacts, reports, ledger chains) lives in
 SQLite — `data/akm.db` for local dev, a persistent `akm_data` Docker volume
