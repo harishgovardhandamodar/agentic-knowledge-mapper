@@ -278,10 +278,12 @@ class Mandate:
         if kind in INTERNAL_KINDS:
             return Verdict("pass", "internal", "audit-trail event; not gated")
 
-        if self.allowed_actors and actor not in self.allowed_actors:
+        if (self.allowed_actors and actor not in self.allowed_actors
+                and actor_type not in self.allowed_actors):
             return Verdict("deny", "actor_not_in_mandate",
                            f"actor {actor!r} is not in the mandate", "block",
-                           {"actor": actor, "allowed": self.allowed_actors})
+                           {"actor": actor, "actor_type": actor_type,
+                            "allowed": self.allowed_actors})
 
         if intent and self.allowed_intents and intent not in self.allowed_intents:
             return Verdict("deny", "intent_not_in_mandate",
@@ -606,6 +608,34 @@ def session_timeline(session_id: str, limit: int = 2000, db=None) -> dict:
         } for e in rows]
         return {"session_id": session_id, "total": len(events), "runs": run_ids,
                 "events": events}
+    finally:
+        if own:
+            db.close()
+
+
+def global_timeline(limit: int = 200, db=None) -> dict:
+    """The whole ledger as one chronological stream, newest first.
+
+    Sessions show one sitting; this shows everything, so an auditor can answer
+    "what happened lately" without opening each run. Same event shape as
+    ``session_timeline`` so the UI renders both with one renderer. Timestamps
+    are ISO strings ordered lexicographically, which is chronological order.
+    """
+    own = db is None
+    db = db or SessionLocal()
+    try:
+        rows = (db.query(LedgerEvent)
+                .order_by(LedgerEvent.ts.desc(), LedgerEvent.run_id, LedgerEvent.seq)
+                .limit(max(1, min(limit, 2000))).all())
+        events = [{
+            "run_id": e.run_id, "seq": e.seq, "ts": e.ts, "kind": e.kind,
+            "actor_type": e.actor_type, "actor": e.actor, "intent": e.intent,
+            "verdict": e.verdict, "severity": e.severity, "hash": e.hash,
+            "prev_hash": e.prev_hash, "input_refs": _loads(e.input_refs, []),
+            "data": _loads(e.data_json, {}),
+        } for e in rows]
+        run_ids = sorted({e["run_id"] for e in events})
+        return {"total": len(events), "runs": run_ids, "events": events}
     finally:
         if own:
             db.close()

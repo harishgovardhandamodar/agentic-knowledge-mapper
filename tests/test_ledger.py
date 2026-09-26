@@ -329,6 +329,30 @@ class TestMandate(unittest.TestCase):
         self.assertEqual(ev["severity"], "block")
         self.assertEqual(ev["data"]["gate"]["rule"], "actor_not_in_mandate")
 
+    def test_role_allowed_actor_passes_with_unlisted_name(self):
+        """Regression: llm.call events carry the model name as actor with
+        actor_type 'llm'. A mandate allowing the 'llm' role must let them
+        through -- otherwise every model call in every agent run denies."""
+        m = L.Mandate(objective="map",
+                      allowed_actors=["agent", "llm", "user", "system",
+                                      "mcp", "human", "planner", "analyzer"],
+                      allowed_intents=["plan"])
+        v = m.check(kind="llm.call", actor="qwen3.8:latest",
+                    actor_type="llm", intent="plan")
+        self.assertEqual(v.decision, "allow")
+
+    def test_model_call_under_role_mandate_records_allow(self):
+        m = L.Mandate(objective="map",
+                      allowed_actors=["agent", "llm", "user", "system",
+                                      "mcp", "human", "planner", "analyzer"],
+                      allowed_intents=["plan"])
+        run_id = fresh("mandate-llm-role", m)
+        h = L.RunCtx(run_id, m).llm("qwen3.8:latest", "prompt", "output",
+                                    intent="plan")
+        ev = next(e for e in L.timeline(run_id, limit=100)["events"] if e["hash"] == h)
+        self.assertEqual(ev["verdict"], "allow")
+        self.assertEqual(ev["actor"], "qwen3.8:latest")
+
 
 class TestGroundingGate(unittest.TestCase):
     SOURCE = ("The committee reported that TLS 1.0 was formally deprecated by "
@@ -1345,6 +1369,25 @@ class TestSessionApi(unittest.TestCase):
         for suffix in ("", "/timeline", "/verify", "/insights"):
             r = self.client.get(f"/api/ledger/sessions/ses-missing{suffix}")
             self.assertEqual(r.status_code, 404, f"{suffix}: {r.status_code} {r.text}")
+
+    def test_global_timeline_is_newest_first_across_runs(self):
+        """The ledger-wide view interleaves every chain, newest first, in the
+        same event shape as a session timeline."""
+        key = "timeline-key"
+        sid = self._new_session(key)
+        h = self._headers(key)
+        inv = self.client.post("/api/investigations", headers=h,
+                               json={"title": "Timeline probe", "keywords": "k",
+                                     "description": "d", "sources": "web"})
+        self.assertEqual(inv.status_code, 200, inv.text)
+        tl = self.client.get("/api/ledger/timeline?limit=200").json()
+        self.assertGreaterEqual(tl["total"], 2)
+        self.assertIn(sid, tl["runs"])
+        stamps = [e["ts"] for e in tl["events"]]
+        self.assertEqual(stamps, sorted(stamps, reverse=True))
+        kinds = {e["kind"] for e in tl["events"]}
+        self.assertIn("human.action", kinds)
+        self.assertIn("run_id", tl["events"][0])
 
     def test_audit_failure_never_breaks_the_product_call(self):
         """A ledger that cannot be written must not turn a 200 into a 500."""

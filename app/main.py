@@ -102,6 +102,10 @@ class InvestigationUpdate(BaseModel):
     sources: Optional[str] = None
 
 
+class HiddenUpdate(BaseModel):
+    hidden: bool = True
+
+
 class RunRequest(BaseModel):
     max_items: int = 25
     max_rounds: int = 2
@@ -183,7 +187,8 @@ def _inv_json(inv: Investigation, db: Session) -> dict:
     return {
         "id": inv.id, "title": inv.title, "keywords": inv.keywords,
         "description": inv.description, "sources": inv.sources,
-        "status": inv.status, "artifacts": n_art, "relationships": n_rel,
+        "status": inv.status, "hidden": bool(inv.hidden),
+        "artifacts": n_art, "relationships": n_rel,
         "runs": n_runs,
         "schedule": {
             "enabled": bool(inv.schedule_enabled),
@@ -220,9 +225,12 @@ def health():
 # ---------- investigations ----------
 
 @app.get("/api/investigations")
-def list_investigations(db: Session = Depends(get_db)):
-    invs = db.query(Investigation).order_by(Investigation.updated_at.desc()).all()
-    return {"items": [_inv_json(i, db) for i in invs]}
+def list_investigations(include_hidden: bool = False,
+                        db: Session = Depends(get_db)):
+    q = db.query(Investigation).order_by(Investigation.updated_at.desc())
+    if not include_hidden:
+        q = q.filter(Investigation.hidden == 0)
+    return {"items": [_inv_json(i, db) for i in q.all()]}
 
 
 @app.post("/api/investigations")
@@ -298,6 +306,25 @@ def delete_investigation(inv_id: int, db: Session = Depends(get_db)):
     db.delete(inv)
     db.commit()
     return {"ok": True}
+
+
+@app.patch("/api/investigations/{inv_id}/hidden")
+def set_investigation_hidden(inv_id: int, data: HiddenUpdate, request: Request,
+                             db: Session = Depends(get_db)):
+    """Hide an investigation from the list (or bring it back). Hiding is not
+    deleting: runs, artifacts and history are kept, and a hidden investigation
+    can still be opened directly."""
+    inv = db.query(Investigation).filter(Investigation.id == inv_id).first()
+    if not inv:
+        raise HTTPException(404, "Investigation not found")
+    inv.hidden = 1 if data.hidden else 0
+    inv.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(inv)
+    ledger_api.human_action(request,
+                             "hid_investigation" if data.hidden else "unhid_investigation",
+                             {"investigation": inv.id, "title": inv.title})
+    return _inv_json(inv, db)
 
 
 # ---------- agent runs ----------

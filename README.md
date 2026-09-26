@@ -75,6 +75,7 @@ GUI map and flows: [frontend](docs/frontend.md).
 | GET | `/api/health` | Health + LLM gateway status |
 | GET/POST | `/api/investigations` | List / create |
 | GET/PUT/DELETE | `/api/investigations/{id}` | Detail (with recent runs) / update brief / delete |
+| PATCH | `/api/investigations/{id}/hidden` | Hide from / restore to the list (`?include_hidden=true` to see hidden) |
 | POST | `/api/investigations/{id}/run` | Start agent run `{max_items, max_rounds}` |
 | GET | `/api/runs?investigation_id=` | Run history |
 | GET | `/api/runs/{id}` | Run + full event log |

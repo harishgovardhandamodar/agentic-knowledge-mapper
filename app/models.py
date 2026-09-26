@@ -19,6 +19,7 @@ class Investigation(Base):
     description = Column(Text, nullable=False, default="")  # user brief: what to collect
     sources = Column(String(200), nullable=False, default="rss,arxiv,web")  # csv subset
     status = Column(String(30), nullable=False, default="draft")  # draft|running|ready
+    hidden = Column(Integer, nullable=False, default=0)  # 0|1 — hidden from the list, not deleted
     created_at = Column(DateTime, default=_now)
     updated_at = Column(DateTime, default=_now, onupdate=_now)
     # Scheduler: run the agent on a cron timetable.

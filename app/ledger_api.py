@@ -69,6 +69,13 @@ def open_run(payload: dict = Body(...)):
             "mandate": mandate.as_dict()}
 
 
+@router.get("/timeline")
+def ledger_timeline(limit: int = Query(200, le=2000)):
+    """The whole ledger as one chronological stream, newest first. Same shape
+    as a session timeline so the UI renders both with one renderer."""
+    return L.global_timeline(limit)
+
+
 @router.get("/runs")
 def list_runs(limit: int = Query(50, le=500), status: str = Query(None)):
     db = SessionLocal()
