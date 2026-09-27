@@ -911,7 +911,7 @@ function toggleTheme() {
     const isLight = light;
     nodes.forEach(n => {
       const g = graphData.nodes.find(x => x.id === n.id);
-      nodes.update({ id: n.id, font: { color: isLight ? '#1f2328' : '#ffffff', size: 11 } });
+      nodes.update({ id: n.id, font: nodeFont(isLight, 12) });
     });
     network.redraw();
     if (clusterMode !== 'off' && clusterCache[clusterMode]) {
@@ -1152,6 +1152,16 @@ async function pollRun() {
 
 /* ---------- graph ---------- */
 
+// One place for node-label type: labels render bolder via a slightly larger
+// size plus a hairline stroke in the label's own color (canvas has no
+// font-weight knob in vis-network's font spec, and a same-color stroke
+// thickens glyphs without blurring). Every spot that sets a node font must
+// go through here, or toggling the theme would silently un-bold the labels.
+function nodeFont(isLight, size) {
+  const color = isLight ? '#1f2328' : '#ffffff';
+  return { color, size, strokeWidth: 0.7, strokeColor: color };
+}
+
 async function loadGraph() {
   if (!currentInv) return;
   const res = await fetch(`${API}/investigations/${currentInv}/graph`);
@@ -1165,7 +1175,6 @@ function renderGraph() {
   if (banner) banner.style.display = 'none';
   const container = document.getElementById('graph');
   const isLight = document.documentElement.className === 'light';
-  const fontColor = isLight ? '#1f2328' : '#ffffff';
   nodes = new vis.DataSet((graphData.nodes || []).map(n => ({
     id: n.id,
     label: n.label,
@@ -1179,7 +1188,7 @@ function renderGraph() {
     shape: 'dot',
     size: 12 + (n.relevance || 0) * 22,
     borderWidth: 2,
-    font: { color: fontColor, size: 11 },
+    font: nodeFont(isLight, 12),
     group: n.type,
     opacity: (n.review === 'rejected' || n.drift) ? 0.35 : 1,
   })));
@@ -1410,7 +1419,7 @@ function applyClusters(clusters, mode) {
           title: `${mode === 'category' ? 'Category' : 'Similarity centroid'}: ${c.centroid}\n${members.length} artifacts\nClick to expand`,
           shape: 'dot', size: 22 + Math.min(18, members.length * 2), borderWidth: 3,
           color: { background: bg, border: isLight ? '#1f2328' : '#ffffff' },
-          font: { color: isLight ? '#1f2328' : '#ffffff', size: 12 },
+          font: nodeFont(isLight, 13),
         },
       });
       clusterIds.push(`cluster:${c.id}`); applied++;
