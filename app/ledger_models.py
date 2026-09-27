@@ -125,6 +125,33 @@ class LedgerClaim(Base):
     created_at = Column(DateTime, default=_now)
 
 
+class LedgerAuditDrop(Base):
+    """An audit record the ledger failed to write.
+
+    The chain is the product's evidence that its agents did what they said. A
+    write that fails is a hole in that evidence, and a hole that exists only as
+    a line on stderr is a hole nobody reads -- it scrolls past, it is not
+    queryable, and it leaves no count. This table is where a dropped record
+    goes instead: durable, countable, and joinable to the run it belonged to,
+    so "did we lose anything?" has an answer after the fact.
+
+    Deliberately not part of the chain. It cannot be: a row here usually
+    exists *because* the chain write failed. It is the place to look when
+    ``verify_chain`` reports a gap, and the place an operator watches to see a
+    failing database before it silently starts dropping real work.
+    """
+
+    __tablename__ = "ledger_audit_drops"
+
+    id = Column(Integer, primary_key=True, index=True)
+    ts = Column(DateTime, default=_now, index=True)
+    run_id = Column(String(64), nullable=True, index=True)
+    recorder = Column(String(40), nullable=True, index=True)  # which helper failed
+    actor = Column(String(120), nullable=True)
+    error = Column(Text, nullable=True)
+    detail_json = Column(Text, nullable=True)   # redacted arg summary
+
+
 class LedgerApproval(Base):
     """A human decision point. The decision is itself a chained event, so an
     approval cannot be forged into the record after the fact."""

@@ -301,6 +301,20 @@ def export_run(run_id: str, download: bool = Query(False)):
     return doc
 
 
+@router.get("/audit-drops")
+def list_audit_drops(limit: int = Query(100, ge=1, le=1000)):
+    """Audit records this deployment failed to write -- the dead letters.
+
+    The ledger is fail-open by design: a failing database must not stop the
+    agents. The cost is that a lost record is invisible, and a trail with
+    invisible holes is worse than one that visibly failed. This is where the
+    holes are listed, with the process-wide drop count so a reader can tell
+    "nothing lost" from "lost so much it stopped being written down".
+    """
+    return {"drops": L.audit_drops(limit=limit),
+            "process_dropped_total": L.dropped_audit_count()}
+
+
 @router.post("/verify-export")
 def verify_export(payload: dict = Body(...)):
     """Verify a bundle uploaded from elsewhere. Lets a reviewer check a run they
@@ -449,7 +463,7 @@ async def open_session(request: Request):
         request.state.ledger_session = None
         yield None
         return
-    session_id = L._safe(L.resolve_session, key)
+    session_id = L._safe("resolve_session", L.resolve_session, key)
     if not session_id:
         request.state.ledger_session = None
         yield None

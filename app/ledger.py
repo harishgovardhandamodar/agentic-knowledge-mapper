@@ -65,8 +65,8 @@ from sqlalchemy.exc import IntegrityError
 
 from . import grounding as _grounding
 from .database import SessionLocal
-from .ledger_models import (LedgerApproval, LedgerClaim, LedgerEvent,
-                            LedgerRun)
+from .ledger_models import (LedgerApproval, LedgerAuditDrop, LedgerClaim,
+                            LedgerEvent, LedgerRun)
 
 GENESIS = "0" * 64
 
@@ -1738,6 +1738,10 @@ def summary(run_id: str) -> dict:
                       .group_by(LedgerEvent.actor).all())
         claims = db.query(LedgerClaim).filter(LedgerClaim.run_id == run_id).all()
         approvals = db.query(LedgerApproval).filter(LedgerApproval.run_id == run_id).all()
+        # Records this run tried to write and could not. Surfaced here because
+        # a run whose summary looks complete may still have holes in it.
+        drops = db.query(func.count(LedgerAuditDrop.id)).filter(
+            LedgerAuditDrop.run_id == run_id).scalar() or 0
         return {
             "run_id": run_id, "label": run.label, "status": run.status,
             "mandate_hash": run.mandate_hash,
@@ -1745,6 +1749,7 @@ def summary(run_id: str) -> dict:
             "head_hash": run.head_hash, "head_seq": run.head_seq,
             "events": counts.get("total", 0), "by_kind": counts,
             "by_actor": actors, "by_severity": severities,
+            "audit_drops": int(drops),
             "claims": {
                 "total": len(claims),
                 "ungrounded": sum(1 for c in claims if not c.n_sources),
@@ -2162,24 +2167,109 @@ def record_claim(text: str, citations: Optional[list] = None,
     if not run_id:
         return None
     mandate = current_mandate() or Mandate()
-    return _safe(RunCtx(run_id, mandate).claim, text, citations,
+    return _safe("claim", RunCtx(run_id, mandate).claim, text, citations,
                  sources=sources, actor=actor, actor_type=actor_type,
                  input_refs=input_refs, grounding=grounding)
 
 
-def _safe(fn, *args, **kwargs):
+#: In-process count of audit records this process failed to write. Cheap enough
+#: to check on every drop, and the only signal that survives when the database
+#: itself is the thing that is broken.
+_dropped_total = 0
+
+
+def dropped_audit_count() -> int:
+    """How many audit records this process failed to write. Zero in the healthy
+    case; anything else means the trail has holes."""
+    return _dropped_total
+
+
+def audit_drops(limit: int = 100, db=None) -> list:
+    """The dead-letter table: audit records that could not be written.
+
+    Most recent first. A non-empty result is the answer to "the chain has a gap
+    -- what was in it?".
+    """
+    own = db is None
+    db = db or SessionLocal()
+    try:
+        rows = (db.query(LedgerAuditDrop)
+                .order_by(LedgerAuditDrop.id.desc()).limit(limit).all())
+        return [{"id": r.id, "ts": str(r.ts), "run_id": r.run_id,
+                 "recorder": r.recorder, "actor": r.actor, "error": r.error,
+                 "detail": _loads(r.detail_json, {})} for r in rows]
+    finally:
+        if own:
+            db.close()
+
+
+def _record_drop(recorder: str, exc: Exception, run_id: Optional[str],
+                 actor: Optional[str], detail: Any) -> None:
+    """Persist one dropped audit record. Never raises.
+
+    Best-effort by construction: when the drop was caused by the database being
+    unreachable, this write will fail too. The stderr line and the in-process
+    counter are the backstops for exactly that case.
+    """
+    try:
+        db = SessionLocal()
+        try:
+            db.add(LedgerAuditDrop(
+                run_id=run_id, recorder=recorder, actor=actor,
+                error=f"{type(exc).__name__}: {exc}"[:500],
+                detail_json=canon(detail)[:2000]))
+            db.commit()
+        finally:
+            db.close()
+    except Exception as drop_exc:  # noqa: BLE001 - the DLQ must not raise
+        print(f"[ledger] dead-letter write also failed: "
+              f"{type(drop_exc).__name__}: {drop_exc}", file=sys.stderr)
+
+
+def _safe(recorder: str, fn, *args, **kwargs):
     """Run an audit recorder, swallowing its own failures.
 
-    The ledger observes work; it must never be the reason that work fails. A
-    dropped record is itself a gap in the audit trail, so it is reported loudly
-    on stderr rather than swallowed.
+    The ledger observes work; it must never be the reason that work fails. But
+    a dropped record is a hole in the audit trail, so it is not merely
+    swallowed: it goes to stderr, to the in-process counter, and to the
+    dead-letter table. Fail-open and still accountable.
     """
+    global _dropped_total
     try:
         return fn(*args, **kwargs)
     except Exception as exc:  # noqa: BLE001 - deliberately broad, see docstring
-        print(f"[ledger] dropped audit record: {type(exc).__name__}: {exc}",
-              file=sys.stderr)
+        _dropped_total += 1
+        print(f"[ledger] dropped audit record ({recorder}): "
+              f"{type(exc).__name__}: {exc}", file=sys.stderr)
+        try:
+            _record_drop(recorder, exc, current_run(), _actor_of(args),
+                         {"args": _safe_detail(args), "kwargs": _safe_detail(kwargs)})
+        except Exception:  # noqa: BLE001 - already inside the failure path
+            pass
         return None
+
+
+def _actor_of(args) -> Optional[str]:
+    """Best-effort actor for a dead-letter row, without raising on odd args."""
+    for a in args:
+        if isinstance(a, str) and a and len(a) < 120:
+            return a
+    return None
+
+
+def _safe_detail(obj) -> Any:
+    """A short, redacted, stringifiable view of call args for the dead letter.
+
+    The full arguments can hold a prompt or a payload; the point of this row is
+    to identify *which* record was lost, not to duplicate it.
+    """
+    if isinstance(obj, dict):
+        return {k: (f"<{type(v).__name__}:{len(str(v))}ch>"
+                    if not isinstance(v, (int, float, bool, type(None))) else v)
+                for k, v in list(obj.items())[:12]}
+    if isinstance(obj, (list, tuple)):
+        return [f"<{type(v).__name__}:{len(str(v))}ch>" for v in list(obj)[:12]]
+    return f"<{type(obj).__name__}>"
 
 
 def record_llm_call(model: str, prompt: str, output: str, **kwargs) -> Optional[str]:
@@ -2190,7 +2280,7 @@ def record_llm_call(model: str, prompt: str, output: str, **kwargs) -> Optional[
     if not run_id:
         return None
     mandate = current_mandate() or Mandate()
-    return _safe(RunCtx(run_id, mandate).llm, model, prompt, output, **kwargs)
+    return _safe("llm", RunCtx(run_id, mandate).llm, model, prompt, output, **kwargs)
 
 
 def record_agent_step(stage: str, message: str, detail: Any = None,
@@ -2202,7 +2292,7 @@ def record_agent_step(stage: str, message: str, detail: Any = None,
     if not run_id:
         return None
     mandate = current_mandate() or Mandate()
-    return _safe(RunCtx(run_id, mandate).step, stage, message, detail, **kwargs)
+    return _safe("step", RunCtx(run_id, mandate).step, stage, message, detail, **kwargs)
 
 
 def record_internal_event(kind: str, actor: str, *, data: Optional[dict] = None,
@@ -2223,7 +2313,7 @@ def record_internal_event(kind: str, actor: str, *, data: Optional[dict] = None,
     if not run_id:
         return None
     mandate = current_mandate() or Mandate()
-    return _safe(RunCtx(run_id, mandate)._event, kind, actor,
+    return _safe("event", RunCtx(run_id, mandate)._event, kind, actor,
                  actor_type="agent", data=data or {}, verdict=verdict,
                  severity=severity, input_refs=input_refs)
 
@@ -2233,7 +2323,7 @@ def record_mcp_call(server: str, tool: str, args: dict, output: Any, **kwargs) -
     if not run_id:
         return None
     mandate = current_mandate() or Mandate()
-    return _safe(RunCtx(run_id, mandate).mcp, server, tool, args, output, **kwargs)
+    return _safe("mcp", RunCtx(run_id, mandate).mcp, server, tool, args, output, **kwargs)
 
 
 def record_human_action(actor: str, action: str, detail: Any = None) -> Optional[str]:
@@ -2244,7 +2334,7 @@ def record_human_action(actor: str, action: str, detail: Any = None) -> Optional
     if not run_id:
         return None
     mandate = current_mandate() or Mandate()
-    return _safe(RunCtx(run_id, mandate).human, actor, action, detail)
+    return _safe("human", RunCtx(run_id, mandate).human, actor, action, detail)
 
 
 def record_human(actor: str, action: str, detail: Any = None) -> Optional[str]:
@@ -2261,7 +2351,7 @@ def record_human(actor: str, action: str, detail: Any = None) -> Optional[str]:
         if current_run():
             return record_human_action(actor, action, detail)
         return record_session_action(actor, action, detail)
-    return _safe(_do)
+    return _safe("human_dispatch", _do)
 
 
 def record_session_action(actor: str, action: str, detail: Any = None) -> Optional[str]:
@@ -2280,4 +2370,4 @@ def record_session_action(actor: str, action: str, detail: Any = None) -> Option
         ensure_run(rid, Mandate(), label="human actions",
                    session_id=session_id, kind="actions")
         return RunCtx(rid, Mandate()).human(actor, action, detail)
-    return _safe(_do)
+    return _safe("session_human", _do)

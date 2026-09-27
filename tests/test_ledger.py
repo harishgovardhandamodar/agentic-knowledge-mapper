@@ -841,7 +841,58 @@ class TestInstrumentationIsOptional(unittest.TestCase):
         """Auditing must never be the reason work fails."""
         def explode():
             1 / 0
-        self.assertIsNone(L._safe(explode))
+        self.assertIsNone(L._safe("explode", explode))
+
+    def test_dropped_record_lands_in_the_dead_letter_table(self):
+        """A lost audit record has to be visible afterwards, not just on stderr.
+
+        The stderr line scrolls away and cannot be queried. The table can, and
+        it names the recorder and the run, so "verify_chain says there is a
+        gap -- what was in it?" has an answer.
+        """
+        before = len(L.audit_drops(limit=500))
+        def explode(*a, **k):
+            raise RuntimeError("disk on fire")
+        self.assertIsNone(L._safe("llm", explode, "m", "p", "o"))
+        drops = L.audit_drops(limit=500)
+        self.assertEqual(len(drops), before + 1)
+        row = drops[0]
+        self.assertEqual(row["recorder"], "llm")
+        self.assertIn("disk on fire", row["error"])
+        # Args are summarised, not copied: a prompt can hold anything, and an
+        # immutable dead letter should not become a second copy of it.
+        self.assertNotIn("p", str(row["detail"].get("args")))
+
+    def test_drop_counter_moves(self):
+        before = L.dropped_audit_count()
+        def explode(*a, **k):
+            raise RuntimeError("nope")
+        L._safe("step", explode, "stage", "msg")
+        self.assertEqual(L.dropped_audit_count(), before + 1)
+
+    def test_dead_letter_write_failure_does_not_raise(self):
+        """When the database is what is broken, the dead letter cannot be stored
+        either. The stderr line and the counter are the backstops for exactly
+        that case, and neither may raise."""
+        real = L.SessionLocal
+        def no_db():
+            raise RuntimeError("cannot reach database")
+        L.SessionLocal = no_db
+        try:
+            def explode(*a, **k):
+                raise RuntimeError("first failure")
+            self.assertIsNone(L._safe("claim", explode))
+        finally:
+            L.SessionLocal = real
+
+    def test_summary_reports_drops_for_the_run(self):
+        run_id = fresh("drops-in-summary")
+        self.assertEqual(L.summary(run_id)["audit_drops"], 0)
+        def explode(*a, **k):
+            raise RuntimeError("lost one")
+        with L.run(run_id):
+            L._safe("human", explode, "alice", "clicked")
+        self.assertEqual(L.summary(run_id)["audit_drops"], 1)
 
     def test_dispatch_still_runs_the_handler_when_the_ledger_is_down(self):
         """The audit scope is opened on the product's critical path, so a broken
