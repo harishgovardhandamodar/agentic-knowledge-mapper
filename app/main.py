@@ -16,6 +16,7 @@ from .models import (Investigation, Artifact, Relationship, AgentRun, AgentEvent
                      Explanation, SecurityAssessment)
 from . import llm, scheduler
 from . import ledger_api
+from . import drift as drift_mod
 from .agent import launch_run, launch_run_with_goal
 from . import security_agent
 from . import security as sec_engine
@@ -124,6 +125,14 @@ class ReviewUpdate(BaseModel):
     review: str  # pending|accepted|rejected
 
 
+class DriftUpdate(BaseModel):
+    drift: bool = True
+
+
+class DetectDriftRequest(BaseModel):
+    ids: Optional[list[int]] = None
+
+
 class RelationshipCreate(BaseModel):
     source_id: int
     target_id: int
@@ -212,6 +221,7 @@ def _artifact_json(a: Artifact) -> dict:
         "date_published": a.date_published.isoformat() if a.date_published else None,
         "tags": a.tags, "sentiment": a.sentiment, "relevance": a.relevance,
         "relevance_reason": a.relevance_reason, "review": a.review, "origin": a.origin,
+        "drift": bool(a.drift),
     }
 
 
@@ -526,14 +536,85 @@ def compare_runs(inv_id: int, from_run: int = Query(...),
 
 # ---------- artifacts ----------
 
+def _artifact_actor(a, run) -> str:
+    """Who/what brought this artifact in, as one honest label."""
+    if (a.origin or "") == "manual":
+        return "human"
+    if (a.author or "") == "explainer":
+        return "explainer"
+    if run is not None:
+        trig = run.trigger or "manual"
+        return {"manual": "agent · manual run",
+                "schedule": "agent · scheduled"}.get(trig, f"agent · {trig}")
+    return "agent"
+
+
+def _artifact_purpose(a, run) -> str:
+    """Why this artifact was collected, best available evidence first."""
+    if a.relevance_reason:
+        return a.relevance_reason
+    if (a.author or "") == "explainer":
+        return "saved from an explanation"
+    if (a.origin or "") == "manual":
+        return "added by hand"
+    if run is not None:
+        try:
+            goal = (json.loads(run.plan or "{}") or {}).get("goal")
+        except Exception:
+            goal = None
+        if goal:
+            return f"agent run goal: {goal}"[:300]
+        return f"collected by agent run #{run.id} ({run.trigger or 'manual'})"
+    return "collected by agent"
+
+
+@app.get("/api/investigations/{inv_id}/artifacts/overview")
+def artifacts_overview(inv_id: int, db: Session = Depends(get_db)):
+    """Collection overview: every artifact with its timeline position, purpose,
+    and collecting actor, plus per-actor involvement shares."""
+    inv = db.query(Investigation).filter(Investigation.id == inv_id).first()
+    if not inv:
+        raise HTTPException(404, "Investigation not found")
+    runs = {r.id: r for r in db.query(AgentRun)
+            .filter(AgentRun.investigation_id == inv_id).all()}
+    arts = (db.query(Artifact).filter(Artifact.investigation_id == inv_id)
+            .order_by(Artifact.created_at.desc(), Artifact.id.desc()).all())
+    items = []
+    counts: dict = {}
+    days: dict = {}
+    for a in arts:
+        run = runs.get(a.run_id) if a.run_id else None
+        actor = _artifact_actor(a, run)
+        counts[actor] = counts.get(actor, 0) + 1
+        day = a.created_at.date().isoformat() if a.created_at else "unknown"
+        days[day] = days.get(day, 0) + 1
+        items.append({
+            "id": a.id, "title": a.title, "artifact_type": a.artifact_type,
+            "url": a.url, "actor": actor,
+            "purpose": _artifact_purpose(a, run),
+            "collected_at": a.created_at.isoformat() if a.created_at else None,
+            "review": a.review, "drift": bool(a.drift),
+            "relevance": a.relevance,
+        })
+    total = len(items) or 1
+    by_actor = [{"actor": k, "count": v, "pct": round(100.0 * v / total, 1)}
+                for k, v in sorted(counts.items(), key=lambda kv: -kv[1])]
+    timeline = [{"day": k, "count": v} for k, v in sorted(days.items())]
+    return {"total": len(items), "by_actor": by_actor,
+            "timeline": timeline, "items": items}
+
+
 @app.get("/api/investigations/{inv_id}/artifacts")
 def list_artifacts(inv_id: int, review: Optional[str] = Query(None),
                    search: Optional[str] = Query(None),
+                   drift: Optional[int] = Query(None),
                    limit: int = Query(200, le=500), offset: int = Query(0),
                    db: Session = Depends(get_db)):
     q = db.query(Artifact).filter(Artifact.investigation_id == inv_id)
     if review and review != "all":
         q = q.filter(Artifact.review == review)
+    if drift is not None:
+        q = q.filter(Artifact.drift == (1 if drift else 0))
     if search:
         q = q.filter(Artifact.title.ilike(f"%{search}%")
                      | Artifact.description.ilike(f"%{search}%")
@@ -575,6 +656,75 @@ def review_artifact(artifact_id: int, data: ReviewUpdate, request: Request,
                              "investigation": a.investigation_id,
                              "url": a.url})
     return _artifact_json(a)
+
+
+@app.patch("/api/artifacts/{artifact_id}/drift")
+def set_artifact_drift(artifact_id: int, data: DriftUpdate, request: Request,
+                       db: Session = Depends(get_db)):
+    """Hand-mark one artifact as off-brief drift (or clear it). Drift is a
+    classification, not a verdict: the item stays, but lists and the graph
+    can dim or filter it."""
+    a = db.query(Artifact).filter(Artifact.id == artifact_id).first()
+    if not a:
+        raise HTTPException(404, "Artifact not found")
+    a.drift = 1 if data.drift else 0
+    db.commit()
+    db.refresh(a)
+    ledger_api.human_action(request,
+                            "marked_drift" if data.drift else "cleared_drift",
+                            {"artifact": artifact_id, "title": a.title,
+                             "investigation": a.investigation_id})
+    return _artifact_json(a)
+
+
+@app.post("/api/investigations/{inv_id}/detect-drift")
+def detect_investigation_drift(inv_id: int, data: DetectDriftRequest,
+                               request: Request,
+                               db: Session = Depends(get_db)):
+    """Tag off-brief items as drift. With explicit ``ids`` the marking is
+    manual (no LLM); otherwise every unflagged item goes through the
+    deterministic prefilter and only the leftovers get one LLM batch verdict.
+    """
+    inv = db.query(Investigation).filter(Investigation.id == inv_id).first()
+    if not inv:
+        raise HTTPException(404, "Investigation not found")
+    if data.ids is not None:
+        rows = db.query(Artifact).filter(
+            Artifact.investigation_id == inv_id,
+            Artifact.id.in_([i for i in data.ids if isinstance(i, int)])).all()
+        for a in rows:
+            a.drift = 1
+        db.commit()
+        marked = [a.id for a in rows]
+        ledger_api.human_action(request, "marked_drift",
+                                {"investigation": inv_id, "artifacts": marked,
+                                 "mode": "manual"})
+        return {"checked": len(rows), "candidates": len(rows), "marked": marked}
+    untagged = db.query(Artifact).filter(
+        Artifact.investigation_id == inv_id,
+        (Artifact.drift.is_(None) | (Artifact.drift == 0))).all()
+    brief = drift_mod.brief_terms(inv.title, inv.keywords, inv.description)
+    corpus = set()
+    for art in db.query(Artifact).filter(
+            Artifact.investigation_id == inv_id,
+            Artifact.relevance.is_not(None)).all():
+        corpus |= drift_mod.item_terms(art.title, art.tags)
+    items = [{"id": a.id, "title": a.title, "tags": a.tags or ""}
+             for a in untagged]
+    cands = drift_mod.drift_candidates(brief, corpus, items)
+    brief_text = f"{inv.title} | {inv.keywords} | {inv.description}"
+    drifted = drift_mod.classify_drift(brief_text, cands)
+    marked = []
+    for a in untagged:
+        if a.id in drifted and not a.drift:
+            a.drift = 1
+            marked.append(a.id)
+    db.commit()
+    ledger_api.human_action(request, "marked_drift",
+                            {"investigation": inv_id, "artifacts": marked,
+                             "mode": "auto", "checked": len(untagged),
+                             "candidates": len(cands)})
+    return {"checked": len(untagged), "candidates": len(cands), "marked": marked}
 
 
 @app.delete("/api/artifacts/{artifact_id}")
@@ -1371,6 +1521,7 @@ def get_graph(inv_id: int, db: Session = Depends(get_db)):
         "type": a.artifact_type, "relevance": round(a.relevance or 0, 2),
         "sentiment": round(a.sentiment or 0, 2),
         "author": a.author or "", "tags": a.tags or "", "review": a.review,
+        "drift": bool(a.drift),
     } for a in artifacts]
     edges = [{
         "id": r.id, "from": r.source_id, "to": r.target_id,

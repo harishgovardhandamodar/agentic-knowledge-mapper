@@ -1147,6 +1147,50 @@ def _investigation_roadmap(db, inv_id: int) -> list:
     return items[:30]
 
 
+def _gate_new_concepts(db, inv_id: int, created: list) -> list:
+    """Auto-classify freshly saved concepts as drift (or not).
+
+    Deterministic prefilter first (shared vocabulary with the brief or the
+    agent-scored corpus), then one LLM batch verdict over the leftovers.
+    Fail-open: any failure marks nothing, and saving already succeeded by
+    the time this runs, so drift gating can never break a save.
+    """
+    from . import drift as drift_mod
+    try:
+        if not created:
+            return []
+        inv = db.query(Investigation).filter(Investigation.id == inv_id).first()
+        if inv is None:
+            return []
+        brief = drift_mod.brief_terms(inv.title, inv.keywords, inv.description)
+        corpus = set()
+        for art in db.query(Artifact).filter(
+                Artifact.investigation_id == inv_id,
+                Artifact.relevance.is_not(None)).all():
+            corpus |= drift_mod.item_terms(art.title, art.tags)
+        cands = drift_mod.drift_candidates(brief, corpus, created)
+        if not cands:
+            return []
+        brief_text = f"{inv.title} | {inv.keywords} | {inv.description}"
+        drifted = drift_mod.classify_drift(brief_text, cands)
+        marked = []
+        for c in cands:
+            if c.get("id") in drifted:
+                row = db.get(Artifact, c["id"])
+                if row is not None and not row.drift:
+                    row.drift = 1
+                    marked.append(row.id)
+        if marked:
+            db.commit()
+        return marked
+    except Exception:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        return []
+
+
 def _save_explanation_to_graph(db, exp: "Explanation") -> dict:
     """Persist an answer as essay + concepts + typed relations. Concept extraction is
     cached on exp.meta so a second save (or auto-save + manual) is instant (#3, #9)."""
@@ -1197,6 +1241,7 @@ def _save_explanation_to_graph(db, exp: "Explanation") -> dict:
 
     concept_ids = {}
     matched = 0
+    created_concepts = []
     for c in concepts:
         t = c.get("name", "")[:200]
         if not t.strip():
@@ -1220,6 +1265,9 @@ def _save_explanation_to_graph(db, exp: "Explanation") -> dict:
             db.add(a)
             db.flush()
             concept_ids[norm_title(t)] = a.id
+            created_concepts.append({"id": a.id, "title": a.title,
+                                     "tags": a.tags or ""})
+    _gate_new_concepts(db, exp.investigation_id, created_concepts)
 
     def add_rel(src, dst, rtype, desc=None):
         if src == dst:

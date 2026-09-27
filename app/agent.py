@@ -143,7 +143,8 @@ def _analyze_batch(inv: Investigation, batch: list, existing: list) -> list:
             "\"confidence\": 0..1, \"timeframe\": str, \"summary\": str}, "
             "\"relates_to\": [{\"id\": artifact_id, \"relationship_type\": "
             "references|supports|contradicts|builds_upon|responds_to|similar_to, "
-            "\"description\": str}]}]")
+            "\"description\": str}], \"drift\": bool (true if about a topic "
+            "entirely outside this brief)}]")
     try:
         verdicts = llm.chat_json([{"role": "system", "content": sys},
                                   {"role": "user", "content": user}], max_tokens=4096)
@@ -172,6 +173,7 @@ def _persist(db: Session, inv_id: int, kept: list, run_id: int | None = None) ->
             relevance=float(v.get("relevance", 0) or 0),
             relevance_reason=(v.get("reason") or "")[:500],
             review="pending", origin="agent",
+            drift=1 if v.get("drift") else 0,
         )
         db.add(a)
         db.flush()

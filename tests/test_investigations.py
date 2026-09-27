@@ -94,5 +94,83 @@ class TestInvestigationVisibility(unittest.TestCase):
         self.assertIn("recent_runs", body)
 
 
+class TestCollectionOverview(unittest.TestCase):
+    """The Artifacts tab: timeline position, purpose, and actor shares."""
+
+    @classmethod
+    def setUpClass(cls):
+        from fastapi.testclient import TestClient
+        cls.client = TestClient(main_mod.app)
+        cls.n = 0
+
+    def _seed(self):
+        from datetime import datetime, timezone
+        from app.database import SessionLocal
+        from app.models import Investigation, Artifact, AgentRun
+        import json as _json
+        type(self).n += 1
+        db = SessionLocal()
+        try:
+            inv = Investigation(title=f"collection-{type(self).n}", keywords="k",
+                                description="d", sources="web")
+            db.add(inv)
+            db.commit()
+            iid = inv.id
+            r1 = AgentRun(investigation_id=iid, status="done", trigger="manual")
+            r2 = AgentRun(investigation_id=iid, status="done", trigger="schedule",
+                          plan=_json.dumps({"goal": "gap goal"}))
+            db.add_all([r1, r2])
+            db.commit()
+            r1id, r2id = r1.id, r2.id
+            db.add_all([
+                Artifact(investigation_id=iid, run_id=r1id, title="Agent item",
+                         relevance=0.9, relevance_reason="why-1", review="pending",
+                         origin="agent",
+                         created_at=datetime(2026, 9, 20, tzinfo=timezone.utc)),
+                Artifact(investigation_id=iid, run_id=r2id, title="Sched item",
+                         review="accepted", origin="agent",
+                         created_at=datetime(2026, 9, 21, tzinfo=timezone.utc)),
+                Artifact(investigation_id=iid, title="Hand item", review="pending",
+                         origin="manual",
+                         created_at=datetime(2026, 9, 21, tzinfo=timezone.utc)),
+                Artifact(investigation_id=iid, title="Expl item", author="explainer",
+                         review="pending", origin="agent",
+                         created_at=datetime(2026, 9, 22, tzinfo=timezone.utc)),
+            ])
+            db.commit()
+            return iid
+        finally:
+            db.close()
+
+    def test_overview_shape_and_actor_math(self):
+        iid = self._seed()
+        r = self.client.get(f"/api/investigations/{iid}/artifacts/overview")
+        self.assertEqual(r.status_code, 200, r.text)
+        ov = r.json()
+        self.assertEqual(ov["total"], 4)
+        actors = {a["actor"]: a for a in ov["by_actor"]}
+        self.assertEqual(actors["agent · manual run"]["count"], 1)
+        self.assertEqual(actors["agent · scheduled"]["count"], 1)
+        self.assertEqual(actors["human"]["count"], 1)
+        self.assertEqual(actors["explainer"]["count"], 1)
+        self.assertAlmostEqual(sum(a["pct"] for a in ov["by_actor"]), 100.0)
+        self.assertEqual([b["day"] for b in ov["timeline"]],
+                         ["2026-09-20", "2026-09-21", "2026-09-22"])
+        self.assertEqual([b["count"] for b in ov["timeline"]], [1, 2, 1])
+
+    def test_purpose_prefers_evidence_then_fallbacks(self):
+        iid = self._seed()
+        items = {i["title"]: i for i in self.client.get(
+            f"/api/investigations/{iid}/artifacts/overview").json()["items"]}
+        self.assertEqual(items["Agent item"]["purpose"], "why-1")
+        self.assertEqual(items["Sched item"]["purpose"], "agent run goal: gap goal")
+        self.assertEqual(items["Hand item"]["purpose"], "added by hand")
+        self.assertEqual(items["Expl item"]["purpose"], "saved from an explanation")
+
+    def test_overview_missing_is_404(self):
+        r = self.client.get("/api/investigations/999999/artifacts/overview")
+        self.assertEqual(r.status_code, 404)
+
+
 if __name__ == "__main__":
     unittest.main()

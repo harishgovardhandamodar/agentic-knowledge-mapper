@@ -63,6 +63,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .inv-item:hover .inv-hide-btn, .inv-item.is-hidden .inv-hide-btn { opacity: 1; }
 .inv-hide-btn:hover { color: var(--text); background: var(--bg3); }
 .status-pill { display: inline-block; padding: 1px 8px; border-radius: 9px; font-size: 10px; font-weight: 600; }
+.drift-pill { display: inline-block; padding: 1px 8px; border-radius: 9px; font-size: 10px; font-weight: 600; background: rgba(130,80,223,0.18); color: #bc8cff; border: 1px dashed #8250df; white-space: nowrap; }
 .st-draft { background: var(--bg3); color: var(--text2); }
 .st-running { background: #1f3a5f; color: var(--accent); }
 .st-ready { background: #1a3d2a; color: var(--green); }
@@ -109,7 +110,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .graph-legend .gl-dots { display: flex; align-items: flex-end; gap: 3px; flex: none; }
 .graph-legend .gl-note { color: var(--text2); }
 .graph-legend code { font-size: 10px; background: var(--bg3); padding: 0 4px; border-radius: 4px; }
-#artifactsView, #consoleView { overflow-y: auto; padding: 20px 24px; height: 100%; background: var(--bg); }
+#artifactsView, #consoleView, #collectionView { overflow-y: auto; padding: 20px 24px; height: 100%; background: var(--bg); }
 .rev-filters { display: flex; gap: 6px; margin-bottom: 14px; flex-wrap: wrap; align-items: center; }
 .filter-btn { padding: 4px 12px; border-radius: 12px; font-size: 11px; cursor: pointer; border: 1px solid var(--border); background: transparent; color: var(--text2); }
 .filter-btn:hover { border-color: var(--accent); color: var(--text); }
@@ -607,6 +608,7 @@ body.pane-sec-top-collapsed .sec-topbar-sub { display: none; }
     <div class="main-tabs">
       <div class="main-tab active" data-view="graph" onclick="switchView('graph')"><i class="fas fa-project-diagram"></i> Knowledge graph</div>
       <div class="main-tab" data-view="artifacts" onclick="switchView('artifacts')"><i class="fas fa-list-check"></i> Review <span id="pendingCount"></span></div>
+      <div class="main-tab" data-view="collection" onclick="switchView('collection')"><i class="fas fa-box-archive"></i> Artifacts</div>
       <div class="main-tab" data-view="timeline" onclick="switchView('timeline')"><i class="fas fa-timeline"></i> Timeline</div>
       <div class="main-tab" data-view="explainer" onclick="switchView('explainer')"><i class="fas fa-lightbulb"></i> Explainer</div>
       <div class="main-tab" data-view="console" onclick="switchView('console')"><i class="fas fa-terminal"></i> Agent console</div>
@@ -641,8 +643,12 @@ body.pane-sec-top-collapsed .sec-topbar-sub { display: none; }
           <button class="filter-btn" data-rev="accepted">Accepted</button>
           <button class="filter-btn" data-rev="rejected">Rejected</button>
           <button class="filter-btn" data-rev="all">All</button>
+          <button class="filter-btn" id="driftPill" title="Show only items flagged as off-brief drift">Drift</button>
         </div>
         <div id="artList"></div>
+      </div>
+      <div class="view" id="collectionView">
+        <div id="collectionBody"><div class="audit-empty">Loading collection…</div></div>
       </div>
       <div class="view" id="timelineView">
         <div class="compare-bar">
@@ -867,6 +873,7 @@ let physicsEnabled = true;
 let clusterMode = 'off', clusterIds = [], clusterCache = { category: null, similarity: null };
 let activeRunId = null, lastEventId = 0, pollTimer = null;
 let revFilter = 'pending';
+let driftOnly = false;
 let overlayOpen = false;
 
 const TYPE_COLORS = {
@@ -877,11 +884,17 @@ const TYPE_COLORS = {
 document.addEventListener('DOMContentLoaded', () => {
   initTheme();
   document.getElementById('searchInput').addEventListener('input', debounce(onSearch, 300));
-  document.querySelectorAll('#revFilters .filter-btn').forEach(b =>
+  document.querySelectorAll('#revFilters .filter-btn[data-rev]').forEach(b =>
     b.addEventListener('click', () => {
-      document.querySelectorAll('#revFilters .filter-btn').forEach(x => x.classList.remove('active'));
+      document.querySelectorAll('#revFilters .filter-btn[data-rev]').forEach(x => x.classList.remove('active'));
       b.classList.add('active'); revFilter = b.dataset.rev; loadArtifacts();
     }));
+  const driftPill = document.getElementById('driftPill');
+  if (driftPill) driftPill.addEventListener('click', () => {
+    driftOnly = !driftOnly;
+    driftPill.classList.toggle('active', driftOnly);
+    loadArtifacts();
+  });
   refreshAll();
 });
 
@@ -1168,7 +1181,7 @@ function renderGraph() {
     borderWidth: 2,
     font: { color: fontColor, size: 11 },
     group: n.type,
-    opacity: n.review === 'rejected' ? 0.35 : 1,
+    opacity: (n.review === 'rejected' || n.drift) ? 0.35 : 1,
   })));
   edges = new vis.DataSet((graphData.edges || []).map(e => ({
     from: e.from, to: e.to, label: e.label, title: e.title,
@@ -1413,6 +1426,7 @@ async function loadArtifacts() {
   if (!currentInv) return;
   const q = document.getElementById('searchInput').value.trim();
   let url = `${API}/investigations/${currentInv}/artifacts?review=${revFilter}&limit=200`;
+  if (driftOnly) url += '&drift=1';
   if (q) url += `&search=${encodeURIComponent(q)}`;
   const res = await fetch(url);
   const data = await res.json();
@@ -1427,7 +1441,7 @@ async function loadArtifacts() {
     return `<div class="art-card">
       <div class="row1">
         <div class="rel-ring" style="background:${col}20;color:${col};border:2px solid ${col};">${pct}%</div>
-        <div class="ttl"><span class="type-badge" style="background:var(--bg3);color:var(--text2);">${a.artifact_type}</span> ${a.title}</div>
+        <div class="ttl"><span class="type-badge" style="background:var(--bg3);color:var(--text2);">${a.artifact_type}</span>${a.drift ? ' <span class="drift-pill" title="Flagged as off-brief drift">drift</span>' : ''} ${a.title}</div>
       </div>
       ${a.relevance_reason ? `<div class="reason">“${a.relevance_reason}”</div>` : ''}
       <div class="meta">
@@ -1442,6 +1456,9 @@ async function loadArtifacts() {
         ${a.review !== 'accepted' ? `<button class="btn btn-primary btn-sm" onclick="setReview(${a.id},'accepted')"><i class="fas fa-check"></i> Accept</button>` : ''}
         ${a.review !== 'rejected' ? `<button class="btn btn-ghost btn-sm" onclick="setReview(${a.id},'rejected')"><i class="fas fa-times"></i> Reject</button>` : ''}
         ${a.review !== 'pending' ? `<button class="btn btn-ghost btn-sm" onclick="setReview(${a.id},'pending')">Unreview</button>` : ''}
+        ${a.drift
+          ? `<button class="btn btn-ghost btn-sm" onclick="setDrift(${a.id},false)" title="Clear the drift flag"><i class="fas fa-undo"></i> Undrift</button>`
+          : `<button class="btn btn-ghost btn-sm" onclick="setDrift(${a.id},true)" title="Flag as off-brief drift"><i class="fas fa-wind"></i> Drift</button>`}
         <button class="btn btn-danger btn-sm" onclick="deleteArtifact(${a.id})"><i class="fas fa-trash"></i></button>
       </div>
     </div>`;
@@ -1456,6 +1473,16 @@ async function setReview(id, review) {
   loadArtifacts(); updatePendingCount(); loadGraph();
 }
 
+async function setDrift(id, drift) {
+  const res = await fetch(`${API}/artifacts/${id}/drift`, {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ drift }),
+  });
+  if (!res.ok) { showNotif('Failed to ' + (drift ? 'flag' : 'clear') + ' drift', 'error'); return; }
+  showNotif(drift ? 'Flagged as drift' : 'Drift flag cleared', 'success');
+  loadArtifacts(); loadGraph();
+}
+
 async function deleteArtifact(id) {
   if (!confirm('Delete this artifact?')) return;
   await fetch(`${API}/artifacts/${id}`, { method: 'DELETE' });
@@ -1467,6 +1494,62 @@ async function updatePendingCount() {
   const res = await fetch(`${API}/investigations/${currentInv}/artifacts?review=pending&limit=1`);
   const data = await res.json();
   document.getElementById('pendingCount').textContent = data.total ? `(${data.total})` : '';
+}
+
+async function loadCollection() {
+  // Collection overview: every artifact with when (timeline), why (purpose),
+  // and who (actor involvement shares) -- the "what did we gather and how"
+  // counterpart to the Review queue's triage role.
+  const body = document.getElementById('collectionBody');
+  if (!currentInv) {
+    body.innerHTML = '<div class="audit-empty">Select an investigation to see its collection.</div>';
+    return;
+  }
+  body.innerHTML = '<div class="audit-empty"><i class="fas fa-spinner fa-spin"></i> Loading collection…</div>';
+  let ov;
+  try {
+    ov = await (await fetch(`${API}/investigations/${currentInv}/artifacts/overview`)).json();
+  } catch (e) {
+    body.innerHTML = `<div class="audit-empty">Collection unavailable: ${escHtml(e.message)}</div>`;
+    return;
+  }
+  const peakDay = Math.max(0, ...(ov.timeline || []).map(b => b.count || 0));
+  const actors = (ov.by_actor || []).map(a => `
+    <div class="audit-act">
+      <span style="grid-column:1 / -1;font-weight:600;color:var(--text)">${escHtml(a.actor)}</span>
+      <span></span>
+      <span class="bar"><span style="width:${a.pct}%"></span></span>
+      <span class="n">${a.pct}% · ${a.count}</span>
+    </div>`).join('') || '<div class="audit-empty">No actors yet.</div>';
+  const days = (ov.timeline || []).map(b => `
+    <div class="audit-act">
+      <span>${escHtml(b.day)}</span>
+      <span class="bar"><span style="width:${peakDay ? Math.round(100 * (b.count || 0) / peakDay) : 0}%"></span></span>
+      <span class="n">${b.count || 0}</span>
+    </div>`).join('') || '<div class="audit-empty">Nothing collected yet.</div>';
+  const rows = (ov.items || []).map(i => `<tr>
+      <td>${i.url ? `<a href="${escHtml(i.url)}" target="_blank" rel="noopener">${escHtml(i.title)}</a>` : escHtml(i.title)}</td>
+      <td>${escHtml(i.artifact_type || '—')}</td>
+      <td style="max-width:340px">${escHtml(i.purpose || '—')}</td>
+      <td>${escHtml(i.actor)}</td>
+      <td style="white-space:nowrap">${i.collected_at ? new Date(i.collected_at).toLocaleDateString() : '—'}</td>
+      <td>${escHtml(i.review || '—')}${i.drift ? ' <span class="drift-pill">drift</span>' : ''}</td>
+    </tr>`).join('') || '<tr><td colspan="6">no artifacts collected</td></tr>';
+  body.innerHTML = `
+    <div class="audit-banner ok">
+      <i class="fas fa-box-archive"></i>
+      <span class="grow"><b>Collection</b> — ${ov.total} artifact${ov.total === 1 ? '' : 's'}<br>
+        <span class="audit-hash">timeline · purpose · actor involvement</span></span>
+    </div>
+    <div class="audit-sub">Actor involvement</div>
+    ${actors}
+    <div class="audit-sub" style="margin-top:14px">Collection timeline</div>
+    ${days}
+    <div class="audit-sub" style="margin-top:14px">All artifacts</div>
+    <table class="audit-tbl">
+      <thead><tr><th>Title</th><th>Type</th><th>Purpose of collection</th><th>Actor</th><th>Collected</th><th>Status</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
 }
 
 let timelineData = null, compareResult = null, highlightOn = false;
@@ -2609,6 +2692,7 @@ function switchView(view) {
   if (view === 'graph' && network) setTimeout(() => network.fit({ animation: true }), 100);
   if (view === 'explainer') loadPrefs();
   if (view === 'audit') loadAuditRuns();
+  if (view === 'collection') loadCollection();
 }
 
 

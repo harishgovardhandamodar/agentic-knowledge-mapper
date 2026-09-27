@@ -59,6 +59,7 @@ class Artifact(Base):
     relevance = Column(Float, nullable=True)  # 0..1 agent score
     relevance_reason = Column(String(500), nullable=True)
     review = Column(String(20), nullable=False, default="pending")  # pending|accepted|rejected
+    drift = Column(Integer, nullable=False, default=0)  # 0|1 — off-brief topic; kept but flagged
     origin = Column(String(20), nullable=False, default="agent")  # agent|manual
     run_id = Column(Integer, ForeignKey("agent_runs.id", ondelete="SET NULL"),
                     nullable=True, index=True)  # collecting run, if any

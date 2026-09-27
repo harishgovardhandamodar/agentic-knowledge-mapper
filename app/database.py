@@ -70,6 +70,7 @@ _MIGRATIONS = [
     ("investigations", "preferred_domains", "VARCHAR(500)"),
     ("investigations", "auto_save_explanations", "INTEGER NOT NULL DEFAULT 1"),
     ("investigations", "hidden", "INTEGER NOT NULL DEFAULT 0"),
+    ("artifacts", "drift", "INTEGER NOT NULL DEFAULT 0"),
     ("security_assessments", "inherent_pct", "FLOAT"),
     ("security_assessments", "residual_pct", "FLOAT"),
     ("security_assessments", "controls_json", "TEXT"),

@@ -242,6 +242,7 @@ an action are provable afterwards:
 | GET | `/api/investigations/{id}/graph` | Nodes + edges |
 | GET | `/api/investigations/{id}/graph/clusters?mode=` | category \| similarity centroids |
 | GET | `/api/investigations/{id}/artifacts?review=&search=` | Review queue |
+| GET | `/api/investigations/{id}/artifacts/overview` | Collection: timeline, purpose, actor involvement shares |
 | GET/POST | `/api/investigations/{id}/explain`, `/api/investigations/{id}/explanations` | Ask / history |
 | GET | `/api/explanations/{id}`, `…/thread`, `…/suggestions` | Detail / thread / follow-up ideas |
 | POST | `/api/explanations/{id}/followup`, `…/quiz`, `…/bookmark`, `…/watch`, `…/feedback`, `…/save_to_graph`, `…/investigate_gaps` | Threads, quiz, curation, watch, gap runs |
