@@ -35,6 +35,7 @@ from typing import Any, Optional
 
 from . import grounding
 from . import ledger
+from . import obs
 
 PROTOCOL = "a2a/1.0"
 
@@ -889,7 +890,8 @@ def _audit_hop(ctx: Any, env: dict[str, Any], result: dict[str, Any],
                     latency_ms=latency_ms,
                     input_refs=_payload_claim_refs(env.get("payload") or {}))
     except Exception as exc:  # noqa: BLE001 - auditing must not break the bus
-        print(f"[ledger] dropped hop record: {exc}")
+        obs.log("a2a.hop_audit_dropped", level="error",
+                error=f"{type(exc).__name__}: {exc}")
 
 
 def dispatch(env: dict[str, Any], db: Any = None) -> dict[str, Any]:
@@ -898,6 +900,12 @@ def dispatch(env: dict[str, Any], db: Any = None) -> dict[str, Any]:
     Also the audit checkpoint for agent traffic: every hop lands on the task's
     ledger chain, and the run is made current for the duration of the handler so
     the model calls inside it are recorded against the same chain.
+
+    Adopts a trace for the duration of the hop. A local dispatch inherits the
+    caller's, so a click's trace reaches the model calls its agents make; an
+    envelope arriving from a peer carries its own ``trace``, because a
+    contextvar does not cross a process boundary and adopting the sender's id is
+    the only way both sides' events end up under one trace.
     """
     if env.get("protocol") != PROTOCOL:
         raise ValueError(f"unsupported protocol: {env.get('protocol')}")
@@ -914,9 +922,12 @@ def dispatch(env: dict[str, Any], db: Any = None) -> dict[str, Any]:
         # Auditing must never be the reason a security review cannot run. If the
         # ledger is unavailable, drop this hop rather than the whole assessment;
         # the chain will show a gap, which is itself the signal.
-        print(f"[ledger] audit scope unavailable, hop run unaudited: {exc!r}")
+        obs.log("a2a.scope_unavailable", level="error", run_id=run_id,
+                error=f"{type(exc).__name__}: {exc}")
         scope = contextlib.nullcontext(None)
-    with scope as ctx:
+    hop_trace = env.get("trace") or obs.current_trace() or obs.new_trace(
+        env.get("task_id"))
+    with obs.trace_scope(hop_trace), scope as ctx:
         t0 = time.time()
         result = handler(env, db) if env["to"] == "research-collector" else handler(env)
         _audit_hop(ctx, env, result, int((time.time() - t0) * 1000))

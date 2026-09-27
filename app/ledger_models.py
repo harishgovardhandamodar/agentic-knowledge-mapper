@@ -95,6 +95,13 @@ class LedgerEvent(Base):
     prev_hash = Column(String(64), nullable=False)
     hash = Column(String(64), nullable=False, index=True)
     proof_json = Column(Text, nullable=True)        # derived Proof-of-Work artifact
+    # Which trace produced this event. Deliberately outside the hashed core:
+    # the trace says *when* and *under which request* the record was written,
+    # not what the record claims. Folding it into data_json would change every
+    # event hash and break verification of every run already on disk, so it
+    # rides in its own unhashed column -- like proof_json, an observation about
+    # the record rather than part of it.
+    trace = Column(String(48), nullable=True, index=True)
 
     run = relationship("LedgerRun", back_populates="events")
 

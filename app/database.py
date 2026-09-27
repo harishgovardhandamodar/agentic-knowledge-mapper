@@ -86,6 +86,11 @@ _MIGRATIONS = [
     ("ledger_runs", "session_id", "VARCHAR(64)"),
     ("ledger_runs", "client_key", "VARCHAR(64)"),
     ("ledger_runs", "last_seen_at", "DATETIME"),
+    # Trace id per event. Additive and unhashed (see LedgerEvent.trace), so an
+    # existing run keeps verifying byte-for-byte and simply gains the column.
+    # ledger_audit_drops needs no entry: it is a new table, so create_all makes
+    # it whole.
+    ("ledger_events", "trace", "VARCHAR(48)"),
 ]
 
 

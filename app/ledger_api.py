@@ -21,6 +21,7 @@ from fastapi.responses import Response
 from sqlalchemy import func
 
 from . import ledger as L
+from . import obs
 from .database import SessionLocal
 from .ledger_models import LedgerApproval, LedgerClaim, LedgerEvent, LedgerRun
 
@@ -301,6 +302,18 @@ def export_run(run_id: str, download: bool = Query(False)):
     return doc
 
 
+@router.get("/traces/{trace_id}")
+def get_trace(trace_id: str, limit: int = Query(2000, ge=1, le=20000)):
+    """One user action, end to end, across every run it touched.
+
+    A click is not one run: it opens a session, dispatches hops that each get
+    their own chain, calls models inside them, and finishes in a background
+    thread. This is the view that puts the whole thing in one order -- the
+    traceback, rather than one slice of it per run.
+    """
+    return L.trace_timeline(trace_id, limit=limit)
+
+
 @router.get("/audit-drops")
 def list_audit_drops(limit: int = Query(100, ge=1, le=1000)):
     """Audit records this deployment failed to write -- the dead letters.
@@ -453,30 +466,46 @@ async def open_session(request: Request):
     thread it starts (those copy the context explicitly). A request with no
     session key behaves exactly as it did before sessions existed.
 
+    This is also where the trace starts, which is the point: a request is the
+    outermost thing in this process, so whatever id is bound here is the one
+    that reaches the agent hops, the model calls, and the ledger events they
+    produce. A client that already has a trace of its own sends it in
+    ``X-AKM-Trace-Id`` and we adopt that instead of minting a second id for the
+    same work.
+
     This runs for *every* product request, which is precisely why it has to be
     fail-open: a browser always sends the header, so letting a ledger error
     propagate here would turn an audit-trail outage into a total application
     outage. If the trail cannot be opened, the request proceeds unaudited.
     """
     key = session_key(request)
-    if not key:
-        request.state.ledger_session = None
-        yield None
-        return
-    session_id = L._safe("resolve_session", L.resolve_session, key)
-    if not session_id:
-        request.state.ledger_session = None
-        yield None
-        return
-    request.state.ledger_session = session_id
-    request.state.ledger_client_key = key
-    try:
-        with L.session(session_id, client_key=key):
+    # Bind the trace before anything else, including the early returns below:
+    # a request with no session still runs agents, and those events want a
+    # trace of their own rather than inheriting whatever was left on the
+    # worker's contextvar.
+    incoming = (request.headers.get(obs.TRACE_HEADER) or "").strip()[:48]
+    trace = incoming or obs.new_trace(key)
+    request.state.akm_trace = trace
+    with obs.trace_scope(trace):
+        if not key:
+            request.state.ledger_session = None
+            yield None
+            return
+        session_id = L._safe("resolve_session", L.resolve_session, key)
+        if not session_id:
+            request.state.ledger_session = None
+            yield None
+            return
+        request.state.ledger_session = session_id
+        request.state.ledger_client_key = key
+        try:
+            with L.session(session_id, client_key=key):
+                yield session_id
+        except Exception as exc:  # noqa: BLE001 - the trail is never load-bearing
+            obs.log("ledger.session_context_failed", level="error",
+                    session=session_id,
+                    error=f"{type(exc).__name__}: {exc}")
             yield session_id
-    except Exception as exc:  # noqa: BLE001 - the trail is never load-bearing
-        print(f"[ledger] session context failed: {type(exc).__name__}: {exc}",
-              file=sys.stderr)
-        yield session_id
 
 
 def human_action(request: Request, action: str,

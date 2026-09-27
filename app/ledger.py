@@ -64,6 +64,7 @@ from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 
 from . import grounding as _grounding
+from . import obs
 from .database import SessionLocal
 from .ledger_models import (LedgerApproval, LedgerAuditDrop, LedgerClaim,
                             LedgerEvent, LedgerRun)
@@ -992,6 +993,10 @@ def append(run_id: str, kind: str, actor: str, *, actor_type: str = "system",
                         severity=severity, data_json=canon(data),
                         input_refs=canon(refs) if refs else None,
                         prev_hash=prev, hash=h,
+                        # Unhashed: the trace is an observation about this write,
+                        # not part of what the event claims, so it cannot change
+                        # the hash or the chain.
+                        trace=obs.current_trace(),
                         proof_json=canon(proof) if proof else None))
                     row.head_hash, row.head_seq = h, seq
                     db.commit()
@@ -1713,8 +1718,44 @@ def timeline(run_id: str, *, kinds: Optional[list] = None,
                 "actor_type": r.actor_type, "actor": r.actor, "intent": r.intent,
                 "verdict": r.verdict, "severity": r.severity, "hash": r.hash,
                 "prev_hash": r.prev_hash, "input_refs": _loads(r.input_refs, []),
+                "trace": r.trace,
                 "proof": _loads(r.proof_json, None),
                 "data": _loads(r.data_json, {}) if include_data else None,
+            } for r in rows],
+        }
+    finally:
+        if own:
+            db.close()
+
+
+def trace_timeline(trace: str, limit: int = 2000, db=None) -> dict:
+    """Every event written under one trace, across every run it touched.
+
+    A single user action is not one run: it opens a session, dispatches A2A
+    hops that each get their own ledger run, makes model calls inside them, and
+    ends in a background thread that writes its own rows. Per-run timelines
+    therefore show slices of one action, and reconstructing "what did this click
+    actually do" means stitching them by hand.
+
+    The trace is what makes that a query. This is the traceback view: order the
+    whole action, whoever wrote each part of it.
+    """
+    own = db is None
+    db = db or SessionLocal()
+    try:
+        rows = (db.query(LedgerEvent)
+                .filter(LedgerEvent.trace == trace)
+                .order_by(LedgerEvent.ts, LedgerEvent.run_id,
+                          LedgerEvent.seq).limit(limit).all())
+        runs = sorted({r.run_id for r in rows})
+        return {
+            "trace": trace, "runs": runs, "total": len(rows),
+            "by_run": {rid: sum(1 for r in rows if r.run_id == rid)
+                       for rid in runs},
+            "events": [{
+                "run_id": r.run_id, "seq": r.seq, "ts": r.ts, "kind": r.kind,
+                "actor_type": r.actor_type, "actor": r.actor, "intent": r.intent,
+                "verdict": r.verdict, "severity": r.severity, "hash": r.hash,
             } for r in rows],
         }
     finally:
@@ -2222,8 +2263,8 @@ def _record_drop(recorder: str, exc: Exception, run_id: Optional[str],
         finally:
             db.close()
     except Exception as drop_exc:  # noqa: BLE001 - the DLQ must not raise
-        print(f"[ledger] dead-letter write also failed: "
-              f"{type(drop_exc).__name__}: {drop_exc}", file=sys.stderr)
+        obs.log("ledger.dead_letter_write_failed", level="error",
+                error=f"{type(drop_exc).__name__}: {drop_exc}")
 
 
 def _safe(recorder: str, fn, *args, **kwargs):
@@ -2239,8 +2280,8 @@ def _safe(recorder: str, fn, *args, **kwargs):
         return fn(*args, **kwargs)
     except Exception as exc:  # noqa: BLE001 - deliberately broad, see docstring
         _dropped_total += 1
-        print(f"[ledger] dropped audit record ({recorder}): "
-              f"{type(exc).__name__}: {exc}", file=sys.stderr)
+        obs.log("ledger.audit_dropped", level="error", recorder=recorder,
+                run_id=current_run(), error=f"{type(exc).__name__}: {exc}")
         try:
             _record_drop(recorder, exc, current_run(), _actor_of(args),
                          {"args": _safe_detail(args), "kwargs": _safe_detail(kwargs)})
