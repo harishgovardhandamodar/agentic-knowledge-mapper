@@ -33,11 +33,64 @@ _STOPWORDS = set(
     "might must shall per via within without".split())
 
 
+#: Size of the character n-grams used for the stem-level net, and how many must
+#: be shared with the brief or corpus to clear an item.
+#:
+#: Three letters was too few: "Encephalitis" shares "ali" and "lit" with
+#: "alignment", which is enough to clear a biomedical item out of an
+#: interpretability investigation. Four letters survives the real cases and
+#: still catches the stems it is for -- "reward hacking" and "Rewarding the
+#: wrong thing" share "rewa". The bar is deliberately low, because this stage
+#: exists to *find* items for the semantic judge: a false positive costs one
+#: cheap batch item, a false negative hides real drift.
+NGRAM = 4
+MIN_SHARED_NGRAMS = 2
+
+
 def content_tokens(s: str) -> set:
-    """Lowercased word tokens minus stopwords. Short tokens ('AI', 'de') are
-    dropped so acronyms and fragments don't manufacture relevance."""
-    return {w for w in re.findall(r"[a-z0-9]{3,}", (s or "").lower())
-            if w not in _STOPWORDS}
+    """Lowercased word tokens minus stopwords.
+
+    Two- and three-letter tokens survive only when the source text had a
+    capital in them, which is what an acronym looks like. The old rule dropped
+    every token under four characters, throwing away ``AI``, ``ML`` and
+    ``LLM`` -- the words a frontier-AI brief is actually built from, and the
+    ones most able to tell a biomedical item from an AI one.
+
+    The capital test is "any capital", not "all capitals", so mixed-case
+    acronyms like ``IoT`` and ``iOS`` count too. Sentence-initial capitals
+    ("An", "Of", "We") do not get through, because every one of those is
+    already a stopword, and lowercase fragments like ``de``/``fr`` never had a
+    capital to begin with.
+    """
+    out = set()
+    for m in re.finditer(r"[A-Za-z0-9][A-Za-z0-9\-_]*", s or ""):
+        w = m.group(0)
+        low = w.lower()
+        if low in _STOPWORDS:
+            continue
+        if len(w) >= 4:
+            out.add(low)
+        elif len(w) >= 2 and any(c.isupper() for c in w):
+            out.add(low)
+    return out
+
+
+def ngrams(s: str, n: int = NGRAM) -> set:
+    """Character n-grams over the alphanumeric skeleton of ``s``.
+
+    A vocabulary prefilter is blind to inflection and phrasing: "reward
+    misspecification" against a brief about "reward hacking" shares no words,
+    yet it is squarely on-brief. N-grams catch the shared stem without a model
+    call, a dictionary, or a dependency -- and they are format-agnostic, so
+    "reward hacking" and "reward-hacking" produce the same set.
+
+    Punctuation collapses to a single space rather than vanishing, so a match
+    cannot be manufactured by joining two unrelated words across a hyphen.
+    """
+    skeleton = re.sub(r"[^a-z0-9]+", " ", (s or "").lower()).strip()
+    if len(skeleton) < n:
+        return {skeleton} if skeleton else set()
+    return {skeleton[i:i + n] for i in range(len(skeleton) - n + 1)}
 
 
 def brief_terms(title: str, keywords: str, description: str) -> set:
@@ -46,24 +99,79 @@ def brief_terms(title: str, keywords: str, description: str) -> set:
             | content_tokens(description))
 
 
-def item_terms(title: str, tags: str) -> set:
-    return content_tokens(title) | content_tokens((tags or "").replace(",", " "))
+def item_terms(title: str, tags: str, description: str = "") -> set:
+    """The vocabulary of one item.
+
+    ``description`` matters as much as the title: a paper titled "A study" and
+    tagged "research" says what it is about only in its body, and judging that
+    on its title alone throws away the evidence the collector already fetched.
+    """
+    return (content_tokens(title)
+            | content_tokens((tags or "").replace(",", " "))
+            | content_tokens(description or ""))
 
 
-def drift_candidates(brief: set, corpus: set, items: list) -> list:
+def drift_candidates(brief: set, corpus: set, items: list, *,
+                     brief_text: str = "", corpus_text: str = "",
+                     min_ngrams: int = MIN_SHARED_NGRAMS) -> list:
     """Items sharing no vocabulary with the brief or the collected corpus.
 
-    Each item is {"id":..., "title":..., "tags":...}; returns the subset that
-    needs a semantic verdict. Everything else is definitionally on-brief.
+    Each item is ``{"id":..., "title":..., "tags":..., "description":...}``;
+    returns the subset that needs a semantic verdict. Everything else is
+    definitionally on-brief.
+
+    Three ways to clear an item, because each alone is too strict:
+
+    * a shared word with the brief or the corpus terms;
+    * shared character n-grams with the brief or corpus *text* -- the
+      stem-level match that catches "Rewarding the wrong thing" against a brief
+      about "reward hacking", and which needs no model call;
+    * a short item whose own text is a substring of the brief, so a two-word
+      title like "Reward hacking" is not sent to the judge on a technicality.
+
+    Without the ``*_text`` arguments the n-gram stages are skipped, which is the
+    original term-only behaviour; every caller now passes them.
     """
+    brief_grams = ngrams(brief_text) if brief_text else set()
+    corpus_grams = ngrams(corpus_text) if corpus_text else set()
+    brief_blob = re.sub(r"\s+", " ", (brief_text or "").lower()).strip()
+    corpus_blob = re.sub(r"\s+", " ", (corpus_text or "").lower()).strip()
     out = []
-    for it in items:
-        terms = item_terms(it.get("title") or "", it.get("tags") or "")
+    for it in items or []:
+        terms = item_terms(it.get("title") or "", it.get("tags") or "",
+                           it.get("description") or "")
         if not terms:
             continue
-        if not (terms & brief) and not (terms & corpus):
-            out.append(it)
+        if terms & brief or terms & corpus:
+            continue
+        text = re.sub(
+            r"\s+", " ",
+            " ".join(str(it.get(f) or "")
+                     for f in ("title", "tags", "description"))).lower().strip()
+        if not text:
+            continue
+        if _contained_in(text, brief_blob) or _contained_in(text, corpus_blob):
+            continue
+        if brief_grams or corpus_grams:
+            grams = ngrams(text)
+            shared = len(grams & brief_grams) + len(grams & corpus_grams)
+            if shared >= min_ngrams:
+                continue
+        out.append(it)
     return out
+
+
+def _contained_in(text: str, blob: str) -> bool:
+    """Is this whole short item literally inside the brief or corpus?
+
+    A phrase that appears verbatim in the brief is on-brief by definition, and
+    n-grams cannot tell that reliably for a two-word item -- there are simply
+    too few of them to clear the threshold. Only applies to short items, so a
+    long item cannot excuse itself by containing a common word.
+    """
+    if not blob or len(text) > 60 or len(text.split()) > 6:
+        return False
+    return text in blob
 
 
 def classify_drift(brief_text: str, candidates: list, limit: int = 30,

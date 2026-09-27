@@ -704,15 +704,22 @@ def detect_investigation_drift(inv_id: int, data: DetectDriftRequest,
         Artifact.investigation_id == inv_id,
         (Artifact.drift.is_(None) | (Artifact.drift == 0))).all()
     brief = drift_mod.brief_terms(inv.title, inv.keywords, inv.description)
+    brief_text = f"{inv.title} | {inv.keywords} | {inv.description}"
     corpus = set()
+    corpus_text_parts = []
     for art in db.query(Artifact).filter(
             Artifact.investigation_id == inv_id,
             Artifact.relevance.is_not(None)).all():
-        corpus |= drift_mod.item_terms(art.title, art.tags)
-    items = [{"id": a.id, "title": a.title, "tags": a.tags or ""}
-             for a in untagged]
-    cands = drift_mod.drift_candidates(brief, corpus, items)
-    brief_text = f"{inv.title} | {inv.keywords} | {inv.description}"
+        corpus |= drift_mod.item_terms(art.title, art.tags, art.description)
+        corpus_text_parts.append(f"{art.title} {art.tags or ''} {art.description or ''}")
+    # Descriptions reach both sides of the prefilter: they supply the item's own
+    # vocabulary, and an already-relevant artifact's text becomes the corpus the
+    # next candidates are compared against.
+    items = [{"id": a.id, "title": a.title, "tags": a.tags or "",
+              "description": a.description or ""} for a in untagged]
+    cands = drift_mod.drift_candidates(brief, corpus, items,
+                                        brief_text=brief_text,
+                                        corpus_text=" ".join(corpus_text_parts))
     report = drift_mod.classify_drift(brief_text, cands)
     drifted = report.get("ids") or set()
     marked = []

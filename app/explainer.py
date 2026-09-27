@@ -1160,15 +1160,21 @@ def _gate_new_concepts(db, inv_id: int, created: list) -> list:
         if inv is None:
             return []
         brief = drift_mod.brief_terms(inv.title, inv.keywords, inv.description)
+        brief_text = f"{inv.title} | {inv.keywords} | {inv.description}"
         corpus = set()
+        corpus_text_parts = []
         for art in db.query(Artifact).filter(
                 Artifact.investigation_id == inv_id,
                 Artifact.relevance.is_not(None)).all():
-            corpus |= drift_mod.item_terms(art.title, art.tags)
-        cands = drift_mod.drift_candidates(brief, corpus, created)
+            corpus |= drift_mod.item_terms(art.title, art.tags, art.description)
+            corpus_text_parts.append(f"{art.title} {art.tags or ''} {art.description or ''}")
+        # New concepts carry no description of their own here, so the recall
+        # boost comes from the brief and the established corpus.
+        cands = drift_mod.drift_candidates(
+            brief, corpus, created, brief_text=brief_text,
+            corpus_text=" ".join(corpus_text_parts))
         if not cands:
             return []
-        brief_text = f"{inv.title} | {inv.keywords} | {inv.description}"
         report = drift_mod.classify_drift(brief_text, cands)
         drifted = report.get("ids") or set()
         marked = []
