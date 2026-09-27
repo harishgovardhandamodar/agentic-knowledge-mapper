@@ -63,6 +63,7 @@ from typing import Any, Iterable, Optional
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 
+from . import grounding as _grounding
 from .database import SessionLocal
 from .ledger_models import (LedgerApproval, LedgerClaim, LedgerEvent,
                             LedgerRun)
@@ -330,64 +331,14 @@ class Mandate:
 
 # ------------------------------------------------------------------ claims --
 
-def _norm(s: str) -> str:
-    return re.sub(r"\s+", " ", (s or "").lower()).strip()
-
-
-def quote_is_verbatim(text: str, quote: str) -> bool:
-    """Does ``quote`` actually appear in ``text``?
-
-    Mirrors ``explainer._quote_valid`` deliberately rather than importing it:
-    ``llm`` is an instrumentation point for this module, and pulling the
-    explainer's dependency tree (bs4, feedparser) in through that edge would be
-    a nasty import cycle. A quote under 12 normalised chars is rejected -- a
-    two-word "quote" matches almost any source and proves nothing.
-    """
-    nq, nt = _norm(quote), _norm(text)
-    if not nq or len(nq) < 12:
-        return False
-    if nq in nt:
-        return True
-    head, tail = nq[:25], nq[-10:]
-    return bool(head and tail and head in nt and tail in nt)
-
-
-def verify_grounding(claim_text: str, citations: Iterable[dict],
-                     sources: Any) -> dict:
-    """The hallucination gate: keep only citations a source actually contains.
-
-    ``sources`` may be a list of page dicts (with ``text``) or a mapping of
-    source key -> text. Returns the surviving citations plus a corroboration
-    score based on how many *distinct* sources back the claim -- one source
-    agreeing with itself is not corroboration.
-    """
-    texts: dict[Any, str] = {}
-    if isinstance(sources, dict):
-        texts = {k: (v.get("text") if isinstance(v, dict) else str(v))
-                 for k, v in sources.items()}
-    else:
-        for idx, page in enumerate(sources or []):
-            key = page.get("id", page.get("url", idx)) if isinstance(page, dict) else idx
-            texts[key] = page.get("text", "") if isinstance(page, dict) else str(page)
-
-    kept, dropped = [], []
-    for cit in citations or []:
-        key = cit.get("source", cit.get("sourceIndex"))
-        quote = cit.get("quote") or ""
-        body = texts.get(key)
-        if body is not None and quote_is_verbatim(body, quote):
-            kept.append({"source": key, "quote": quote[:180], "verified": True})
-        else:
-            dropped.append({"source": key, "quote": quote[:180], "reason": "not_found_in_source"})
-
-    n_sources = len({k["source"] for k in kept})
-    confidence = "none" if n_sources == 0 else "high" if n_sources >= 3 else "medium" if n_sources == 2 else "low"
-    verdict = "unverified" if n_sources == 0 else "supported"
-    return {
-        "kept": kept, "dropped": dropped, "n_sources": n_sources,
-        "confidence": confidence, "verdict": verdict,
-        "violation": n_sources == 0, "claim": (claim_text or "")[:200],
-    }
+# The grounding rules live in a leaf module so this file and the explainer
+# share one implementation: the ledger is an instrumentation point for ``llm``,
+# and importing the explainer's bs4/feedparser tree through that edge would be
+# an import cycle. A stdlib-only module has no such edge, so the quote rule is
+# re-exported here rather than reimplemented -- two copies of the gate would
+# drift, and a drifted gate stops grounding while still looking healthy.
+quote_is_verbatim = _grounding.quote_is_verbatim
+verify_grounding = _grounding.verify_grounding
 
 
 def claim_hash(text: str, citations: Optional[list] = None) -> str:
@@ -2017,12 +1968,22 @@ class RunCtx:
     def claim(self, text: str, citations: Optional[list] = None,
               sources: Any = None, *, actor: str = "unknown",
               actor_type: str = "agent",
-              input_refs: Optional[list] = None) -> dict:
-        grounding = verify_grounding(text, citations or [], sources or {})
+              input_refs: Optional[list] = None,
+              grounding: Optional[dict] = None) -> dict:
+        """Record a claim, grounding it unless the caller already did.
+
+        ``grounding`` lets a producer that verified the claim some other way
+        submit its own verdict -- the report-writer's executive paragraph is
+        free prose with no quotes, so it is checked by reference-id instead of
+        by verbatim match. The shape must be the one
+        :func:`grounding.verify_grounding` returns, because that is what the
+        chain, the gate, and ``contamination`` read.
+        """
+        g = grounding or verify_grounding(text, citations or [], sources or {})
         res = emit_claim(self.run_id, text, citations, actor=actor,
-                         actor_type=actor_type, grounding=grounding,
+                         actor_type=actor_type, grounding=g,
                          input_refs=input_refs)
-        if self.mandate.require_grounding and grounding["violation"]:
+        if self.mandate.require_grounding and g["violation"]:
             self._emit_gate("ungrounded_claim",
                             {"claim_hash": res["claim_hash"],
                              "text": (text or "")[:300]},
@@ -2189,11 +2150,13 @@ def scope(run_id: str, mandate: Optional[Mandate] = None, *,
 def record_claim(text: str, citations: Optional[list] = None,
                  sources: Any = None, *, actor: str = "unknown",
                  actor_type: str = "agent",
-                 input_refs: Optional[list] = None) -> Optional[dict]:
+                 input_refs: Optional[list] = None,
+                 grounding: Optional[dict] = None) -> Optional[dict]:
     """Register a claim on the open run, grounded against ``sources``.
 
     No-ops without an open run, so domain code can call this unconditionally
-    and stay audit-free in tests and one-off scripts.
+    and stay audit-free in tests and one-off scripts. Pass ``grounding`` to
+    supply a verdict produced by another method (see ``RunCtx.claim``).
     """
     run_id = current_run()
     if not run_id:
@@ -2201,7 +2164,7 @@ def record_claim(text: str, citations: Optional[list] = None,
     mandate = current_mandate() or Mandate()
     return _safe(RunCtx(run_id, mandate).claim, text, citations,
                  sources=sources, actor=actor, actor_type=actor_type,
-                 input_refs=input_refs)
+                 input_refs=input_refs, grounding=grounding)
 
 
 def _safe(fn, *args, **kwargs):

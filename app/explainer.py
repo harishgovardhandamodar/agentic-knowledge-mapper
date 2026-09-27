@@ -19,6 +19,7 @@ from bs4 import BeautifulSoup
 
 from .database import SessionLocal
 from .models import Explanation, Artifact, CorpusPage, Investigation, Relationship
+from . import grounding
 from . import llm
 from .search import search_web, UA
 
@@ -489,10 +490,6 @@ def _mode_rules(mode: str, depth: str) -> str:
     return " ".join(x for x in rules if x)
 
 
-def _norm(s):
-    return re.sub(r"\s+", " ", (s or "").lower()).strip()
-
-
 def _coerce_answer(raw):
     """Accept the envelope object, a bare top-level array of sections, or a
     single section object.
@@ -639,19 +636,17 @@ def _assign_images(answer: dict, images: list, min_score: int = 3) -> dict:
 
 
 def _quote_valid(text: str, quote: str) -> bool:
-    nq = _norm(quote)
-    nt = _norm(text)
-    if not nq or len(nq) < 12:
-        return False
-    if nq in nt:
-        return True
-    head, tail = nq[:25], nq[-10:]
-    return bool(head and tail and head in nt and tail in nt)
+    return grounding.quote_is_verbatim(text, quote)
 
 
 def _verify_grounding(answer: dict, pages: list) -> dict:
     """Drop invented citations/quotes; keep only ones found verbatim in sources.
-    Also score each claim's confidence from how many DISTINCT sources back it."""
+    Also score each claim's confidence from how many DISTINCT sources back it.
+
+    The quote rule and the corroboration ladder come from ``app.grounding`` --
+    the same ones the ledger applies to a claim. Only the plumbing is local:
+    pages are addressed by position here, not by source key.
+    """
     stats = {"citations_total": 0, "citations_valid": 0, "citations_dropped": 0,
              "claims_total": 0, "grounding_violations": [],
              "corroboration": {"strong": 0, "moderate": 0, "weak": 0}}
@@ -669,15 +664,15 @@ def _verify_grounding(answer: dict, pages: list) -> dict:
                 idx = cit.get("sourceIndex")
                 stats["citations_total"] += 1
                 if isinstance(idx, int) and 0 <= idx < len(texts) and _quote_valid(texts[idx], cit.get("quote") or ""):
-                    kept.append({"sourceIndex": idx, "quote": (cit.get("quote") or "")[:180]})
+                    kept.append({"sourceIndex": idx,
+                                 "quote": (cit.get("quote") or "")[:grounding.QUOTE_STORE_CHARS]})
                     stats["citations_valid"] += 1
                 else:
                     stats["citations_dropped"] += 1
             if kept:
                 n_src = len({k["sourceIndex"] for k in kept})
-                confidence = "high" if n_src >= 3 else "medium" if n_src == 2 else "low"
                 c["citations"] = kept
-                c["confidence"] = confidence
+                c["confidence"] = grounding.confidence_for(n_src)
                 c["n_sources"] = n_src
                 stats["corroboration"][
                     "strong" if n_src >= 3 else "moderate" if n_src == 2 else "weak"] += 1

@@ -33,6 +33,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
 
+from . import grounding
 from . import ledger
 
 PROTOCOL = "a2a/1.0"
@@ -598,8 +599,19 @@ def threat_intel_handle(env: dict[str, Any]) -> dict[str, Any]:
 
 def _llm_exec_paragraph(product: str, exposure_label: str, residual: float,
                         inherent: float, exploits: list[dict],
-                        evidence: list[dict], controls: list[str]) -> str:
-    """LLM-drafted grounded executive paragraph; raises on any failure."""
+                        evidence: list[dict], controls: list[str]) -> tuple:
+    """LLM-drafted executive paragraph, plus the grounding check on it.
+
+    Returns ``(text, grounding)``. The paragraph is free prose, so there are no
+    quotes to verify -- the only externally checkable thing in it is the
+    ``#id`` evidence references it was told to cite. A drafted paragraph that
+    cites nothing real is treated as unbacked (``violation``) and the caller
+    falls back to deterministic text rather than shipping a confident-sounding
+    paragraph resting on evidence that does not exist.
+
+    Raises on any failure, same as before; the caller already has a
+    deterministic paragraph for that case.
+    """
     from . import llm as _llm
 
     ev_txt = "\n".join(f"- #{e['artifact_id']} {e['title']} (rel {e.get('relevance')})"
@@ -615,9 +627,16 @@ def _llm_exec_paragraph(product: str, exposure_label: str, residual: float,
             f"Known attacks mapped:\n{ke_txt}\nIn-app evidence:\n{ev_txt}\n\n"
             "Write 3-4 sentences: verdict, how the controls change the risk, "
             "sharpest attack path, what the in-app evidence confirms.")
-    return _llm.chat([{"role": "system", "content": sys},
+    text = _llm.chat([{"role": "system", "content": sys},
                       {"role": "user", "content": user}],
                      temperature=0.2, max_tokens=512).strip()
+    # A model told it may cite "#id" will sometimes invent one, and a citation
+    # that resolves to nothing is indistinguishable from real support to a
+    # reader. Check every id against the evidence actually supplied.
+    check = grounding.verify_citation_ids(
+        text, [e.get("artifact_id") for e in evidence or []])
+    check["method"] = "citation_id_check"
+    return text, check
 
 
 def report_writer_handle(env: dict[str, Any]) -> dict[str, Any]:
@@ -669,15 +688,32 @@ def report_writer_handle(env: dict[str, Any]) -> dict[str, Any]:
 
     paragraph = ""
     llm_note = "deterministic fallback"
+    gcheck: dict = {}
+    draft_accepted = False
     try:
         residual = float(payload.get("residual_pct", payload.get("overall_pct", 0)))
         inherent = float(payload.get("inherent_pct", payload.get("overall_pct", 0)))
     except (TypeError, ValueError):
         residual = inherent = 0.0
     try:
-        paragraph = _llm_exec_paragraph(product, exposure_label, residual, inherent,
-                                        known_exploits, evidence, declared_controls)
-        llm_note = "drafted by report-writer via LLM gateway"
+        paragraph, gcheck = _llm_exec_paragraph(
+            product, exposure_label, residual, inherent,
+            known_exploits, evidence, declared_controls)
+        # An invented "#id" is a hallucinated citation: it looks exactly like
+        # real support to a reader but points at nothing. Rather than ship it
+        # or try to edit it out of prose, drop the whole paragraph and let the
+        # deterministic one below carry the claim.
+        if gcheck.get("invented"):
+            llm_note = (f"rejected: drafted paragraph cited non-existent "
+                        f"artifact id(s) {gcheck['invented']}")
+            paragraph = ""
+        elif gcheck.get("violation"):
+            llm_note = ("rejected: drafted paragraph cited no evidence it was "
+                        "given")
+            paragraph = ""
+        else:
+            draft_accepted = True
+            llm_note = "drafted by report-writer via LLM gateway"
     except Exception as exc:
         paragraph = ""
         llm_note = f"LLM unavailable ({exc}); deterministic fallback"
@@ -700,7 +736,18 @@ def report_writer_handle(env: dict[str, Any]) -> dict[str, Any]:
             f"mapped ({top_ke}), {n_ref} of them corroborated by in-app evidence: {top_ev}. "
             f"Close the remaining gap with the §5 mitigations before enablement."
         )
-        llm_note = "deterministic grounded paragraph (LLM empty/unavailable)"
+        if llm_note == "deterministic fallback":
+            llm_note = "deterministic grounded paragraph (LLM empty/unavailable)"
+
+    # Audit the paragraph that actually ships, not the draft that was thrown
+    # away: a reviewer asking "is this text backed?" means the text in front of
+    # them. The deterministic paragraph names artifacts from the same evidence
+    # list, so it passes the same check -- and if it ever does not, that is a
+    # real signal rather than a formatting artefact.
+    shipped = grounding.verify_citation_ids(
+        paragraph or "", [e.get("artifact_id") for e in evidence or []])
+    shipped["method"] = "citation_id_check"
+    _audit_exec_paragraph(paragraph, shipped)
 
     return reply_envelope(
         env, "report-writer", "section_written",
@@ -708,10 +755,59 @@ def report_writer_handle(env: dict[str, Any]) -> dict[str, Any]:
          "exec_evidence_lines": bullets,
          "exec_evidence_refs": ev_lines,
          "exec_paragraph": paragraph,
+         "exec_paragraph_grounding": {
+             "method": shipped["method"],
+             "verdict": shipped["verdict"],
+             "cited": shipped["cited"],
+             "invented": shipped["invented"],
+             "draft_accepted": draft_accepted,
+             # The draft's own verdict, kept because a rejection is the most
+             # interesting thing a reviewer can be told: it is the difference
+             # between "the model agreed with us" and "the model invented #99
+             # and we caught it".
+             "draft": {"verdict": gcheck.get("verdict", "unverified"),
+                       "cited": gcheck.get("cited", []),
+                       "invented": gcheck.get("invented", [])},
+             "note": llm_note},
          "residual_pct": residual,
          "inherent_pct": inherent},
         note=f"section with {len(known_exploits)} exploits drafted ({llm_note})",
     )
+
+
+def _audit_exec_paragraph(paragraph: str, gcheck: dict) -> None:
+    """Record the drafted executive paragraph and its grounding on the ledger.
+
+    The claim is content-addressed like any other, so contamination tracing and
+    ``/claims?ungrounded_only`` see it too. A citation-id check yields a
+    ``n_sources`` equal to the number of artifacts actually referenced, which
+    the corroboration ladder then reads normally.
+
+    No-ops without an open run, and never raises: this is bookkeeping, and the
+    caller must not fail over it.
+    """
+    try:
+        from . import ledger as _ledger
+        kept = gcheck.get("kept") or []
+        if kept:
+            verdict = {"kept": [{"source": f"artifact:{i}"} for i in kept],
+                       "dropped": [{"source": f"artifact:{i}", "quote": "",
+                                    "reason": "id_not_in_evidence"}
+                                   for i in (gcheck.get("invented") or [])],
+                       "n_sources": len(kept),
+                       "confidence": grounding.confidence_for(len(kept)),
+                       "verdict": "supported", "violation": False,
+                       "claim": (paragraph or "")[:200]}
+        else:
+            # Nothing the paragraph leans on survived, so this is an
+            # ungrounded claim and the gate should see it as one.
+            verdict = {"kept": [], "dropped": [], "n_sources": 0,
+                       "confidence": "none", "verdict": "unverified",
+                       "violation": True, "claim": (paragraph or "")[:200]}
+        _ledger.record_claim(paragraph or "", [], {}, actor="report-writer",
+                             grounding=verdict)
+    except Exception:  # noqa: BLE001 - auditing must not break the report
+        return
 
 
 # ------------------------------------------------------------ orchestrator ---
