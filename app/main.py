@@ -713,7 +713,8 @@ def detect_investigation_drift(inv_id: int, data: DetectDriftRequest,
              for a in untagged]
     cands = drift_mod.drift_candidates(brief, corpus, items)
     brief_text = f"{inv.title} | {inv.keywords} | {inv.description}"
-    drifted = drift_mod.classify_drift(brief_text, cands)
+    report = drift_mod.classify_drift(brief_text, cands)
+    drifted = report.get("ids") or set()
     marked = []
     for a in untagged:
         if a.id in drifted and not a.drift:
@@ -723,8 +724,21 @@ def detect_investigation_drift(inv_id: int, data: DetectDriftRequest,
     ledger_api.human_action(request, "marked_drift",
                             {"investigation": inv_id, "artifacts": marked,
                              "mode": "auto", "checked": len(untagged),
-                             "candidates": len(cands)})
-    return {"checked": len(untagged), "candidates": len(cands), "marked": marked}
+                             "candidates": len(cands),
+                             "judge_complete": report.get("complete", True),
+                             "failed_batches": report.get("failed", 0),
+                             "overflow": report.get("overflow", 0)})
+    # Say plainly when the pass was partial. "Marked nothing" reads as a clean
+    # result otherwise, which is the failure mode this reporting exists to
+    # prevent.
+    out = {"checked": len(untagged), "candidates": len(cands), "marked": marked,
+           "judged": report.get("judged", 0),
+           "complete": report.get("complete", True)}
+    if not out["complete"]:
+        out["incomplete_reason"] = drift_mod.incomplete_reason(report)
+        if report.get("error"):
+            out["error"] = report["error"]
+    return out
 
 
 @app.delete("/api/artifacts/{artifact_id}")

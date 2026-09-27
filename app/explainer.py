@@ -1147,8 +1147,10 @@ def _gate_new_concepts(db, inv_id: int, created: list) -> list:
 
     Deterministic prefilter first (shared vocabulary with the brief or the
     agent-scored corpus), then one LLM batch verdict over the leftovers.
-    Fail-open: any failure marks nothing, and saving already succeeded by
-    the time this runs, so drift gating can never break a save.
+    Fail-open: any failure marks nothing, and saving already succeeded by the
+    time this runs, so drift gating can never break a save. The failure is
+    still reported -- ``drift.judge`` lands on the ledger when the judge could
+    not finish, so "nothing marked" is distinguishable from "nothing checked".
     """
     from . import drift as drift_mod
     try:
@@ -1167,7 +1169,8 @@ def _gate_new_concepts(db, inv_id: int, created: list) -> list:
         if not cands:
             return []
         brief_text = f"{inv.title} | {inv.keywords} | {inv.description}"
-        drifted = drift_mod.classify_drift(brief_text, cands)
+        report = drift_mod.classify_drift(brief_text, cands)
+        drifted = report.get("ids") or set()
         marked = []
         for c in cands:
             if c.get("id") in drifted:

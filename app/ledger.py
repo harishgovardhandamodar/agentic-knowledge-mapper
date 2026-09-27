@@ -81,7 +81,7 @@ ACTOR_TYPES = frozenset({"agent", "llm", "mcp", "a2a", "human", "system"})
 INTERNAL_KINDS = frozenset({
     "run.start", "run.end", "mandate.set", "mandate.check", "gate.check",
     "approval.request", "approval.grant", "approval.deny", "claim.emit",
-    "claim.verify", "drift.detect",
+    "claim.verify", "drift.detect", "drift.judge", "audit.dropped",
 })
 
 VALID_VERDICTS = frozenset({"pass", "allow", "deny", "flag", "hold", "block", "grant"})
@@ -2203,6 +2203,29 @@ def record_agent_step(stage: str, message: str, detail: Any = None,
         return None
     mandate = current_mandate() or Mandate()
     return _safe(RunCtx(run_id, mandate).step, stage, message, detail, **kwargs)
+
+
+def record_internal_event(kind: str, actor: str, *, data: Optional[dict] = None,
+                          verdict: str = "pass", severity: str = "info",
+                          input_refs: Optional[list] = None) -> Optional[str]:
+    """Fail-open append for the app's own bookkeeping.
+
+    The other ``record_*`` wrappers mirror a specific actor's work. This one is
+    for the signals the audit trail needs about *itself* and about the checks
+    that guard it -- a drift judge that could not run, an audit write that was
+    dropped -- which have no natural place in the agent-facing helpers.
+
+    No-ops without an open run, so calling code stays audit-free in tests and
+    one-off scripts, and never raises: an audit signal must not become the
+    reason a request fails.
+    """
+    run_id = current_run()
+    if not run_id:
+        return None
+    mandate = current_mandate() or Mandate()
+    return _safe(RunCtx(run_id, mandate)._event, kind, actor,
+                 actor_type="agent", data=data or {}, verdict=verdict,
+                 severity=severity, input_refs=input_refs)
 
 
 def record_mcp_call(server: str, tool: str, args: dict, output: Any, **kwargs) -> Optional[str]:
