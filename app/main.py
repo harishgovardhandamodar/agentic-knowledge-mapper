@@ -18,6 +18,7 @@ from . import llm, scheduler
 from . import ledger_api
 from . import drift as drift_mod
 from . import yield_ as yld
+from . import recommend as rec
 from .agent import launch_run, launch_run_with_goal
 from . import security_agent
 from . import security as sec_engine
@@ -567,6 +568,24 @@ def _artifact_purpose(a, run) -> str:
             return f"agent run goal: {goal}"[:300]
         return f"collected by agent run #{run.id} ({run.trigger or 'manual'})"
     return "collected by agent"
+
+
+@app.get("/api/investigations/{inv_id}/recommendations")
+def recommendations(inv_id: int, assessment_id: Optional[int] = None,
+                    limit: int = Query(8, ge=1, le=50),
+                    db: Session = Depends(get_db)):
+    """What to do next, computed from what is already on disk.
+
+    Pull-only and model-free: each figure here is either a count of stored
+    artifacts or the difference between two evaluations of the same deterministic
+    scorer, so nothing is estimated. An empty ``recommended`` list means there is
+    genuinely nothing to suggest, which is a different claim from having no
+    opinion.
+    """
+    inv = db.query(Investigation).filter(Investigation.id == inv_id).first()
+    if not inv:
+        raise HTTPException(404, "Investigation not found")
+    return rec.digest(db, inv_id, assessment_id=assessment_id, limit=limit)
 
 
 @app.get("/api/investigations/{inv_id}/query-yields")
