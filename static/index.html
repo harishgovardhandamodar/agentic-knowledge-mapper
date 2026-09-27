@@ -3734,10 +3734,11 @@ function secTabBadge(kind, text) {
 }
 
 async function renderSecGate(runId, logHtml) {
-  let plan = {};
+  let plan = {}, requester = '';
   try {
     const run = await (await fetch(`${API}/runs/${runId}`)).json();
     plan = (run.stats && run.stats.control_plan) || {};
+    requester = (run.stats && run.stats.params && run.stats.params.requested_by) || '';
   } catch (e) {}
   const declared = plan.declared_controls || [];
   const proposed = plan.proposed_controls || [];
@@ -3746,12 +3747,15 @@ async function renderSecGate(runId, logHtml) {
   el.innerHTML = `
     <div class="sec-card" style="border-color:var(--teal);">
       <h3><i class="fas fa-user-check"></i> Approval required — control plan</h3>
-      <p>The <strong>control-analyst</strong> agent finished and is waiting for your confirmation before research, threat mapping, scoring and reporting continue.</p>
+      <p>The <strong>control-analyst</strong> agent finished and is waiting for a second person to confirm the control plan before research, threat mapping, scoring and reporting continue.</p>
       <div class="sec-formula">source: <code>${escHtml(plan.source || 'n/a')}</code> · confidence: <strong>${conf}</strong></div>
       <h4>Controls it will treat as in place (${declared.length})</h4>
       <div class="sec-dist">${declared.length ? declared.map(c => `<span style="background:rgba(88,166,255,0.15);color:var(--accent)">${escHtml(c)}</span>`).join('') : '<span style="color:var(--text2)">none — residual will equal inherent</span>'}</div>
       ${proposed.length ? `<h4>Recommended additions (${proposed.length})</h4>
         <div style="font-size:12px;">${proposed.map(p => `<div style="padding:4px 0;border-bottom:1px solid var(--border)"><strong>${escHtml(p.id)}</strong> ${escHtml(p.name || '')} <button class="btn btn-ghost btn-sm" onclick="secGateAddControl('${escHtml(p.id)}')">add</button></div>`).join('')}</div>` : ''}
+      <h4 style="margin-top:12px;"><i class="fas fa-signature"></i> Approved by</h4>
+      <p style="font-size:12px;color:var(--text2);margin:2px 0 6px;">Requested by <code>${escHtml(requester || 'unknown')}</code> — someone else has to approve. The decision is recorded with both names.</p>
+      <input id="secApprover" placeholder="approver's name" style="width:100%;max-width:280px;margin-bottom:8px;" />
       <div class="sec-btn-row">
         <button class="btn btn-primary btn-sm" onclick="secGateResolve(${runId}, 'approve')"><i class="fas fa-check"></i> Approve &amp; continue</button>
         <button class="btn btn-ghost btn-sm" onclick="secGateResolve(${runId}, 'reject')" style="color:var(--red);"><i class="fas fa-times"></i> Reject</button>
@@ -3767,12 +3771,21 @@ function secGateAddControl(cid) {
 
 async function secGateResolve(runId, decision) {
   const active = secGetControls();
+  // The approver names themselves; the server refuses the requester's own
+  // session, so this is not decoration -- it is the check being satisfied.
+  const approver = ((document.getElementById('secApprover') || {}).value || '').trim();
+  if (!approver) { showNotif('Enter the approver\'s name', 'error'); return; }
   try {
     const res = await fetch(`${API}/security/runs/${runId}/approval`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-AKM-Actor': approver },
       body: JSON.stringify({ decision, active_controls: active }),
     });
-    if (!res.ok) throw new Error('HTTP ' + res.status);
+    if (!res.ok) {
+      let msg = 'HTTP ' + res.status;
+      try { const j = await res.json(); if (j && j.detail) msg = j.detail; } catch (e) {}
+      throw new Error(msg);
+    }
     if (decision === 'reject') {
       clearInterval(secPollTimer); secPollTimer = null;
       document.getElementById('secRunBtn').disabled = false;
@@ -3784,7 +3797,7 @@ async function secGateResolve(runId, decision) {
     showNotif('Approved — agent continuing', 'success');
     pollSecurityRun();
     secPollTimer = setInterval(pollSecurityRun, 2500);
-  } catch (e) { showNotif('Gate action failed', 'error'); }
+  } catch (e) { showNotif('Gate action failed: ' + e.message, 'error'); }
 }
 
 function secEnsureMermaid(root) {

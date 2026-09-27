@@ -20,6 +20,7 @@ from . import drift as drift_mod
 from . import yield_ as yld
 from . import recommend as rec
 from . import threatpack, evalkit
+from . import approvals
 from .agent import launch_run, launch_run_with_goal
 from . import security_agent
 from . import security as sec_engine
@@ -70,12 +71,32 @@ if os.path.isdir(static_dir):
 def on_start():
     init_db()
     scheduler.start()
+    # Queue recovery comes first, and it is what makes the sweep below correct.
+    # A job whose worker died with its lease expired is re-queued here; doing it
+    # lazily on the next launch would leave it stuck, because a process that
+    # restarts with nothing queued would never look at it again.
+    recovered = set()
+    try:
+        recovered = set(security_agent.recover_jobs())
+    except Exception as exc:  # noqa: BLE001 - never block startup on recovery
+        obs.log("jobs.recovery_failed", level="error",
+                error=f"{type(exc).__name__}: {exc}")
+    try:
+        security_agent.start_worker()
+    except Exception as exc:  # noqa: BLE001 - a dead queue is not a dead app
+        obs.log("jobs.worker_start_failed", level="error",
+                error=f"{type(exc).__name__}: {exc}")
     # Crash recovery: runs stuck in "running" (killed mid-flight) would
-    # otherwise block new runs via the 429 guard.
+    # otherwise block new runs via the 429 guard. A run whose job was just
+    # re-queued is *not* one of them -- it is about to be picked up again, so
+    # marking it interrupted would be a false record of a crash that is being
+    # repaired.
     db = next(get_db())
     try:
         stale = db.query(AgentRun).filter(AgentRun.status == "running").all()
         for r in stale:
+            if r.id in recovered:
+                continue
             r.status = "error"
             r.error = "interrupted by server restart"
             r.finished_at = datetime.now(timezone.utc)
@@ -181,6 +202,7 @@ class SecurityApprovalRequest(BaseModel):
     decision: str = "approve"  # approve | reject
     active_controls: Optional[list[str]] = None
     applicability: Optional[dict] = None
+    note: str = ""
 
 
 class AgentInvokeRequest(BaseModel):
@@ -1460,17 +1482,22 @@ def start_security_assessment(inv_id: int, data: SecurityAssessRequest,
         "focus": data.focus or [],
         "declared_controls": data.declared_controls or [],
         "require_approval": bool(data.require_approval),
-    })
+    }, requested_by=ledger_api.request_actor(request))
     return {"status": "started", "run_id": run_id}
 
 
 @app.post("/api/security/runs/{run_id}/approval")
 def approve_security_run(run_id: int, data: SecurityApprovalRequest,
-                         db: Session = Depends(get_db)):
+                         request: Request, db: Session = Depends(get_db)):
     """Approve or reject a run parked at the control-plan gate.
 
     On approval the operator may override the control set and applicability the
     control-analyst proposed; the run then resumes from the next stage.
+
+    The approver must be a different person from whoever requested the run. A
+    gate the requester can pass alone is not a control, so the identity is
+    compared before anything is changed, and the decision -- approve, reject,
+    or edit-then-approve -- is recorded on the ledger naming both people.
     """
     run = db.query(AgentRun).filter(AgentRun.id == run_id).first()
     if not run:
@@ -1484,6 +1511,21 @@ def approve_security_run(run_id: int, data: SecurityApprovalRequest,
     plan = stats.get("control_plan", {}) or {}
     decision = (data.decision or "approve").lower()
 
+    # Strict: an approval has to be attributable, so a request with no name and
+    # no session is refused rather than signed with the shared default.
+    approver = ledger_api.request_actor_or_empty(request)
+    requester = approvals.requester_of(run.stats)
+    try:
+        approver = approvals.check_approver(approver=approver,
+                                            requester=requester, run_id=run_id)
+    except approvals.ApprovalError as exc:
+        # A refused attempt is itself worth a record: somebody tried to approve
+        # their own run, which is the thing the gate exists to prevent.
+        ledger_api.human_action(request, "approval_refused", {
+            "run_id": run_id, "reason": exc.reason, **exc.detail,
+            "decision": decision})
+        raise HTTPException(exc.status, exc.reason)
+
     if decision == "reject":
         run.status = "error"
         run.error = "Control plan rejected by operator"
@@ -1492,8 +1534,12 @@ def approve_security_run(run_id: int, data: SecurityApprovalRequest,
         security_agent._event(
             db, run.id, "gate", "Control plan rejected by operator — assessment aborted.",
             {"control_plan": plan})
-        return {"status": "rejected", "run_id": run_id}
+        ledger_api.human_action(request, "rejected_control_plan", approvals.decision_record(
+            run_id=run_id, decision="reject", approver=approver,
+            requester=requester, plan=plan, note=data.note))
+        return {"status": "rejected", "run_id": run_id, "approver": approver}
 
+    edited = (data.active_controls is not None) or (data.applicability is not None)
     if data.active_controls is not None:
         plan["declared_controls"] = [c for c in data.active_controls]
     if data.applicability is not None:
@@ -1510,10 +1556,15 @@ def approve_security_run(run_id: int, data: SecurityApprovalRequest,
         db.commit()
     except Exception:
         db.rollback()
-    resumed = security_agent.resume_security_assessment(run.id)
+    resumed = security_agent.resume_security_assessment(
+        run_id, approved_by=approver, note=data.note)
     if not resumed:
         raise HTTPException(409, "Could not resume run")
-    return {"status": "resumed", "run_id": run_id,
+    ledger_api.human_action(request, "approved_control_plan", approvals.decision_record(
+        run_id=run_id, decision="approve", approver=approver, requester=requester,
+        plan=plan, edited=edited, note=data.note))
+    return {"status": "resumed", "run_id": run_id, "approver": approver,
+            "requester": requester, "edited": edited,
             "approved_controls": plan.get("declared_controls", [])}
 
 

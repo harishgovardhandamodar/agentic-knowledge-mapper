@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
-from sqlalchemy import Column, Integer, String, Text, Float, DateTime, ForeignKey, UniqueConstraint
+from sqlalchemy import (Column, Integer, String, Text, Float, DateTime, ForeignKey,
+                        UniqueConstraint, Index, text)
 from sqlalchemy.orm import relationship
 
 from .database import Base
@@ -227,3 +228,56 @@ class QueryShapeYield(Base):
     kept = Column(Integer, nullable=False, default=0)      # artifacts that survived analysis
     llm_calls = Column(Integer, nullable=False, default=0)  # analysis cost paid
     last_seen_at = Column(DateTime, default=_now)
+
+
+class Job(Base):
+    """A unit of background work, persisted so a restart does not lose it.
+
+    Work used to start as a bare ``threading.Thread(daemon=True)``. The run row
+    was written first, so the work looked like it existed, but the only record
+    of the job itself lived in the thread's memory: restart the process and the
+    job is gone while its ``AgentRun`` sits at "running" forever, with no error
+    and nothing to retry. A queue row is the missing record.
+
+    Three properties this buys, each of which a thread does not have:
+
+    * **Idempotency.** ``key`` is unique, so a double-submitted form or a
+      retried request re-attaches to the existing job instead of running the
+      assessment twice and billing the model calls twice.
+    * **Retry.** ``attempts`` and ``next_attempt_at`` survive the process, so a
+      transient failure is retried with backoff instead of being lost.
+    * **Recovery.** A job left ``running`` by a crash has an expired lease;
+      :func:`app.jobqueue.recover_orphans` re-queues it at startup rather than
+      leaving it stuck forever.
+
+    ``lease_expires_at`` is what makes recovery safe: a job is only re-claimed
+    once nobody could still be working on it, so a long assessment is not
+    duplicated just because it outran a lease.
+    """
+    __tablename__ = "jobs"
+    # Uniqueness is over *live* jobs, not over the key. A key names a unit of
+    # work, and the same key legitimately comes back later: a run parked at an
+    # approval gate is re-queued under its original key once approved. A plain
+    # UNIQUE(key) would refuse that second enqueue forever; this index instead
+    # permits the history while making double-submit impossible.
+    __table_args__ = (
+        Index("uq_jobs_live_key", "key", unique=True,
+              sqlite_where=text("status IN ('pending','retry','running')")),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    # Not unique on its own -- see __table_args__.
+    key = Column(String(200), nullable=True, index=True)
+    kind = Column(String(50), nullable=False, index=True)
+    payload_json = Column(Text, nullable=True)          # JSON
+    status = Column(String(20), nullable=False, default="pending", index=True)
+    attempts = Column(Integer, nullable=False, default=0)
+    max_attempts = Column(Integer, nullable=False, default=3)
+    last_error = Column(Text, nullable=True)
+    run_id = Column(Integer, ForeignKey("agent_runs.id", ondelete="SET NULL"),
+                    nullable=True, index=True)
+    next_attempt_at = Column(DateTime, default=_now, index=True)
+    lease_expires_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=_now)
+    started_at = Column(DateTime, nullable=True)
+    finished_at = Column(DateTime, nullable=True)

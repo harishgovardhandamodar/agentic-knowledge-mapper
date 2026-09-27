@@ -112,6 +112,7 @@ def new_envelope(
     payload: Optional[dict[str, Any]] = None,
     task_id: Optional[str] = None,
     trace: Optional[list[dict[str, Any]]] = None,
+    trace_id: Optional[str] = None,
     note: str = "",
 ) -> dict[str, Any]:
     env: dict[str, Any] = {
@@ -121,7 +122,12 @@ def new_envelope(
         "to": recipient,
         "intent": intent,
         "payload": payload or {},
+        # ``trace`` is the hop log -- a list of the agents this task passed
+        # through. The *id* of the correlated trace is a different thing and has
+        # its own key, because one name for both means whichever is read first
+        # wins and the other is silently wrong.
         "trace": list(trace or []),
+        "trace_id": trace_id or None,
     }
     env["trace"].append({"agent": sender, "intent": intent, "at": _now(), "note": note})
     return env
@@ -141,6 +147,7 @@ def reply_envelope(
         payload=payload,
         task_id=request_env.get("task_id"),
         trace=request_env.get("trace", []),
+        trace_id=request_env.get("trace_id"),
         note=note,
     )
 
@@ -903,9 +910,13 @@ def dispatch(env: dict[str, Any], db: Any = None) -> dict[str, Any]:
 
     Adopts a trace for the duration of the hop. A local dispatch inherits the
     caller's, so a click's trace reaches the model calls its agents make; an
-    envelope arriving from a peer carries its own ``trace``, because a
+    envelope arriving from a peer carries its own ``trace_id``, because a
     contextvar does not cross a process boundary and adopting the sender's id is
     the only way both sides' events end up under one trace.
+
+    Note ``trace_id``, not ``trace``: on an envelope ``trace`` is the hop log.
+    Reading it as an id bound a list where a string belonged, and the next
+    ledger write died on it.
     """
     if env.get("protocol") != PROTOCOL:
         raise ValueError(f"unsupported protocol: {env.get('protocol')}")
@@ -925,8 +936,8 @@ def dispatch(env: dict[str, Any], db: Any = None) -> dict[str, Any]:
         obs.log("a2a.scope_unavailable", level="error", run_id=run_id,
                 error=f"{type(exc).__name__}: {exc}")
         scope = contextlib.nullcontext(None)
-    hop_trace = env.get("trace") or obs.current_trace() or obs.new_trace(
-        env.get("task_id"))
+    hop_trace = (env.get("trace_id") or obs.current_trace()
+                 or obs.new_trace(env.get("task_id")))
     with obs.trace_scope(hop_trace), scope as ctx:
         t0 = time.time()
         result = handler(env, db) if env["to"] == "research-collector" else handler(env)

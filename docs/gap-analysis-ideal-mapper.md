@@ -247,7 +247,7 @@ paths.
 | 4 | Embedding recall + content tokens for drift candidates | `app/drift.py:30-60` | Cheapest drift precision win |
 | 5 | Yield ledger + coverage/control recommenders | `app/scheduler.py:29-42`, `app/security.py:723-938` | Proactive + best-yield unlock |
 | 6 | Backend eval gate + versioned threat pack | `app/security.py:941-1092`, `standards-dashboard/scripts/eval_scoring.py` | Makes security agent an *evaluation* agent |
-| 7 | Job queue + distinct-approver gate | `app/security_agent.py:195-217` | Reliability + governance |
+| 7 | Job queue + distinct-approver gate | `app/jobqueue.py`, `app/approvals.py` | Reliability + governance |
 | 8 | Export signing + retention + RBAC | `app/ledger.py:1861-1867`, `app/ledger_api.py:385-408` | Audit completeness for traceback |
 
 ---
@@ -268,3 +268,8 @@ paths.
 - S: versioned catalog diff test; `eval_scoring` gate blocks residual
   regression; red-team prompt-injection suite must not change control plan
   without approval event.
+- Q/A: `kill -9` mid-assessment → restart → assert the `jobs` row is re-queued
+  (lease expired) rather than the `AgentRun` sitting at "running"; a slow job
+  with a live lease must **not** be re-claimed. Approval: requester ≠ approver
+  (case-insensitive) → 403; `approved_control_plan` with no `approved_by` →
+  ignored, run parks; decision lands on the ledger naming both.

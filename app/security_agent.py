@@ -1,8 +1,10 @@
 """AI Security Engineering & Evaluation Agent runner.
 
-Background-thread runner following the conventions of app/agent.py: a run is an
-AgentRun (trigger="security") with AgentEvent progress the GUI polls, and the
-finished product is a SecurityAssessment row scoped to the investigation.
+A run is an AgentRun (trigger="security") with AgentEvent progress the GUI
+polls, and the finished product is a SecurityAssessment row scoped to the
+investigation. Work is dispatched through the persisted job queue rather than a
+bare thread, so a restart mid-assessment does not leave the run stuck with
+nothing to retry.
 
 Inside, the assessment itself runs the agent-to-agent workflow from
 app/agents.py (orchestrator → research-collector → threat-intel →
@@ -22,6 +24,80 @@ from .database import SessionLocal
 from .models import Investigation, AgentRun, AgentEvent, SecurityAssessment
 from . import security as sec_engine
 from . import threatpack
+from . import approvals
+from . import jobqueue
+from . import obs
+
+#: Job kind for security assessments. The queue is shared, so every enqueue
+#: names its kind and the worker can be pointed at a subset.
+KIND_SECURITY = "security_assessment"
+
+_worker = None
+_worker_lock = threading.Lock()
+
+
+def _handle_security_job(job, payload) -> bool:
+    """Queue handler: run one security assessment.
+
+    Returns True for "done". ``run_security_assessment`` handles its own errors
+    by writing them onto the run, so a failure here is a bug in the handler
+    itself and is left to the queue to retry.
+
+    The trace is re-bound from the payload rather than inherited: a queued job
+    outlives the request that created it and is executed by the worker thread,
+    whose context is the worker's own. Copying the context at claim time used to
+    be enough when the job *was* the request's thread, and silently stopped
+    being true the moment a queue got involved.
+    """
+    run_id = payload.get("run_id")
+    if not run_id:
+        return False
+    with obs.trace_scope(payload.get("trace")):
+        run_security_assessment(run_id, payload.get("params") or {})
+    return True
+
+
+def recover_jobs() -> list:
+    """Re-queue jobs a dead worker left behind. Returns the recovered run ids.
+
+    Called from application startup, before the interrupted-run sweep, so the two
+    agree about which runs are actually lost.
+    """
+    db = SessionLocal()
+    try:
+        stale = jobqueue.recover_orphans(db)
+        run_ids = [j.run_id for j in stale if j.run_id]
+        if run_ids:
+            # Notified on one of the recovered runs, not on ``stale[0]``: a job
+            # need not belong to a run at all, and an event with a null run_id is
+            # a NOT NULL violation, not a notification.
+            _event(db, run_ids[0], "queue",
+                   f"Re-queued {len(stale)} job(s) left running by a previous "
+                   f"process.", {"jobs": [j.id for j in stale]})
+        return run_ids
+    finally:
+        db.close()
+
+
+def _ensure_worker():
+    """Start the shared worker once, if it is not already polling.
+
+    Recovery is *not* done here. Doing it on first launch meant a process that
+    restarted with nothing queued never looked at the job its own crash left
+    behind; :func:`recover_jobs` runs at startup instead, where a restart is
+    actually noticed.
+    """
+    global _worker
+    with _worker_lock:
+        if _worker is None:
+            _worker = jobqueue.start_worker(_handle_security_job,
+                                            kinds=[KIND_SECURITY])
+    return _worker
+
+
+def start_worker():
+    """Begin polling, after recovery has had its chance to re-queue work."""
+    return _ensure_worker()
 
 
 def _event(db: Session, run_id: int, stage: str, message: str, data: dict | None = None):
@@ -49,7 +125,19 @@ def run_security_assessment(run_id: int, params: dict):
 
         # ---- approval gate: run the control-analyst stage only, then pause for
         # ---- the operator to confirm the control plan before the rest proceeds.
+        #
+        # An approved plan is honoured ONLY when it carries an approver. A plan
+        # arriving on the original request used to skip the gate entirely, which
+        # made the gate a field the requester set for themselves; now a plan
+        # without a recorded approver is ignored and the run parks as designed.
         approved_plan = params.get("approved_control_plan") or None
+        if approved_plan is not None and not (
+                params.get("approved_by")
+                and params.get("approved_at")):
+            _event(db, run.id, "gate",
+                   "Ignored an approved control plan with no recorded approver; "
+                   "parking at the gate instead.")
+            approved_plan = None
         if params.get("require_approval") and not approved_plan:
             from .agents import new_envelope, dispatch
             gate_env = new_envelope(
@@ -195,8 +283,15 @@ def run_security_assessment(run_id: int, params: dict):
         db.close()
 
 
-def launch_security_assessment(investigation_id: int, params: dict) -> int:
-    """Create the run row and start the background thread. Returns run_id."""
+def launch_security_assessment(investigation_id: int, params: dict,
+                               requested_by: str = "") -> int:
+    """Create the run row, queue the work, and start a worker. Returns run_id.
+
+    The work goes through the queue rather than straight into a thread: the run
+    row alone is not a record of a job, and a thread's memory is not either. A
+    restart between here and the end of the assessment used to leave the run
+    stuck at "running" with nothing to retry.
+    """
     db = SessionLocal()
     try:
         run = AgentRun(investigation_id=investigation_id, status="running",
@@ -210,18 +305,29 @@ def launch_security_assessment(investigation_id: int, params: dict) -> int:
         db.commit()
         db.refresh(run)
         run_id = run.id
+        # Recorded at creation, not at approval time: the approver check needs
+        # to know who asked, and by the time they approve that is not otherwise
+        # recoverable.
+        params = dict(params or {})
+        params["requested_by"] = requested_by or approvals.UNKNOWN_ACTOR
+        jobqueue.enqueue(db, KIND_SECURITY, {"run_id": run_id, "params": params},
+                         key=f"security:{run_id}", run_id=run_id)
     finally:
         db.close()
-    # copy_context carries the session into the worker thread.
-    t = threading.Thread(target=contextvars.copy_context().run,
-                         args=(run_security_assessment, run_id, params),
-                         daemon=True)
-    t.start()
+    _ensure_worker()
     return run_id
 
 
-def resume_security_assessment(run_id: int) -> bool:
-    """Resume a run parked at an approval gate. Returns True if resumed."""
+def resume_security_assessment(run_id: int, *, approved_by: str = "",
+                               note: str = "") -> bool:
+    """Resume a run parked at an approval gate. Returns True if resumed.
+
+    ``approved_by`` is required to be a real identity: the caller is expected to
+    have run it past :func:`app.approvals.check_approver` first, and the stamp
+    it writes is what :func:`run_security_assessment` later checks before
+    honouring the plan. Without the stamp the run re-parks at the gate, so a
+    resume that skipped the check cannot slip through.
+    """
     db = SessionLocal()
     try:
         run = db.query(AgentRun).filter(AgentRun.id == run_id).first()
@@ -244,16 +350,19 @@ def resume_security_assessment(run_id: int) -> bool:
         params["declared_controls"] = plan.get("declared_controls", [])
         params["approved_control_plan"] = plan
         params["require_approval"] = False
+        params["approved_by"] = approvals.normalise_actor(approved_by)
+        params["approved_at"] = datetime.now(timezone.utc).isoformat()
+        params["approval_note"] = note[:500]
+        # The approval has already happened, so this is a re-queue rather than a
+        # new run: the same key keeps a double-click from starting a second one.
+        jobqueue.enqueue(db, KIND_SECURITY, {"run_id": run_id, "params": params},
+                         key=f"security:{run_id}", run_id=run_id)
         run.status = "running"
         run.stats = None
         db.commit()
     finally:
         db.close()
-    # copy_context carries the session into the worker thread.
-    t = threading.Thread(target=contextvars.copy_context().run,
-                         args=(run_security_assessment, run_id, params),
-                         daemon=True)
-    t.start()
+    _ensure_worker()
     return True
 
 

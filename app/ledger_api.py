@@ -455,7 +455,31 @@ def session_key(request: Request) -> Optional[str]:
 
 
 def request_actor(request: Request) -> str:
-    return (request.headers.get(ACTOR_HEADER) or DEFAULT_ACTOR).strip()[:64]
+    """A name for who is making this request, for the human-action audit.
+
+    A caller who names themselves sends ``X-AKM-Actor``; everyone else is
+    identified by their session key instead of a shared "user", because a
+    default that is the same for every caller cannot tell two people apart --
+    and a control that needs to tell two people apart is exactly what the
+    approval gate is for.
+    """
+    named = (request.headers.get(ACTOR_HEADER) or "").strip()[:64]
+    if named:
+        return named
+    return (session_key(request) or DEFAULT_ACTOR)[:64]
+
+
+def request_actor_or_empty(request: Request) -> str:
+    """The same identity, but empty when the caller gave nothing to attribute.
+
+    For a decision that has to be attributable: an approval signed "user" is not
+    signed by anyone, so a caller with no name and no session has to be told to
+    identify itself rather than being quietly given the shared default.
+    """
+    named = (request.headers.get(ACTOR_HEADER) or "").strip()[:64]
+    if named:
+        return named
+    return (session_key(request) or "").strip()[:64]
 
 
 async def open_session(request: Request):
@@ -498,14 +522,31 @@ async def open_session(request: Request):
             return
         request.state.ledger_session = session_id
         request.state.ledger_client_key = key
+        # The context manager is entered and exited by hand rather than with a
+        # ``with`` block, and that is the whole point: a ``with`` around a
+        # ``yield`` spans the *endpoint's* execution too, so its except clause
+        # would catch the endpoint's own 404 and try to yield a second time --
+        # which a generator cannot do, and which turned every 4xx into a
+        # "generator didn't stop after athrow()" RuntimeError. Only the setup
+        # below may be swallowed; an error from the endpoint is the endpoint's.
+        ctx = L.session(session_id, client_key=key)
         try:
-            with L.session(session_id, client_key=key):
-                yield session_id
+            ctx.__enter__()
         except Exception as exc:  # noqa: BLE001 - the trail is never load-bearing
             obs.log("ledger.session_context_failed", level="error",
                     session=session_id,
                     error=f"{type(exc).__name__}: {exc}")
             yield session_id
+            return
+        try:
+            yield session_id
+        finally:
+            try:
+                ctx.__exit__(None, None, None)
+            except Exception as exc:  # noqa: BLE001 - and neither is teardown
+                obs.log("ledger.session_context_failed", level="error",
+                        session=session_id,
+                        error=f"{type(exc).__name__}: {exc}")
 
 
 def human_action(request: Request, action: str,

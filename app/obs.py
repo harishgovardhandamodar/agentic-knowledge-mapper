@@ -67,8 +67,25 @@ def current_trace() -> Optional[str]:
     return _TRACE.get()
 
 
+def _coerce(trace_id) -> Optional[str]:
+    """A trace id is a bounded string or nothing.
+
+    A non-string that reaches a trace column does not degrade -- SQLite raises
+    and the write is lost. That is not hypothetical: an A2A envelope's ``trace``
+    is a hop *log*, and reading it as an id bound a list, so every ledger write
+    under that hop failed. Coercing here means a wrong type costs the
+    correlation, not the record.
+    """
+    if trace_id is None:
+        return None
+    if not isinstance(trace_id, str):
+        return None
+    trace_id = trace_id.strip()
+    return trace_id[:64] or None
+
+
 def set_trace(trace_id: Optional[str]) -> contextvars.Token:
-    return _TRACE.set(trace_id)
+    return _TRACE.set(_coerce(trace_id))
 
 
 def reset_trace(token: contextvars.Token) -> None:
@@ -85,9 +102,9 @@ def trace_scope(trace_id: Optional[str]):
     Restores rather than clears, so nesting a session scope inside a task scope
     does not lose the task's id on the way out.
     """
-    token = _TRACE.set(trace_id)
+    token = _TRACE.set(_coerce(trace_id))
     try:
-        yield trace_id
+        yield current_trace()
     finally:
         reset_trace(token)
 

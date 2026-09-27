@@ -194,7 +194,7 @@ class TestA2ATraceAdoption(unittest.TestCase):
             "ping": lambda e: seen.append(obs.current_trace()) or {"payload": {}}}
         env = {"protocol": agents.PROTOCOL, "from": "orchestrator",
                "to": "trace-probe", "intent": "ping", "task_id": "task-1",
-               "trace": "t-from-peer", "payload": {}}
+               "trace_id": "t-from-peer", "payload": {}}
         try:
             agents.dispatch(env)
         finally:
@@ -203,6 +203,34 @@ class TestA2ATraceAdoption(unittest.TestCase):
         # has to be adopted from the envelope or both sides' events land under
         # different traces.
         self.assertEqual(seen, ["t-from-peer"])
+
+    def test_a_hop_log_on_the_envelope_is_not_mistaken_for_a_trace_id(self):
+        """``trace`` on an envelope is the list of agents, not the trace's name.
+
+        Reading it as an id bound a list to the contextvar, and the next ledger
+        write died trying to bind a list to a VARCHAR -- which took out the
+        whole security assessment, silently, on any run that reached an A2A hop.
+        """
+        from app import agents
+        seen = []
+        agents._HANDLERS["trace-probe"] = {
+            "ping": lambda e: seen.append(obs.current_trace()) or {"payload": {}}}
+        env = agents.new_envelope("orchestrator", "trace-probe", "ping",
+                                  trace_id="t-real-id")
+        with obs.trace_scope("t-caller"):
+            try:
+                agents.dispatch(env)
+            finally:
+                del agents._HANDLERS["trace-probe"]
+        self.assertEqual(seen, ["t-real-id"])
+        self.assertIsInstance(env["trace"], list)
+
+    def test_a_non_string_trace_never_binds(self):
+        """A wrong type costs the correlation, not the ledger write."""
+        with obs.trace_scope(["not", "an", "id"]):
+            self.assertIsNone(obs.current_trace())
+        with obs.trace_scope("   "):
+            self.assertIsNone(obs.current_trace())
 
     def test_local_dispatch_inherits_the_caller_trace(self):
         from app import agents
