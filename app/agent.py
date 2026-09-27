@@ -17,6 +17,7 @@ from .database import SessionLocal
 from .models import Investigation, Artifact, Relationship, AgentRun, AgentEvent
 from . import ledger as L
 from . import llm, search as providers
+from . import yield_ as yld
 
 ANALYZE_BATCH = 5
 KEEP_THRESHOLD = 0.4
@@ -276,6 +277,11 @@ def run_investigation_agent(investigation_id: int, max_items: int = 25,
                      db.query(Artifact).filter(Artifact.investigation_id == inv.id).all()}
             total_kept, total_rels, rounds = 0, 0, 0
             queries = plan["queries"]
+            # Spend the first round on what has paid off before. The planner
+            # works from a blank slate every run, so without this a shape that
+            # returned nothing last time is proposed first again.
+            queries = yld.rank_queries(db, inv.id, queries)
+            llm_calls_spent = 0
 
             while rounds < max_rounds and total_kept < max_items:
                 rounds += 1
@@ -300,8 +306,11 @@ def run_investigation_agent(investigation_id: int, max_items: int = 25,
                             .filter(Artifact.investigation_id == inv.id).all()]
                 pre_ids = {e["id"] for e in existing}
                 kept = []
+                batches = 0
                 for i in range(0, len(found), ANALYZE_BATCH):
                     batch = found[i:i + ANALYZE_BATCH]
+                    batches += 1
+                    llm_calls_spent += 1
                     verdicts = _analyze_batch(inv, batch, existing)
                     by_idx = {v.get("index"): v for v in verdicts
                               if isinstance(v, dict) and isinstance(v.get("index"), int)}
@@ -317,6 +326,17 @@ def run_investigation_agent(investigation_id: int, max_items: int = 25,
                             kept.append((cand, v))
                     _event(db, run.id, "analyze",
                            f"Round {rounds}: analyzed {min(i + ANALYZE_BATCH, len(found))}/{len(found)}…")
+                # Credit this round to the shapes that were asked, before any
+                # early exit below. A round that analyzed candidates and kept
+                # none is the single most useful thing to remember, and it is
+                # exactly the round that used to leave no trace.
+                survived = len(kept)
+                try:
+                    yld.record_yield(db, inv.id, queries, found=len(found),
+                                     kept=survived, llm_calls=batches)
+                except Exception as yexc:
+                    _event(db, run.id, "analyze",
+                           f"Round {rounds}: yield not recorded ({yexc}).")
                 kept.sort(key=lambda kv: -float(kv[1].get("relevance", 0) or 0))
                 kept = kept[:max(0, max_items - total_kept)]
                 if not kept:
@@ -352,13 +372,19 @@ def run_investigation_agent(investigation_id: int, max_items: int = 25,
                                for q in (follow.get("queries") or [])[:3] if q.get("text")]
                     if not queries:
                         break
+                    # The planner has no memory of what worked; the yield ledger
+                    # does, so its proposals are re-ranked before they cost
+                    # anything. Order is the only change -- nothing is dropped.
+                    queries = yld.rank_queries(db, inv.id, queries)
                     _event(db, run.id, "plan", f"Refinement: {len(queries)} follow-up queries.",
                            {"queries": queries})
                 except Exception:
                     break
 
+            shapes = yld.shape_stats(db, inv.id)
             stats = {"rounds": rounds, "artifacts_kept": total_kept,
-                     "relationships": total_rels}
+                     "relationships": total_rels, "llm_calls": llm_calls_spent,
+                     "query_shapes": len(shapes)}
             run.stats = json.dumps(stats)
             run.status = "done"
             run.finished_at = datetime.now(timezone.utc)

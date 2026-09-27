@@ -192,3 +192,34 @@ class SecurityAssessment(Base):
     evidence_json = Column(Text, nullable=True)  # JSON: evidence/queries/known_exploits/scope
     a2a_trace_json = Column(Text, nullable=True)  # JSON: task_id + hop trace
     created_at = Column(DateTime, default=_now)
+
+
+class QueryShapeYield(Base):
+    """What one *shape* of search query has cost and returned, per investigation.
+
+    The agent re-plans follow-up queries every round from scratch, with no
+    memory of which shapes have paid off. A brief about frontier-model
+    interpretability can therefore spend a round searching "AI safety policy
+    2023" every single time -- the same dead shape, over and over, at full
+    analysis cost -- because the planner has no way to know it has already
+    failed.
+
+    Keyed on the *shape*, not the literal string, because what matters is the
+    kind of question, not its exact wording: "alignment tax" and "tax of
+    alignment" are one row. Cumulative, because a shape that has produced 0
+    keeps from 3 of 6 attempts says something a single round cannot.
+    """
+    __tablename__ = "query_shape_yields"
+    __table_args__ = (UniqueConstraint("investigation_id", "shape",
+                                       name="uq_query_shape_yield"),)
+
+    id = Column(Integer, primary_key=True, index=True)
+    investigation_id = Column(Integer, ForeignKey("investigations.id", ondelete="CASCADE"),
+                              nullable=False, index=True)
+    shape = Column(String(200), nullable=False, index=True)
+    example = Column(String(500), nullable=True)   # a literal query of this shape
+    attempts = Column(Integer, nullable=False, default=0)
+    found = Column(Integer, nullable=False, default=0)     # candidates the search returned
+    kept = Column(Integer, nullable=False, default=0)      # artifacts that survived analysis
+    llm_calls = Column(Integer, nullable=False, default=0)  # analysis cost paid
+    last_seen_at = Column(DateTime, default=_now)

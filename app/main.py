@@ -17,6 +17,7 @@ from .models import (Investigation, Artifact, Relationship, AgentRun, AgentEvent
 from . import llm, scheduler
 from . import ledger_api
 from . import drift as drift_mod
+from . import yield_ as yld
 from .agent import launch_run, launch_run_with_goal
 from . import security_agent
 from . import security as sec_engine
@@ -566,6 +567,37 @@ def _artifact_purpose(a, run) -> str:
             return f"agent run goal: {goal}"[:300]
         return f"collected by agent run #{run.id} ({run.trigger or 'manual'})"
     return "collected by agent"
+
+
+@app.get("/api/investigations/{inv_id}/query-yields")
+def query_yields(inv_id: int, db: Session = Depends(get_db),
+                 reset: bool = False):
+    """What each shape of query has cost and returned for this investigation.
+
+    The agent's only stopping rule is a fixed round and item budget, so it has
+    to spend that budget on the most productive questions available or spend it
+    re-asking the same fruitless one. This is the memory that decides which.
+    """
+    inv = db.query(Investigation).filter(Investigation.id == inv_id).first()
+    if not inv:
+        raise HTTPException(404, "Investigation not found")
+    cleared = yld.clear_yields(db, inv_id) if reset else 0
+    shapes = yld.shape_stats(db, inv_id)
+    productive = [s for s in shapes if s["kept"] > 0]
+    barren = [s for s in shapes if s["kept"] == 0]
+    return {
+        "investigation": inv_id,
+        "total": len(shapes),
+        "shapes": shapes,
+        "productive": len(productive),
+        "barren": len(barren),
+        # The headline the loop is actually optimising: a fixed budget spent
+        # on the most productive questions it can find.
+        "artifacts_kept": sum(s["kept"] for s in shapes),
+        "llm_calls": sum(s["llm_calls"] for s in shapes),
+        "suggested": yld.suggest_queries(db, inv_id),
+        "cleared": cleared,
+    }
 
 
 @app.get("/api/investigations/{inv_id}/artifacts/overview")
