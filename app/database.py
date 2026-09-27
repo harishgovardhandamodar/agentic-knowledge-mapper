@@ -80,6 +80,11 @@ _MIGRATIONS = [
     ("security_assessments", "focus_json", "TEXT"),
     ("security_assessments", "require_approval", "INTEGER"),
     ("security_assessments", "perspectives_json", "TEXT"),
+    # Which threat pack scored this row. Nullable on purpose: existing
+    # assessments predate versioned packs, and stamping them with today's
+    # fingerprint would be a false claim about how they were produced.
+    ("security_assessments", "threat_pack_version", "VARCHAR(20)"),
+    ("security_assessments", "threat_pack_fingerprint", "VARCHAR(20)"),
     # Ledger sessions: additive columns on the existing run table, so an
     # already-audited run keeps its chain and simply gains a session link.
     ("ledger_runs", "kind", "VARCHAR(20) NOT NULL DEFAULT 'task'"),

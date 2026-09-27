@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 from .database import SessionLocal
 from .models import Investigation, AgentRun, AgentEvent, SecurityAssessment
 from . import security as sec_engine
+from . import threatpack
 
 
 def _event(db: Session, run_id: int, stage: str, message: str, data: dict | None = None):
@@ -150,6 +151,8 @@ def run_security_assessment(run_id: int, params: dict):
                 "task_id": result.get("a2a_task_id", ""),
                 "trace": result.get("a2a_trace", []),
             }),
+            threat_pack_version=threatpack.PACK_VERSION,
+            threat_pack_fingerprint=threatpack.pack_fingerprint(),
         )
         db.add(rec)
         db.commit()

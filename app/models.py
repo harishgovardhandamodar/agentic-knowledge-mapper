@@ -191,6 +191,10 @@ class SecurityAssessment(Base):
     threats_json = Column(Text, nullable=True)  # JSON-encoded threat list
     evidence_json = Column(Text, nullable=True)  # JSON: evidence/queries/known_exploits/scope
     a2a_trace_json = Column(Text, nullable=True)  # JSON: task_id + hop trace
+    # Which threat pack produced these numbers. Without it, an assessment
+    # re-read after a catalog edit is two different results wearing one id.
+    threat_pack_version = Column(String(20), nullable=True)
+    threat_pack_fingerprint = Column(String(20), nullable=True)
     created_at = Column(DateTime, default=_now)
 
 

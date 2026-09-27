@@ -19,6 +19,7 @@ from . import ledger_api
 from . import drift as drift_mod
 from . import yield_ as yld
 from . import recommend as rec
+from . import threatpack, evalkit
 from .agent import launch_run, launch_run_with_goal
 from . import security_agent
 from . import security as sec_engine
@@ -1253,6 +1254,17 @@ def _security_json(rec: SecurityAssessment) -> dict:
     perspectives = _load(getattr(rec, "perspectives_json", None), [])
     if not isinstance(perspectives, list):
         perspectives = []
+    # Reported alongside the numbers, because a score read next to a different
+    # pack is two results wearing one id. `matches` is False for rows that
+    # predate versioned packs, which is a distinct thing from having drifted.
+    pack = {
+        "version": getattr(rec, "threat_pack_version", None),
+        "fingerprint": getattr(rec, "threat_pack_fingerprint", None),
+    }
+    try:
+        pack.update(threatpack.compare_fingerprint(pack["fingerprint"]))
+    except Exception:
+        pass
     return {
         "id": rec.id,
         "investigation_id": rec.investigation_id,
@@ -1289,8 +1301,32 @@ def _security_json(rec: SecurityAssessment) -> dict:
         "exec_paragraph": ev.get("exec_paragraph", ""),
         "a2a_task_id": tr.get("task_id", ""),
         "a2a_trace": tr.get("trace", []),
+        "threat_pack": pack,
         "created_at": rec.created_at.isoformat() if rec.created_at else None,
     }
+
+
+@app.get("/api/security/threat-pack")
+def get_threat_pack():
+    """Which pack this build scores with, and what is in it.
+
+    Also the CVSS view of the catalog: the likelihood/impact matrix was already
+    CVSS-shaped, so a threat's severity can be compared to an external scanner
+    rather than only to its neighbours in this list.
+    """
+    return {"manifest": threatpack.pack_manifest(),
+            "threats": threatpack.threat_rows()}
+
+
+@app.get("/api/security/eval")
+def get_security_eval():
+    """Run the scoring regression suite on demand.
+
+    Eight pinned scenarios and five structural invariants, in milliseconds with
+    no model call. `ok` is false the moment an edit to the catalog or the
+    scoring constants moves a number a user might have quoted.
+    """
+    return evalkit.run_eval()
 
 
 @app.get("/api/security/controls")
