@@ -828,6 +828,26 @@ def _validate_mermaid(code: str) -> str | None:
     return code
 
 
+def _short_text(text: str, limit: int) -> str:
+    """Trim display text without ending mid-word or mid-sentence.
+
+    A hard ``text[:N]`` slice once turned a diagram caption into "...OpenAI
+    sits behind Microsoft and is no" -- stored truncated, so no frontend fix
+    could ever display it completely. Prefer the last sentence end inside the
+    limit, else the last word boundary, and mark the cut with an ellipsis.
+    """
+    text = text or ""
+    if len(text) <= limit:
+        return text
+    head = text[:limit]
+    for sep in (". ", "! ", "? ", ".\n"):
+        i = head.rfind(sep)
+        if i > limit // 3:
+            return head[:i + 1].rstrip() + "…"
+    cut = head.rsplit(" ", 1)[0].rstrip(" ,;:")
+    return (cut or head) + "…"
+
+
 def _gen_diagram(question: str, pages: list, mode: str, depth: str) -> dict | None:
     if depth == "shallow" or (mode or "explain") in ("tldr", "glossary"):
         return None
@@ -854,9 +874,9 @@ def _gen_diagram(question: str, pages: list, mode: str, depth: str) -> dict | No
             return None
         refs = [i for i in (r.get("references") or []) if isinstance(i, int) and 0 <= i < len(pages)][:3]
         return {"diagram_type": r.get("diagram_type"), "mermaid": code,
-                "title": (r.get("title") or "Diagram")[:120],
-                "caption": (r.get("caption") or "")[:200], "references": refs,
-                "source": "generated"}
+                "title": _short_text(r.get("title") or "Diagram", 120),
+                "caption": _short_text(r.get("caption") or "", 200),
+                "references": refs, "source": "generated"}
     except Exception:
         return None
 

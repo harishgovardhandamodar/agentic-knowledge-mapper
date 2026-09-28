@@ -11,7 +11,7 @@ import unittest
 os.environ.setdefault("AKM_DATABASE_URL", "sqlite:///" + os.path.join(
     tempfile.mkdtemp(prefix="akm-coerce-test-"), "test.db"))
 
-from app.explainer import _coerce_answer  # noqa: E402
+from app.explainer import _coerce_answer, _short_text  # noqa: E402
 
 
 class TestCoerceAnswer(unittest.TestCase):
@@ -40,6 +40,25 @@ class TestCoerceAnswer(unittest.TestCase):
         for bad in ([], ["a"], "str", 42, None):
             with self.assertRaises(ValueError, msg=repr(bad)):
                 _coerce_answer(bad)
+
+
+class TestShortText(unittest.TestCase):
+    def test_short_text_is_untouched(self):
+        self.assertEqual(_short_text("abc", 200), "abc")
+        self.assertEqual(_short_text("", 200), "")
+
+    def test_prefers_a_sentence_end(self):
+        out = _short_text("First sentence here. Second sentence follows.", 30)
+        self.assertEqual(out, "First sentence here.…")
+
+    def test_falls_back_to_a_word_boundary(self):
+        """The regression: a diagram caption was stored as "...and is no"."""
+        out = _short_text(
+            "In enterprise M365 Copilot Microsoft is the primary liable party "
+            "while the customer retains responsibility and OpenAI sits behind "
+            "Microsoft and is not in the enterprise contract chain at all.", 120)
+        self.assertTrue(out.endswith("…"), out)
+        self.assertNotRegex(out, r"is no…$|transmit…$")
 
 
 if __name__ == "__main__":
