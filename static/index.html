@@ -2352,7 +2352,10 @@ function renderReadNext(exp) {
       <a class="no-und" href="javascript:void(0)" onclick="openExplanation(${best.id})"><b>${escHtml(best.question)}</b></a>
       <button class="btn btn-ghost btn-sm" onclick="openExplanation(${best.id})">Open</button>`;
     const box = document.getElementById('threadBox');
-    if (box) box.insertAdjacentHTML('afterend', slot);
+    // insertAdjacentElement, not insertAdjacentHTML: slot is a built element,
+    // and the HTML variant would stringify it into a literal
+    // "[object HTMLDivElement]" in the page.
+    if (box) box.insertAdjacentElement('afterend', slot);
   }).catch(() => {});
 }
 
