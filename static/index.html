@@ -623,6 +623,7 @@ body.pane-sec-top-collapsed .sec-topbar-sub { display: none; }
           <button class="cluster-btn active" data-cluster="off" onclick="setClusterMode('off')"><i class="fas fa-circle"></i> Off</button>
           <button class="cluster-btn" data-cluster="category" onclick="setClusterMode('category')"><i class="fas fa-layer-group"></i> Category</button>
           <button class="cluster-btn" data-cluster="similarity" onclick="setClusterMode('similarity')"><i class="fas fa-hubspot"></i> Similarity</button>
+          <button class="cluster-btn active" id="cveToggle" onclick="toggleCves()" title="Show/hide CVE nodes"><i class="fas fa-bug"></i> CVEs</button>
           <span class="cluster-count" id="clusterCount"></span>
         </div>
         <div class="graph-controls">
@@ -871,6 +872,14 @@ let showHiddenInvs = false;
 let network = null, nodes = null, edges = null, graphData = null;
 let physicsEnabled = true;
 let clusterMode = 'off', clusterIds = [], clusterCache = { category: null, similarity: null };
+let hideCves = false;
+
+function toggleCves() {
+  hideCves = !hideCves;
+  const b = document.getElementById('cveToggle');
+  if (b) b.classList.toggle('active', !hideCves);
+  renderGraph();
+}
 let activeRunId = null, lastEventId = 0, pollTimer = null;
 let revFilter = 'pending';
 let driftOnly = false;
@@ -878,7 +887,8 @@ let overlayOpen = false;
 
 const TYPE_COLORS = {
   news: '#58a6ff', paper: '#3fb950', book: '#f0b429', essay: '#bc8cff',
-  tweet: '#5ce0e6', interview: '#f85a5a', research: '#da8fff', projection: '#f0b429'
+  tweet: '#5ce0e6', interview: '#f85a5a', research: '#da8fff', projection: '#f0b429',
+  cve: '#ff6b1a',
 };
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -1175,7 +1185,12 @@ function renderGraph() {
   if (banner) banner.style.display = 'none';
   const container = document.getElementById('graph');
   const isLight = document.documentElement.className === 'light';
-  nodes = new vis.DataSet((graphData.nodes || []).map(n => ({
+  // The CVE toggle filters here, at dataset build, rather than hiding nodes
+  // after the fact: edges into a hidden node would otherwise dangle, and a
+  // hidden node would still join clusters.
+  const visNodes = (graphData.nodes || []).filter(n => !(hideCves && n.type === 'cve'));
+  const visIds = new Set(visNodes.map(n => n.id));
+  nodes = new vis.DataSet(visNodes.map(n => ({
     id: n.id,
     label: n.label,
     title: `${n.title}\nRelevance: ${n.relevance}\nReview: ${n.review}\nTags: ${n.tags}`,
@@ -1192,7 +1207,9 @@ function renderGraph() {
     group: n.type,
     opacity: (n.review === 'rejected' || n.drift) ? 0.35 : 1,
   })));
-  edges = new vis.DataSet((graphData.edges || []).map(e => ({
+  edges = new vis.DataSet((graphData.edges || [])
+    .filter(e => visIds.has(e.from) && visIds.has(e.to))
+    .map(e => ({
     from: e.from, to: e.to, label: e.label, title: e.title,
     color: { color: isLight ? '#0969da44' : '#58a6ff66', highlight: '#58a6ff', hover: '#58a6ff' },
     font: { size: 9, strokeWidth: 0 },
@@ -2687,6 +2704,7 @@ async function secLoadLatestForInvestigation() {
   if (!currentInv) return;
   secAssessmentId = null;
   secLastScore = null;
+  secRefreshCveCount();
   try {
     const data = await (await fetch(`${API}/investigations/${currentInv}/security/assessments`)).json();
     const items = data.items || [];
@@ -3415,6 +3433,7 @@ let secSubTab = 'overview';
 let secPerspectives = [];
 let secAudience = 'executive';
 let secSubPanes = null;
+let secCveCount = 0;
 /* The A2A task id doubles as this assessment's ledger run id, which is how the
    audit sub-tab knows which chain to show. */
 let secA2ATaskId = '';
@@ -3425,6 +3444,7 @@ const SEC_SUBTABS = [
   { key: 'controls', label: 'Controls', icon: 'fa-shield-halved', count: 'controls' },
   { key: 'investigation', label: 'Investigation', icon: 'fa-diagram-project', count: 'artifacts' },
   { key: 'evidence', label: 'Evidence', icon: 'fa-magnifying-glass', count: 'evidence' },
+  { key: 'cves', label: 'Known issues', icon: 'fa-bug', count: 'cves' },
   { key: 'agents', label: 'Agents', icon: 'fa-route' },
   { key: 'audit', label: 'Audit', icon: 'fa-shield-halved' },
   { key: 'report', label: 'Report', icon: 'fa-file-lines' },
@@ -3849,6 +3869,7 @@ function secSubtabBar() {
     controls: (secControlCatalog || []).length,
     artifacts: secInvTotal(),
     evidence: (secLastScore ? ((secLastScore.evidence || []).length + (secLastScore.known_exploits || []).length) : 0),
+    cves: secCveCount,
   };
   return '<div class="sec-subtabs">' + SEC_SUBTABS.map(t => {
     const n = t.count ? counts[t.count] : null;
@@ -3861,6 +3882,14 @@ function secSubtabBar() {
 function secSwitchSubTab(key) {
   if (!SEC_SUBTABS.some(t => t.key === key)) return;
   secSubTab = key;
+  if (!secSubPanes) {
+    // No assessment view rendered (none stored for this investigation). The
+    // Known-issues tab is investigation-scoped, not assessment-scoped, so it
+    // renders standalone; every other tab needs an assessment first.
+    if (key === 'cves') { secShowCvesStandalone(); return; }
+    if (secAssessmentId) { loadSecurityById(secAssessmentId); return; }
+    return;
+  }
   document.querySelectorAll('.sec-subtab').forEach(b => {
     b.classList.toggle('on', b.dataset.key === key);
   });
@@ -3868,8 +3897,86 @@ function secSwitchSubTab(key) {
     secSubPanes.forEach(p => { p.hidden = p.dataset.sub !== key; });
   }
   if (key === 'audit') secRenderAudit();
+  if (key === 'cves') secRenderCves();
   const el = document.getElementById('secResult');
   if (el) secEnsureMermaid(el);
+}
+
+const CVE_SEV_COLORS = { critical: '#ff5f56', high: '#ff9f1c', medium: '#f0b429', low: '#3fb950', unknown: 'var(--text2)' };
+
+async function secRefreshCveCount() {
+  secCveCount = 0;
+  if (!currentInv) return;
+  try {
+    const d = await (await fetch(`${API}/investigations/${currentInv}/cves`)).json();
+    secCveCount = d.total || 0;
+  } catch (e) { /* badge stays zero; the tab itself reports errors */ }
+  document.querySelectorAll('.sec-subtab[data-key="cves"] .sec-subtab-n').forEach(el => {
+    el.textContent = String(secCveCount);
+  });
+}
+
+async function secShowCvesStandalone() {
+  const el = document.getElementById('secResult');
+  if (!el) return;
+  el.innerHTML = secSubtabBar() + '<div class="sec-pane" data-sub="cves"><div id="secCvesPane"></div></div>';
+  await secRenderCves();
+}
+
+function secCveSeverityPill(sev) {
+  const s = (sev || 'unknown').toLowerCase();
+  return `<span class="status-pill" style="background:${CVE_SEV_COLORS[s] || CVE_SEV_COLORS.unknown}22;color:${CVE_SEV_COLORS[s] || CVE_SEV_COLORS.unknown};border:1px solid ${CVE_SEV_COLORS[s] || CVE_SEV_COLORS.unknown}66;">${escHtml(s)}</span>`;
+}
+
+async function secRenderCves() {
+  const host = document.getElementById('secCvesPane');
+  if (!host) return;
+  if (!currentInv) {
+    host.innerHTML = '<div class="sec-card"><p style="color:var(--text2);font-size:12px;">Pick an investigation to list its known issues.</p></div>';
+    return;
+  }
+  host.innerHTML = '<div class="sec-card"><p style="color:var(--text2);font-size:12px;"><i class="fas fa-spinner spin"></i> Loading known issues…</p></div>';
+  let items = [], total = 0;
+  try {
+    const d = await (await fetch(`${API}/investigations/${currentInv}/cves`)).json();
+    items = d.items || []; total = d.total || 0;
+  } catch (e) {
+    host.innerHTML = '<div class="sec-card"><p style="color:var(--red);font-size:12px;">Could not load known issues.</p></div>';
+    return;
+  }
+  secCveCount = total;
+  document.querySelectorAll('.sec-subtab[data-key="cves"] .sec-subtab-n').forEach(el => {
+    el.textContent = String(total);
+  });
+  const rows = items.map(f => {
+    const pub = f.published_date ? escHtml(f.published_date.slice(0, 10)) : '<span style="color:var(--text2)">—</span>';
+    const cvss = (f.cvss === null || f.cvss === undefined) ? '' : ` <span style="color:var(--text2)">(${f.cvss})</span>`;
+    const desc = escHtml((f.description || '').slice(0, 220)) + ((f.description || '').length > 220 ? '…' : '');
+    return `<tr><td style="white-space:nowrap;"><a href="${escHtml(f.source_url || '#')}" target="_blank" rel="noopener" style="color:var(--accent);"><strong>${escHtml(f.cve_id)}</strong></a></td>` +
+      `<td style="white-space:nowrap;">${pub}</td>` +
+      `<td>${secCveSeverityPill(f.severity)}${cvss}</td>` +
+      `<td>${escHtml(f.status || 'unknown')}</td>` +
+      `<td title="${escHtml(f.impact || '')}">${escHtml((f.impact || '').slice(0, 120))}</td>` +
+      `<td title="${escHtml(f.description || '')}">${desc}</td></tr>`;
+  }).join('');
+  host.innerHTML = `<div class="sec-card"><h3><i class="fas fa-bug"></i> Known issues — ${total} CVE${total === 1 ? '' : 's'}</h3>` +
+    `<div class="sec-btn-row" style="margin-bottom:8px;"><button class="btn btn-ghost btn-sm" onclick="secCollectCves(this)"><i class="fas fa-rotate"></i> Collect CVEs</button>` +
+    `<span style="font-size:11px;color:var(--text2);">Scans this investigation's artifacts and reports for CVE mentions, enriches via NVD, and adds graph nodes. New runs do this automatically.</span></div>` +
+    (total ? `<div style="overflow-x:auto;"><table class="sec-table"><tr><th>CVE</th><th>Published</th><th>Severity</th><th>Status</th><th>Impact</th><th>Description</th></tr>${rows}</table></div>`
+           : `<p style="color:var(--text2);font-size:12px;">No CVE mentions found yet. Click Collect CVEs after the agent has gathered sources.</p>`) +
+    `</div>`;
+}
+
+async function secCollectCves(btn) {
+  if (!currentInv) return;
+  if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner spin"></i> Collecting…'; }
+  try {
+    const res = await fetch(`${API}/investigations/${currentInv}/cves/collect`, { method: 'POST' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const d = await res.json();
+    showNotif(d.collected && d.collected.length ? `Collected ${d.collected.length} new CVE(s)` : 'No new CVEs found', d.collected && d.collected.length ? 'success' : 'info');
+  } catch (e) { showNotif('CVE collection failed: ' + e.message, 'error'); }
+  await secRenderCves();
 }
 
 function secAudienceBar() {
@@ -4220,6 +4327,7 @@ function renderSecurityReport(data) {
     <div class="sec-pane" data-sub="controls"${secSubTab === 'controls' ? '' : ' hidden'}>${paneControls}</div>
     <div class="sec-pane" data-sub="investigation"${secSubTab === 'investigation' ? '' : ' hidden'}>${paneInvestigation}</div>
     <div class="sec-pane" data-sub="evidence"${secSubTab === 'evidence' ? '' : ' hidden'}>${paneEvidence}</div>
+    <div class="sec-pane" data-sub="cves"${secSubTab === 'cves' ? '' : ' hidden'}><div id="secCvesPane"></div></div>
     <div class="sec-pane" data-sub="agents"${secSubTab === 'agents' ? '' : ' hidden'}>${paneAgents}</div>
     <div class="sec-pane" data-sub="audit"${secSubTab === 'audit' ? '' : ' hidden'}>${paneAudit}</div>
     <div class="sec-pane" data-sub="report"${secSubTab === 'report' ? '' : ' hidden'}>${paneReport}</div>`;
@@ -4228,6 +4336,7 @@ function renderSecurityReport(data) {
   secSubPanes = Array.from(el.querySelectorAll('.sec-pane'));
   secAuditExpanded = new Set();
   if (secSubTab === 'audit') secRenderAudit();
+  if (secSubTab === 'cves') secRenderCves();
   const audHost = document.getElementById('secAudPanel');
   if (audHost) audHost.innerHTML = secAudiencePanel();
   secApplyRoleHighlights();

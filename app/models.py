@@ -38,6 +38,8 @@ class Investigation(Base):
                              cascade="all, delete-orphan")
     runs = relationship("AgentRun", back_populates="investigation",
                         cascade="all, delete-orphan")
+    cve_findings = relationship("CveFinding", back_populates="investigation",
+                                cascade="all, delete-orphan")
 
 
 class Artifact(Base):
@@ -83,6 +85,44 @@ class Relationship(Base):
     run_id = Column(Integer, ForeignKey("agent_runs.id", ondelete="SET NULL"),
                     nullable=True, index=True)
     created_at = Column(DateTime, default=_now)
+
+
+class CveFinding(Base):
+    """A known CVE surfaced for an investigation, with its current standing.
+
+    The graph node itself is a lightweight ``Artifact`` of type ``cve`` (so the
+    whole graph pipeline -- colors, legend, filters -- works unchanged); this
+    row is the structured record behind the Known Issues tab: when it was
+    published, what it says, whether it is still live, and how bad it is.
+
+    ``status`` is the vendor/database standing (e.g. NVD's ``Analyzed``) when
+    enrichment succeeded, else ``unknown`` -- never a guess. ``impact`` is the
+    short blast description (CIA triad when CVSS data exists, else the opening
+    of the description), because "critical" alone does not tell an operator
+    what breaks.
+    """
+    __tablename__ = "cve_findings"
+    __table_args__ = (UniqueConstraint("investigation_id", "cve_id",
+                                       name="uq_cve_finding"),)
+
+    id = Column(Integer, primary_key=True, index=True)
+    investigation_id = Column(Integer, ForeignKey("investigations.id", ondelete="CASCADE"),
+                              nullable=False, index=True)
+    cve_id = Column(String(30), nullable=False, index=True)  # CVE-YYYY-NNNNN
+    title = Column(String(500), nullable=False)
+    description = Column(Text, nullable=True)
+    published_date = Column(DateTime, nullable=True)
+    status = Column(String(50), nullable=False, default="unknown")
+    severity = Column(String(20), nullable=False, default="unknown")
+    # critical|high|medium|low|unknown
+    cvss = Column(Float, nullable=True)
+    impact = Column(Text, nullable=True)
+    source_url = Column(String(1000), nullable=True)
+    artifact_id = Column(Integer, ForeignKey("artifacts.id", ondelete="SET NULL"),
+                         nullable=True)  # the graph node, if created
+    created_at = Column(DateTime, default=_now)
+
+    investigation = relationship("Investigation", back_populates="cve_findings")
 
 
 class AgentRun(Base):

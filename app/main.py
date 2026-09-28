@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from .database import init_db, get_db
 from .models import (Investigation, Artifact, Relationship, AgentRun, AgentEvent,
-                     Explanation, SecurityAssessment)
+                     Explanation, SecurityAssessment, CveFinding)
 from . import llm, scheduler
 from . import ledger_api
 from . import drift as drift_mod
@@ -21,6 +21,7 @@ from . import yield_ as yld
 from . import recommend as rec
 from . import threatpack, evalkit
 from . import approvals
+from . import cve
 from .agent import launch_run, launch_run_with_goal
 from . import security_agent
 from . import security as sec_engine
@@ -1688,6 +1689,51 @@ def get_graph(inv_id: int, db: Session = Depends(get_db)):
         "title": r.description or "",
     } for r in relationships]
     return {"nodes": nodes, "edges": edges}
+
+
+# ---------- known issues (CVEs) ----------
+@app.get("/api/investigations/{inv_id}/cves")
+def list_cves(inv_id: int, db: Session = Depends(get_db)):
+    """Every known CVE for the investigation, newest-published first.
+
+    Unknown-date findings sort last: a missing date is missing metadata, not
+    missing importance.
+    """
+    inv = db.query(Investigation).filter(Investigation.id == inv_id).first()
+    if not inv:
+        raise HTTPException(404, "Investigation not found")
+    rows = db.query(CveFinding).filter(
+        CveFinding.investigation_id == inv_id).all()
+    dated = sorted((r for r in rows if r.published_date),
+                   key=lambda r: r.published_date, reverse=True)
+    rows = dated + [r for r in rows if not r.published_date]
+    return {"items": [cve.finding_out(r) for r in rows],
+            "total": len(rows)}
+
+
+@app.post("/api/investigations/{inv_id}/cves/collect")
+def collect_cves(inv_id: int, db: Session = Depends(get_db)):
+    """(Re)collect CVE findings for one investigation. Idempotent.
+
+    Enrichment calls out to NVD/CIRCL, so this takes seconds per new CVE;
+    re-running it later only fetches what is new.
+    """
+    inv = db.query(Investigation).filter(Investigation.id == inv_id).first()
+    if not inv:
+        raise HTTPException(404, "Investigation not found")
+    try:
+        out = cve.collect_investigation_cves(db, inv_id)
+    except Exception as exc:  # noqa: BLE001 - report, don't 500, a bad sweep
+        raise HTTPException(502, f"CVE collection failed: {exc}")
+    out["findings"] = [cve.finding_out(r) for r in db.query(CveFinding).filter(
+        CveFinding.investigation_id == inv_id).all()]
+    return out
+
+
+@app.post("/api/cves/collect-all")
+def collect_cves_everywhere():
+    """Sweep every investigation. One bad investigation never stops the rest."""
+    return cve.collect_all_investigations()
 
 
 def _tag_set(tags: Optional[str]) -> set:

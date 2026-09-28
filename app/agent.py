@@ -42,6 +42,26 @@ def _event(db: Session, run_id: int, stage: str, message: str, data: dict | None
     L.record_agent_step(stage, message, data)
 
 
+def _collect_run_cves(db, run, inv):
+    """Known-issue sweep at the end of a run. Returns the new CVE ids.
+
+    Called from the run tail so every investigation -- new ones included --
+    picks up CVE findings as part of the workflow itself, not from a click.
+    Fail-open by contract: enrichment must never fail the run it enriches.
+    """
+    try:
+        from . import cve as _cve
+        found = _cve.collect_investigation_cves(db, inv.id)
+    except Exception:
+        return []
+    if found["collected"]:
+        _event(db, run.id, "cve",
+               f"Known issues: collected {len(found['collected'])} CVE(s) "
+               f"({', '.join(found['collected'][:5])}).",
+               {"cves": found["collected"]})
+    return found["collected"]
+
+
 def _plan_queries(inv: Investigation) -> dict:
     sys = ("You are a research search planner. Given an investigation brief, "
            "produce targeted search queries. Reply with JSON only.")
@@ -393,6 +413,7 @@ def run_investigation_agent(investigation_id: int, max_items: int = 25,
             _event(db, run.id, "summary",
                    f"Done: {total_kept} artifacts, {total_rels} relationships in {rounds} round(s).",
                    stats)
+            _collect_run_cves(db, run, inv)
     except Exception as e:
         try:
             run.status = "error"
