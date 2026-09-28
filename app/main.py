@@ -29,6 +29,7 @@ from .explainer import (launch_explanation, _extract_concepts, MODES,
                         DEPTH_PLAN, AUDIENCE_HINTS, _question_suggestions,
                         _quiz_from_answer, _save_explanation_to_graph,
                         _investigation_roadmap)
+from .explainer import investigation_suggestions as investigation_suggestions_fn
 
 os.makedirs("data", exist_ok=True)
 
@@ -1145,6 +1146,20 @@ def explanation_suggestions(exp_id: int, db: Session = Depends(get_db)):
     if not e:
         raise HTTPException(404, "Explanation not found")
     return {"items": _question_suggestions(e, db=db)}
+
+
+@app.get("/api/investigations/{inv_id}/suggestions")
+def investigation_suggestions(inv_id: int, limit: int = 14, db: Session = Depends(get_db)):
+    """Proactive, security-first explanation prompts for an investigation.
+
+    Scoped to the investigation rather than to one explanation so the panel is
+    useful before the first run, and built only from rows already stored for
+    this investigation (CVEs, threat assessment, artefacts, past traces).
+    """
+    inv = db.query(Investigation).filter(Investigation.id == inv_id).first()
+    if not inv:
+        raise HTTPException(404, "Investigation not found")
+    return {"items": investigation_suggestions_fn(db, inv_id, limit=max(1, min(limit, 30)))}
 
 
 @app.post("/api/explanations/{exp_id}/quiz")

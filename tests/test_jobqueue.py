@@ -12,14 +12,18 @@ model calls twice, which is worse than losing one.
 """
 import os
 import tempfile
+import os
 import unittest
 from datetime import datetime, timedelta, timezone
 from unittest import mock
 
-os.environ.setdefault("AKM_DATABASE_URL", "sqlite:///" + os.path.join(
-    tempfile.mkdtemp(prefix="akm-jobqueue-test-"), "test.db"))
 
 from sqlalchemy.exc import IntegrityError  # noqa: E402
+
+# Pin the database before app.database is imported: a module that omits
+# this can inherit data/akm.db and write test rows into the live store.
+os.environ["AKM_DATABASE_URL"] = os.environ.get("AKM_TEST_DB") or (
+    "sqlite:///" + os.path.join(tempfile.mkdtemp(prefix="akm-jobqueue-"), "test.db"))
 
 from app import database  # noqa: E402
 from app import jobqueue  # noqa: E402

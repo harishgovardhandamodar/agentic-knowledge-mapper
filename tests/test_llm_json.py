@@ -6,6 +6,13 @@ prose around the payload. Strict parsing turned all of that into a total
 explainer failure. These tests pin the repairs. No DB, no network.
 """
 import unittest
+import os
+import tempfile
+
+# Pin the database before app.database is imported: a module that omits
+# this can inherit data/akm.db and write test rows into the live store.
+os.environ["AKM_DATABASE_URL"] = os.environ.get("AKM_TEST_DB") or (
+    "sqlite:///" + os.path.join(tempfile.mkdtemp(prefix="akm-llm-json-"), "test.db"))
 
 from app.llm import _parse_json_lenient, LLMError
 

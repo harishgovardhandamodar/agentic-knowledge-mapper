@@ -14,16 +14,20 @@ The tests that matter most are the ones that would have passed before the fix:
 an approved plan with no approver, and a requester approving their own run.
 """
 import contextlib
-import json
 import os
 import tempfile
+import json
+import os
 import unittest
 from unittest import mock
 
-os.environ.setdefault("AKM_DATABASE_URL", "sqlite:///" + os.path.join(
-    tempfile.mkdtemp(prefix="akm-approvals-test-"), "test.db"))
 
 from fastapi.testclient import TestClient  # noqa: E402
+
+# Pin the database before app.database is imported: a module that omits
+# this can inherit data/akm.db and write test rows into the live store.
+os.environ["AKM_DATABASE_URL"] = os.environ.get("AKM_TEST_DB") or (
+    "sqlite:///" + os.path.join(tempfile.mkdtemp(prefix="akm-approvals-"), "test.db"))
 
 from app import database  # noqa: E402
 from app import approvals  # noqa: E402

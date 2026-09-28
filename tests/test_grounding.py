@@ -6,6 +6,13 @@ copy can drift, and cover the reference-id check used for quoted prose that
 carries no quotes at all.
 """
 import unittest
+import os
+import tempfile
+
+# Pin the database before app.database is imported: a module that omits
+# this can inherit data/akm.db and write test rows into the live store.
+os.environ["AKM_DATABASE_URL"] = os.environ.get("AKM_TEST_DB") or (
+    "sqlite:///" + os.path.join(tempfile.mkdtemp(prefix="akm-grounding-"), "test.db"))
 
 from app import grounding as G
 

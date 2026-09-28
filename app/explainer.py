@@ -19,7 +19,8 @@ import httpx
 from bs4 import BeautifulSoup
 
 from .database import SessionLocal
-from .models import Explanation, Artifact, CorpusPage, Investigation, Relationship
+from .models import (Explanation, Artifact, CorpusPage, Investigation, Relationship,
+                     CveFinding, SecurityAssessment)
 from . import grounding
 from . import llm
 from .search import search_web, UA
@@ -43,6 +44,17 @@ def _jaccard(a, b):
     inter = len(a & b)
     union = len(a | b)
     return inter / union if union else 0.0
+
+
+def _overlap(a, b):
+    """Overlap coefficient: how much of the *smaller* set is contained in the
+    other. The right test for "have I already asked this?" -- Jaccard punishes a
+    short past question ("what is the attack surface of Copilot?") against a
+    longer new one, because the product name alone can double the token count
+    and drop the ratio below any sensible threshold."""
+    if not a or not b:
+        return 0.0
+    return len(a & b) / min(len(a), len(b))
 
 
 def _collect_graph_context(db, inv_id: int, question: str, limit: int = 8) -> list:
@@ -1952,6 +1964,283 @@ def _question_suggestions(exp: Explanation, db=None) -> list:
                 add(a.title, "graph")
 
     return out[:8]
+
+
+# Vocabulary that marks an artifact as carrying security, liability or
+# regulatory signal. Deliberately small and literal: a false positive here
+# invents a question the investigation cannot answer, which is worse than
+# offering no suggestion at all.
+_SEC_TERMS = {
+    "exploit": "exploitation", "exfiltration": "exfiltration", "ssrf": "SSRF",
+    "injection": "injection", "prompt injection": "prompt injection",
+    "traversal": "path traversal", "rce": "remote code execution",
+    "privilege escalation": "privilege escalation", "escalation": "privilege escalation",
+    "leak": "data leak", "leakage": "data leak", "breach": "breach",
+    "unauthenticated": "unauthenticated access", "csrf": "CSRF",
+    "xxe": "XXE", "deserial": "deserialization", "sandbox": "sandbox escape",
+    "over-privileged": "over-privileged access", "credential": "credential exposure",
+    "api key": "credential exposure", "token leak": "credential exposure",
+    "backdoor": "supply chain", "supply chain": "supply chain",
+    "typosquat": "supply chain", "shadow it": "shadow IT",
+    "cross-tenant": "cross-tenant exposure", "tenant isolation": "tenant isolation",
+    "acl": "access control", "access control": "access control",
+    "permission": "access control", "encryption": "cryptography",
+}
+_LAW_TERMS = {
+    "liability": "liability", "indemnif": "indemnity", "warranty": "warranty",
+    "breach notification": "breach notification", "contract": "contract",
+    "sla": "service levels", "liability cap": "liability cap",
+    "terminate": "termination", "jurisdiction": "jurisdiction",
+    "gdpr": "GDPR", "hipaa": "HIPAA", "soc 2": "SOC 2", "soc2": "SOC 2",
+    "iso 27001": "ISO 27001", "nis2": "NIS2", "dora": "DORA",
+    "fedramp": "FedRAMP", "ccpa": "CCPA", "pci": "PCI DSS",
+    "data residency": "data residency", "sub-processor": "sub-processors",
+    "attorney": "legal review",
+}
+_REG_TERMS = {"gdpr": "GDPR", "hipaa": "HIPAA", "soc 2": "SOC 2", "soc2": "SOC 2",
+              "iso 27001": "ISO 27001", "nis2": "NIS2", "dora": "DORA",
+              "fedramp": "FedRAMP", "ccpa": "CCPA", "pci": "PCI DSS",
+              "pci dss": "PCI DSS", "data residency": "data residency"}
+
+
+def _lex_hits(text: str, table: dict) -> list:
+    """Labels from ``table`` whose needle occurs in ``text`` on word boundaries.
+
+    Word boundaries matter here: bare substring matching produced "remote code
+    execution" hits from words like "fo*rce*" and "e-comme*rce*", and "PCI" from
+    "ty*pical*", which then generated security questions about a paper on
+    reinforcement learning.
+    """
+    low = (text or "").lower()
+    out = []
+    for needle, label in table.items():
+        if label in out:
+            continue
+        if re.search(r"\b" + re.escape(needle) + r"\b", low):
+            out.append(label)
+    return out
+
+
+def _artifact_haystack(a: Artifact) -> str:
+    return " ".join([a.title or "", a.description or "", (a.content or "")[:900]])
+
+
+def investigation_suggestions(db, inv_id: int, limit: int = 14) -> list:
+    """Proactive explanation prompts for an investigation, security first.
+
+    Deterministic and offline: every prompt is derived from rows this
+    investigation already holds -- its CVEs, its latest threat assessment, its
+    artefacts and its past explanation traces -- so the panel is populated
+    before anything new is collected, and never asks a question the stored
+    evidence could not answer.
+
+    Ordering is by lens weight, and the security lenses (known exploit, CVE,
+    threat, exposure, control, liability, compliance) deliberately outrank the
+    general ones (gap, mechanism, graph): for this tool the common reason to
+    open an investigation is to find out how something can be attacked or what
+    it costs you, so that is what the top of the list should offer. Prompts the
+    operator has already run are dropped rather than re-offered.
+    """
+    inv = db.query(Investigation).filter(Investigation.id == inv_id).first()
+    if not inv:
+        return []
+
+    asmt = db.query(SecurityAssessment).filter(
+        SecurityAssessment.investigation_id == inv_id).order_by(
+        SecurityAssessment.id.desc()).first()
+    # Prefer the assessed product name: an investigation title is often a whole
+    # research question ("Copilot adoption and usage in enterprise (financial
+    # institution)"), which makes for unreadable prompts. But only when that
+    # name is real -- stored assessments include fixtures ("Gate Override Test")
+    # and a stray "0", and naming a frontier-model review after neither would be
+    # worse than using the investigation's own title.
+    inv_words = _tok(" ".join([inv.title or "", inv.keywords or "",
+                               inv.description or ""]))
+    title_label = re.split(r"[—:(]", " ".join((inv.title or "").split()))[0].strip()
+    title_label = " ".join(title_label.split()[:6])[:60]
+    product = ""
+    if asmt:
+        cand = re.split(r"[—:(]", " ".join((asmt.product_name or "").split()))[0].strip()
+        cand = " ".join(cand.split()[:6])[:60]
+        if len(cand) >= 3 and (_tok(cand) & inv_words):
+            product = cand
+    if not product:
+        product = title_label
+    if not product:
+        product = (inv.keywords or "").split(",")[0].strip()[:60]
+    product = product or "this product"
+
+    asked = [_tok(e.question) for e in db.query(Explanation).filter(
+        Explanation.investigation_id == inv_id).all()]
+    asked = [a for a in asked if a]
+
+    items, seen = [], set()
+
+    def add(text, lens, why, weight):
+        text = " ".join(str(text or "").split())[:300]
+        tw = _tok(text)
+        # 12, not 24: the gap detector's topics are legitimately terse
+        # ("subprocessor list") and are good questions as they stand.
+        if len(text) < 12 or not tw:
+            return
+        key = " ".join(sorted(tw))
+        if key in seen:
+            return
+        if any(_overlap(tw, q) >= 0.6 for q in asked):
+            return
+        seen.add(key)
+        items.append({"text": text, "lens": lens, "kind": lens,
+                      "why": (why or "")[:200], "weight": weight})
+
+    # 1. Known exploits recorded by the security assessment -- the single most
+    #    specific thing on file, so it leads.
+    threats, exploits = [], []
+    if asmt:
+        try:
+            ev = json.loads(asmt.evidence_json or "{}")
+            exploits = [e for e in (ev.get("known_exploits") or [])
+                        if isinstance(e, dict) and e.get("title")]
+        except Exception:
+            exploits = []
+        try:
+            threats = [t for t in (json.loads(asmt.threats_json or "[]") or [])
+                       if isinstance(t, dict) and t.get("title")]
+            threats.sort(key=lambda t: -float(t.get("residual_score") or 0))
+        except Exception:
+            threats = []
+
+    for ke in exploits[:2]:
+        add(f"How does the {ke.get('attack_class') or 'known'} attack "
+            f"({ke.get('id') or 'catalogue entry'}) work against {product}, "
+            f"and what is the concrete mitigation?",
+            "exploit", f"known exploit in assessment #{asmt.id}", 99)
+
+    # 2. CVEs on file for this investigation.
+    try:
+        cves = db.query(CveFinding).filter(
+            CveFinding.investigation_id == inv_id).all()
+        cves.sort(key=lambda c: -(c.cvss or 0))
+    except Exception:
+        cves = []
+    for c in cves[:3]:
+        why = " · ".join(x for x in (c.cve_id, c.severity, c.status)
+                         if x and x != "unknown")
+        add(f"What does {c.cve_id} mean for {product} in practice: is it "
+            f"exploitable in a real deployment today, and what is the "
+            f"remediation path?", "cve", why or c.cve_id, 97)
+
+    # 3. Highest residual threats.
+    for t in threats[:2]:
+        add(f"How would an attacker exploit {t['title'].lower()} against "
+            f"{product}, what would it cost us, and what evidence would show "
+            f"it happening?", "threat",
+            f"residual {t.get('residual_score')} · {t.get('stride') or 'threat'}", 95)
+
+    # 4. Data exposure -- always answerable, and the question operators most
+    #    often skip.
+    if asmt:
+        add(f"What data does {product} hold or process, who can reach it, and "
+            f"where could it leak or be over-shared?", "exposure",
+            f"exposure profile: {asmt.exposure}", 93)
+
+    # 5. Controls, with the current residual score as the anchor.
+    if asmt:
+        try:
+            plan = (json.loads(asmt.controls_json or "{}") or {}).get("control_plan") or {}
+            declared = {c for c in (plan.get("declared_controls") or [])}
+        except Exception:
+            declared = set()
+        from .security import _CONTROL_CATALOG
+        missing = [c for c in _CONTROL_CATALOG if c["id"] not in declared]
+        missing.sort(key=lambda c: -float(c.get("efficacy") or 0))
+        if missing:
+            c0 = missing[0]
+            add(f"{product} currently scores {asmt.residual_pct or asmt.overall_pct}% "
+                f"residual risk. Which controls would most reduce it, starting "
+                f"with '{c0['name']}' ({c0.get('standard') or c0['id']}), and what "
+                f"do they cost?", "control",
+                f"{len(missing)} catalog controls not declared", 89)
+
+    # 6-8. Artefact-derived liability / compliance / mechanism prompts.
+    arts = db.query(Artifact).filter(Artifact.investigation_id == inv_id).all()
+    law_seen, reg_seen, mech = [], [], []
+    for a in arts:
+        hay = _artifact_haystack(a)
+        for label in _lex_hits(hay, _LAW_TERMS):
+            if label not in law_seen:
+                law_seen.append(label)
+        for r in _lex_hits(hay, _REG_TERMS):
+            if r not in reg_seen:
+                reg_seen.append(r)
+        secs = _lex_hits(hay, _SEC_TERMS)
+        if secs and not a.title.lower().startswith("cve-"):
+            mech.append((len(secs), a, secs))
+    mech.sort(key=lambda x: -x[0])
+
+    if law_seen:
+        add(f"What liability does {product} create if it mishandles customer "
+            f"data — indemnity, warranty, breach-notice windows and liability "
+            f"caps — and who bears it?", "liability",
+            f"legal signal: {', '.join(law_seen[:3])}", 84)
+    if reg_seen:
+        add(f"What do {', '.join(reg_seen[:3])} require of us for {product}: "
+            f"retention, disclosure, data residency, and the audit evidence we "
+            f"would have to produce?", "compliance",
+            f"regulatory signal: {', '.join(reg_seen[:3])}", 82)
+    # One prompt per attack class: two "how does the injection technique work"
+    # questions are the same question twice.
+    used_cls = set()
+    for _n, a, secs in mech:
+        cls = next((s for s in secs if s not in used_cls), None)
+        if not cls:
+            continue
+        used_cls.add(cls)
+        add(f"How does the {cls} technique described in our sources actually "
+            f"work against {product}, step by step from attacker input to "
+            f"impact?", "mechanism", a.title or "source artifact", 72)
+        if len(used_cls) >= 2:
+            break
+
+    # 9. Gaps the previous runs already reported.
+    for e in db.query(Explanation).filter(
+            Explanation.investigation_id == inv_id).order_by(
+            Explanation.id.desc()).limit(5).all():
+        try:
+            t = json.loads(e.trace or "{}")
+        except Exception:
+            continue
+        for g in (t.get("gaps") or [])[:2]:
+            add(g, "gap", f"gap reported in run #{e.id}", 66)
+        last = (t.get("hop_plan") or [{}])[-1] if t.get("hop_plan") else {}
+        for mt in (last.get("missing_topics") or [])[:1]:
+            add(mt, "deepen", f"missing topic in run #{e.id}", 64)
+
+    # 10. Highest-signal artefacts in the graph, as a floor.
+    iw = _tok(" ".join([inv.title or "", inv.keywords or "", inv.description or ""]))
+    scored = []
+    for a in arts:
+        if a.artifact_type in ("essay",) or not a.title:
+            continue
+        scored.append((_jaccard(iw, _tok(a.tags)) + 0.5 * _jaccard(iw, _tok(a.title)), a))
+    for _s, a in sorted(scored, key=lambda x: -x[0])[:2]:
+        if _s > 0:
+            add(a.title, "graph", "in this investigation's graph", 58)
+
+    # An investigation with no threat assessment yet is exactly where the
+    # security questions matter most, so never leave it without them.
+    if asmt is None or len(items) < 6:
+        add(f"What is the attack surface of {product}, and which weakness is "
+            f"most likely to be exploited first?", "surface",
+            "no threat assessment yet", 90)
+        add(f"What security controls does {product} implement today, which are "
+            f"missing, and which are claimed but unverified?", "control",
+            "no threat assessment yet", 87)
+        add(f"What is the worst realistic incident involving {product}, and "
+            f"what would we have to disclose afterwards?", "incident",
+            "no threat assessment yet", 85)
+
+    items.sort(key=lambda it: (-it["weight"], it["text"]))
+    return items[:limit]
 
 
 def _quiz_from_answer(exp: Explanation) -> dict:

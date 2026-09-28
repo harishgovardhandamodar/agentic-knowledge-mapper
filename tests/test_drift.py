@@ -5,6 +5,13 @@ Drift = off-brief topic, kept but flagged. The prefilter is deterministic
 Fail-open everywhere: failures mark nothing.
 """
 import unittest
+import os
+import tempfile
+
+# Pin the database before app.database is imported: a module that omits
+# this can inherit data/akm.db and write test rows into the live store.
+os.environ["AKM_DATABASE_URL"] = os.environ.get("AKM_TEST_DB") or (
+    "sqlite:///" + os.path.join(tempfile.mkdtemp(prefix="akm-drift-"), "test.db"))
 
 from app import drift as D
 

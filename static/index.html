@@ -138,6 +138,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .empty-state i { font-size: 30px; margin-bottom: 10px; color: var(--border); }
 .notif { position: fixed; bottom: 20px; right: 20px; padding: 10px 18px; border-radius: 8px; font-size: 13px; z-index: 1000; display: none; }
 .notif.success { display: block; background: #1a3d2a; border: 1px solid var(--green); color: var(--green); }
+.notif.info { display: block; background: var(--bg2); border: 1px solid var(--border); color: var(--text); }
 .notif.error { display: block; background: #3d1a1a; border: 1px solid var(--red); color: var(--red); }
 .run-bar { display: flex; gap: 8px; align-items: center; margin-bottom: 14px; flex-wrap: wrap; }
 .run-bar input[type=number] { width: 64px; padding: 5px 8px; background: var(--bg3); border: 1px solid var(--border); border-radius: 4px; color: var(--text); font-size: 12px; }
@@ -306,6 +307,20 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .sugg-chip.kind-deepen:before { content: '↧ '; color: var(--text2); }
 .sugg-chip.kind-open:before { content: '? '; color: var(--text2); }
 .sugg-chip.kind-graph:before { content: '⛁ '; color: var(--text2); }
+/* investigation-level suggestion lenses: security-first ordering */
+.sugg-chip.kind-exploit:before { content: '⚠ '; color: #e5534b; }
+.sugg-chip.kind-cve:before { content: '⛨ '; color: #e5534b; }
+.sugg-chip.kind-threat:before { content: '⚔ '; color: #db6d28; }
+.sugg-chip.kind-exposure:before { content: '◉ '; color: #db6d28; }
+.sugg-chip.kind-control:before { content: '⛊ '; color: #4a9eff; }
+.sugg-chip.kind-liability:before { content: '§ '; color: #b48ead; }
+.sugg-chip.kind-compliance:before { content: '⛁ '; color: #7d8590; }
+.sugg-chip.kind-surface:before { content: '◈ '; color: #db6d28; }
+.sugg-chip.kind-incident:before { content: '☢ '; color: #db6d28; }
+.sugg-chip.kind-mechanism:before { content: '⚙ '; color: var(--text2); }
+.sugg-lens { font-size: 10px; text-transform: uppercase; letter-spacing: 0.4px; color: var(--text2); }
+.sugg-strip .sugg-more { font-size: 11px; background: none; border: 1px dashed var(--border); color: var(--text2); cursor: pointer; border-radius: 999px; padding: 4px 10px; }
+.sugg-strip .sugg-more:hover { color: var(--accent); border-color: var(--accent); }
 /* Quiz */
 .quiz-box { margin: 14px 0; }
 .quiz-q { background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin: 8px 0; }
@@ -1035,6 +1050,9 @@ async function selectInvestigation(id) {
     refreshCveBadge(d.total || 0);
   }).catch(() => {});
   document.getElementById('articleBox').innerHTML = '';
+  // Proactive, security-first suggestions: shown as soon as an investigation is
+  // selected, before anything has been explained.
+  renderInvSuggestions();
   const res = await fetch(`${API}/investigations/${id}`);
   const inv = await res.json();
   document.getElementById('briefPanel').style.display = 'block';
@@ -1952,7 +1970,7 @@ function renderExplanation(exp) {
       <button class="btn btn-ghost btn-sm" onclick="submitFollowup(${exp.id})"><i class="fas fa-reply"></i> Ask</button>
       <button class="btn btn-ghost btn-sm" onclick="fuScope=null;fuIdx=null;refreshFuPlaceholder(document.getElementById('fuInput'))" title="Reset to whole-explanation scope">Reset scope</button>
     </div>
-    <div class="sugg-strip" id="suggStrip" style="display:none;"></div>
+    <div class="sugg-strip" id="expSuggStrip" style="display:none;"></div>
     <div id="threadBox"></div>`;
   html += `</div>`;
   box.innerHTML = html;
@@ -2485,7 +2503,11 @@ function gradeFlash(g) {
 /* ---------- suggestions / quiz / bookmarks (#9, #10) ---------- */
 
 async function renderSuggestions(exp) {
-  const strip = document.getElementById('suggStrip');
+  // The per-explanation strip lives inside the rendered answer, not in the
+  // explainer form: both used to be id="suggStrip", so getElementById always
+  // returned the form's copy and follow-up chips were painted in the wrong
+  // panel (and wiped by the next investigation render).
+  const strip = document.getElementById('expSuggStrip');
   if (!strip || exp.status !== 'done') return;
   let data = null;
   try {
@@ -2499,6 +2521,56 @@ async function renderSuggestions(exp) {
     `<span style="font-size:11px;color:var(--text2);align-self:center;">Next questions:</span>` +
     items.map(it => `<button class="sugg-chip kind-${escHtml(it.kind)}" title="${escHtml(it.kind)}"
       onclick="useSuggestion(this.textContent.trim())">${escHtml(it.text)}</button>`).join('');
+}
+
+/* ---------- proactive, per-investigation suggestions ---------- */
+
+let invSuggItems = [];
+
+async function renderInvSuggestions() {
+  const strip = document.getElementById('suggStrip');
+  if (!strip) return;
+  strip.style.display = 'none';
+  strip.innerHTML = '';
+  invSuggItems = [];
+  if (!currentInv) return;
+  const invId = currentInv;
+  let data = null;
+  try {
+    const res = await fetch(`${API}/investigations/${invId}/suggestions?limit=14`);
+    if (!res.ok) return;
+    data = await res.json();
+  } catch (e) { return; }
+  // The operator may have switched investigation while this was in flight.
+  if (currentInv !== invId) return;
+  const items = (data.items || []).filter(it => it.text);
+  if (!items.length) return;
+  invSuggItems = items;
+  paintInvSuggestions(false);
+  strip.style.display = 'flex';
+}
+
+function paintInvSuggestions(expand) {
+  const strip = document.getElementById('suggStrip');
+  if (!strip || !invSuggItems.length) return;
+  const shown = expand ? invSuggItems : invSuggItems.slice(0, 6);
+  const rest = invSuggItems.length - shown.length;
+  strip.innerHTML =
+    `<span class="sugg-lens" style="align-self:center;" title="Built from this investigation's CVEs, threat assessment and sources — security questions first">Suggested explanations</span>` +
+    shown.map(it => `<button class="sugg-chip kind-${escHtml(it.kind)}" title="${escHtml(it.why || it.lens)}"
+      onclick="useInvSuggestion(this.textContent.trim())">${escHtml(it.text)}</button>`).join('') +
+    (rest > 0 && !expand
+      ? `<button class="sugg-more" onclick="paintInvSuggestions(true)">+${rest} more</button>`
+      : (expand ? `<button class="sugg-more" onclick="paintInvSuggestions(false)">show less</button>` : ''));
+}
+
+function useInvSuggestion(text) {
+  const el = document.getElementById('askInput');
+  if (!el) return;
+  el.value = text;
+  el.focus();
+  el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  showNotif('Loaded into the question box — press Explain to run it', 'info');
 }
 
 function useSuggestion(text) {

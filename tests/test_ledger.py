@@ -9,8 +9,11 @@ import os
 import tempfile
 import unittest
 
-os.environ["AKM_DATABASE_URL"] = "sqlite:///" + os.path.join(
-    tempfile.mkdtemp(prefix="akm-ledger-test-"), "test.db")
+
+# Pin the database before app.database is imported: a module that omits
+# this can inherit data/akm.db and write test rows into the live store.
+os.environ["AKM_DATABASE_URL"] = os.environ.get("AKM_TEST_DB") or (
+    "sqlite:///" + os.path.join(tempfile.mkdtemp(prefix="akm-ledger-"), "test.db"))
 
 from app import database  # noqa: E402
 from app import ledger as L  # noqa: E402

@@ -11,8 +11,11 @@ import tempfile
 import unittest
 from unittest import mock
 
-os.environ.setdefault("AKM_DATABASE_URL", "sqlite:///" + os.path.join(
-    tempfile.mkdtemp(prefix="akm-cve-test-"), "test.db"))
+
+# Pin the database before app.database is imported: a module that omits
+# this can inherit data/akm.db and write test rows into the live store.
+os.environ["AKM_DATABASE_URL"] = os.environ.get("AKM_TEST_DB") or (
+    "sqlite:///" + os.path.join(tempfile.mkdtemp(prefix="akm-cve-"), "test.db"))
 
 from app import agent as agent_mod  # noqa: E402
 from app import cve as cve_mod  # noqa: E402
