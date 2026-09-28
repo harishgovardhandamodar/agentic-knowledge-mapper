@@ -4,6 +4,7 @@ illustrated explanation (sections + images + key points + sources).
 Runs in a background thread; the GUI polls the Explanation record.
 """
 import json
+import os
 import re
 import contextvars
 import io
@@ -124,6 +125,192 @@ def _abs_url(base: str, src: str) -> str:
     return ""
 
 
+# --------------------------------------------------------------- images ---
+# A section figure has to clear four independent gates before it is shown:
+#   1. it addresses an image file (not an HTML page that happens to be linked),
+#   2. it is not page chrome -- logo, share card, spacer, author photo,
+#   3. it looks like an explanatory figure (figcaption, or a filename that
+#      names one) rather than a stock photograph,
+#   4. its own words overlap the section, and it actually loads.
+# Anything that fails stays out. A section with no qualifying figure is left
+# unillustrated, because a wrong image is worse than none.
+
+_IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".avif", ".bmp", ".tif", ".tiff")
+_NOT_IMAGE_EXTS = (".html", ".htm", ".php", ".asp", ".aspx", ".jsp", ".js", ".css",
+                   ".json", ".xml", ".pdf", ".txt", ".md")
+# Path fragments used by image CDNs and by wrapper endpoints that take the real
+# image in a query string (Next.js /_next/image, imgix, medium's /dynamic/image).
+_IMAGE_PATH_HINTS = ("/image", "/img/", "/media/", "/asset", "/content", "/photo",
+                     "/static/", "/upload", "/files/", "/figures/", "/illustrations")
+
+# Filename/URL fragments that mean "chrome, not content". Kept deliberately
+# narrow: anything that could occur inside a real word ("ads-" in "downloads-",
+# "cta" in "octane", "line" in "pipeline") is excluded.
+_IMAGE_JUNK = (
+    "logo", "icon", "favicon", "avatar", "sprite", "emoji", "pixel", "spacer",
+    "blank", "1x1", "placeholder", "gravatar", "profile", "author", "badge",
+    "button", "divider", "background", "watermark",
+    "advert", "sponsor", "cookie", "consent", "paywall", "newsletter",
+    "subscribe", "signup", "meme", "giphy", "qrcode", "qr-code",
+    # link-preview / social share cards -- the single biggest source of
+    # "random image" attachments
+    "og-", "/og.", "ogimage", "og_image", "opengraph", "open-graph",
+    "social-card", "social_card", "social-image", "share-image", "shareimage",
+    "sharer", "sharrre", "ogshare", "socialshare", "share-button", "shareshot",
+    "tweet", "linkedin", "whatsapp", "telegram", "reddit",
+)
+
+# Filename fragments that mean "probably a real explanatory figure". Publishers
+# name their figures, so this is genuinely evidence about the image's subject.
+_FIGURE_HINTS = (
+    "figure", "fig-", "fig_", "diagram", "chart", "graph", "plot", "schema",
+    "architecture", "flow", "timeline", "matrix", "heatmap", "framework",
+    "overview", "pipeline", "workflow", "cycle", "infographic", "illustration",
+    "topology", "sequence", "mindmap", "gantt", "curve", "distribution",
+    "g000", "g001", "summary_fix", "papers_photos", "xml-images",
+    "process", "layer", "stack", "roadmap", "taxonomy", "lifecycle", "map-",
+)
+
+PROBE_TIMEOUT = 6
+_PROBE_CACHE: dict = {}
+_IMAGE_PROBE = os.environ.get("AKM_IMAGE_PROBE", "1").lower() not in ("0", "false", "no")
+
+
+def _img_tail(url: str) -> str:
+    """Last path segment, unquoted, lowercased -- the part that names a file."""
+    try:
+        path = urllib.parse.unquote(urllib.parse.urlparse(url or "").path)
+        return path.rsplit("/", 1)[-1].lower()
+    except Exception:
+        return (url or "").lower()
+
+
+def _image_junk(url: str) -> bool:
+    """True for logos, share cards, spacers, avatars and other page furniture."""
+    low = (url or "").lower()
+    if any(bad in low for bad in _IMAGE_JUNK):
+        return True
+    tail = _img_tail(low)
+    # Publishers encode pixel size in the name ("gfg_200x200-min.png").
+    if re.search(r"(?<!\d)\d{2,3}x\d{2,3}(?!\d)", tail):
+        return True
+    return len(tail) < 4
+
+
+def _figure_named(url: str) -> bool:
+    """Does the filename itself say this is a figure/diagram/chart?"""
+    tail = _img_tail(url)
+    return any(h in tail for h in _FIGURE_HINTS)
+
+
+def _looks_like_image_url(url: str, depth: int = 0) -> bool:
+    """True only for URLs that actually address an image file.
+
+    Fixes HTML pages being attached as <img> ("https://arxiv.org/html/2509.15557v1",
+    "https://example.com/docs"), which render as broken images. Wrapper endpoints
+    that carry the real image in ``?url=`` are followed, so a Next.js optimizer
+    URL is judged by the image it wraps -- and rejected when the wrapped target
+    is not an image.
+    """
+    if not url:
+        return False
+    low = url.lower()
+    if low.startswith("data:image/"):
+        return True
+    if not low.startswith(("http://", "https://")):
+        return False
+    try:
+        parsed = urllib.parse.urlparse(url)
+        path = urllib.parse.unquote(parsed.path).lower()
+    except Exception:
+        return False
+    if path.endswith(_NOT_IMAGE_EXTS):
+        return False
+    if path.endswith(_IMAGE_EXTS):
+        return True
+    if depth < 2:
+        qs = urllib.parse.parse_qs(parsed.query or "")
+        inner = (qs.get("url") or qs.get("img") or [None])[0]
+        if inner:
+            # The wrapped target is usually site-relative; resolve it first.
+            return _looks_like_image_url(urllib.parse.urljoin(url, inner), depth + 1)
+    # Extensionless image endpoints are common; require an image-ish path.
+    return any(h in path for h in _IMAGE_PATH_HINTS)
+
+
+def _img_dims(tag) -> tuple:
+    """(width, height) from attributes or inline style; None when unknown."""
+    def num(raw):
+        m = re.match(r"\s*(\d{2,5})", (raw or "").strip())
+        return int(m.group(1)) if m else None
+    w = num(tag.get("width"))
+    h = num(tag.get("height"))
+    if w and h:
+        return w, h
+    style = (tag.get("style") or "").lower()
+    sw = re.search(r"width\s*:\s*(\d{2,5})", style)
+    sh = re.search(r"height\s*:\s*(\d{2,5})", style)
+    return (w or (int(sw.group(1)) if sw else None),
+            h or (int(sh.group(1)) if sh else None))
+
+
+def _is_figure(img: dict) -> bool:
+    """Does this candidate look like an explanatory figure?
+
+    With known provenance (``figure`` set by the extractor) the bar is strict: a
+    real <figcaption>, a filename that names a figure, or a descriptive alt
+    text. Stock photographs, author headshots and share cards have none of the
+    three, which is precisely how they used to end up illustrating a section
+    about data retention.
+
+    Corpus rows saved before this gate existed carry no provenance, only an
+    old paragraph-derived caption. Those are judged on having any caption of
+    their own -- the URL/junk filters still remove logos and share cards, and
+    the per-section overlap bar in :func:`_assign_images` still decides whether
+    the figure actually belongs to the section.
+    """
+    if img.get("hero"):
+        return False
+    if _figure_named(img.get("src") or ""):
+        return True
+    alt_toks = set(_content_tokens(img.get("alt") or ""))
+    # arXiv renders every figure with alt="Refer to caption" and the caption
+    # itself lives in the surrounding HTML: positive evidence, not an absence.
+    if alt_toks & {"caption", "figure", "fig"}:
+        return True
+    if len(alt_toks) >= 3:
+        return True
+    if "figure" in img:
+        return bool(img.get("figure"))
+    return bool((img.get("caption") or "").strip())
+
+
+def _image_loads(url: str) -> bool:
+    """Does the URL actually serve an image? HEAD, then a ranged GET.
+
+    Removes dead links, hotlink-protected CDNs and HTML error pages returned
+    with a 200 -- all of which show up in the GUI as a broken image box.
+    Cached per process; set AKM_IMAGE_PROBE=0 to skip the network check.
+    """
+    if not url:
+        return False
+    if not _IMAGE_PROBE:
+        return True
+    if url in _PROBE_CACHE:
+        return _PROBE_CACHE[url]
+    ok = False
+    try:
+        with httpx.Client(timeout=PROBE_TIMEOUT, headers=UA, follow_redirects=True) as c:
+            r = c.head(url)
+            if r.status_code >= 400:
+                r = c.get(url, headers={"Range": "bytes=0-2047"})
+            ctype = (r.headers.get("content-type") or "").split(";")[0].strip().lower()
+            ok = r.status_code < 400 and (ctype.startswith("image/") or not ctype)
+    except Exception:
+        ok = False
+    _PROBE_CACHE[url] = ok
+    return ok
+
 # Documents worth attaching, not just reading: presentations, reports, papers.
 _DOC_EXTS = {"pdf": "pdf", "pptx": "slides", "ppt": "slides",
              "docx": "doc", "doc": "doc", "txt": "text"}
@@ -216,7 +403,8 @@ def _fetch_document(url: str, kind: str, content: bytes,
         except Exception:
             text, npages = "", None
     return {"url": url, "title": title, "text": text, "images": [],
-            "published": None, "doc_kind": kind, "doc_pages": npages}
+            "cover": None, "published": None, "doc_kind": kind,
+            "doc_pages": npages}
 
 
 def _fetch_page(url: str, hint_title: str = "") -> dict | None:
@@ -242,37 +430,42 @@ def _fetch_page(url: str, hint_title: str = "") -> dict | None:
     paras = [p.get_text(" ", strip=True) for p in soup.find_all("p")]
     text = re.sub(r"\s+", " ", "\n".join(p for p in paras if len(p) > 40))[:TEXT_CAP]
     images = []
-    if og_image:
-        images.append({"src": og_image, "alt": title, "hero": True})
     for img in soup.find_all("img"):
-        src = _abs_url(url, img.get("src") or img.get("data-src") or "")
-        if not src or src.lower().endswith((".svg", ".gif", ".ico")):
+        src = _abs_url(url, img.get("src") or img.get("data-src")
+                       or img.get("data-original") or img.get("data-lazy-src") or "")
+        if not _looks_like_image_url(src) or _image_junk(src):
             continue
-        if any(bad in src.lower() for bad in ("logo", "icon", "avatar", "sprite",
-                                              "pixel", "tracking", "badge")):
+        if (img.get("role") or "").lower() == "presentation" or \
+                (img.get("aria-hidden") or "").lower() == "true":
             continue
-        alt = (img.get("alt") or "")[:200]
-        # Context the filename filters cannot see: figcaption, or the nearest
-        # heading / paragraph. A hero stock photo on an SEO page has none of
-        # these pointing at the article topic, which is exactly what lets the
-        # relevance gate below tell it apart from a real figure.
+        w, h = _img_dims(img)
+        if w and h and (w < 240 or h < 160):
+            continue
+        alt = (img.get("alt") or "").strip()[:200]
+        # A caption is only ever a <figcaption>. The old fallback to "the
+        # nearest preceding paragraph" produced captions lifted from
+        # abstracts, related-article lists and ads, which then scored as
+        # evidence for whichever section they happened to match.
         caption = ""
         fig = img.find_parent("figure")
         if fig is not None:
             cap = fig.find("figcaption")
             if cap is not None:
                 caption = cap.get_text(" ", strip=True)[:300]
-        if not caption:
-            prev = img.find_previous(["h1", "h2", "h3", "p"])
-            if prev is not None:
-                caption = prev.get_text(" ", strip=True)[:300]
         if all(i["src"] != src for i in images):
             images.append({"src": src, "alt": alt, "caption": caption,
-                           "hero": False})
-        if len(images) >= 6:
+                           "hero": False, "figure": bool(caption),
+                           "width": w, "height": h})
+        if len(images) >= 8:
             break
+    # og:image is the page's link-preview card, not a figure. It becomes the
+    # explanation's cover at most -- never a section illustration.
+    cover = None
+    if og_image and _looks_like_image_url(og_image) and not _image_junk(og_image):
+        cover = {"src": og_image, "alt": title, "caption": "", "hero": True,
+                 "figure": False, "width": None, "height": None}
     return {"url": url, "title": title or url, "text": text, "images": images,
-            "published": _page_date(soup, text)}
+            "cover": cover, "published": _page_date(soup, text)}
 
 
 def _page_date(soup, text: str) -> str | None:
@@ -423,10 +616,16 @@ def _research(question: str, max_pages: int = MAX_PAGES, trace: dict | None = No
         {"url": d["url"], "title": d["title"], "kind": d["kind"]} for d in documents)
     images = []
     for p in pages:
-        for img in p.get("images") or []:
+        cands = list(p.get("images") or [])
+        # Cover candidates ride along in the same pool but are flagged hero,
+        # which keeps them out of every section (see _is_figure).
+        if p.get("cover"):
+            cands.append(p["cover"])
+        for img in cands:
             if all(i["src"] != img.get("src") for i in images):
-                images.append({**img, "page": p.get("title", "")[:80], "page_url": p.get("url")})
-            if len(images) >= 14:
+                images.append({**img, "page": (p.get("title") or "")[:80],
+                               "page_url": p.get("url")})
+            if len(images) >= 20:
                 break
     return pages[:max_pages], images, documents, cached
 
@@ -563,37 +762,69 @@ def _content_tokens(s: str) -> list:
             if w not in _STOPWORDS]
 
 
+def _url_tail_tokens(url: str) -> list:
+    """Meaningful words from an image's filename. Publishers name their figures
+    ("fig3-attack-chain.png", "JETransmissionCycle1200x675.png"), so the filename
+    is real evidence about the image's subject."""
+    tail = _img_tail(url)
+    tail = re.sub(r"\.(png|jpe?g|gif|webp|avif|bmp|tiff?)$", "", tail)
+    tail = re.sub(r"\.(width|resize|fit|fill|quality|format)-\d+.*$", "", tail)
+    tail = re.sub(r"\b[0-9a-f]{16,}\b", " ", tail)   # content hashes
+    return _content_tokens(tail)
+
+
 def _image_score(heading: str, body: str, img: dict) -> tuple:
     """Shared-vocabulary score between a section and one image candidate.
 
-    Signals are the image's alt text, its caption/context, and its page title
-    -- everything except pixels. The heading counts double: a figure captioned
-    with the section's own topic is the strongest non-visual signal available.
+    Signals are the image's own words: alt text, its figcaption, and the words
+    in its filename. The page title is deliberately NOT one of them -- every
+    image on a page shares its title, so including it let a single generic
+    og:card satisfy every section of an article at once (the same
+    "Data, Privacy, and Security for Microsoft Copilot" image was attached to
+    four unrelated liability sections). The heading counts double: a figure
+    captioned with the section's own topic is the strongest non-visual signal.
     Returns (score, matched_tokens).
     """
     from collections import Counter
     sec = Counter(_content_tokens(heading) * 2 + _content_tokens(body))
     sig = Counter(_content_tokens(img.get("alt") or "") +
                   _content_tokens(img.get("caption") or "") +
-                  _content_tokens(img.get("page") or ""))
+                  _url_tail_tokens(img.get("src") or ""))
     shared = sum(min(sec[t], sig[t]) for t in sig if t in sec)
     matched = sorted(t for t in sig if t in sec)
     return shared, matched
 
 
-def _assign_images(answer: dict, images: list, min_score: int = 3) -> dict:
-    """Deterministically (re)assign one image per section, or none.
+def _assign_images(answer: dict, images: list, min_score: int = 4,
+                   min_shared: int = 2, max_figures: int = 3,
+                   probe_budget: int = 8) -> dict:
+    """Attach at most ``max_figures`` verified figures across the whole
+    explanation, at most one per section, never the same figure twice.
 
-    The model picks images from a bag of candidates and will happily attach a
-    stock hero from an SEO page to an unrelated section. So the model's pick
-    only survives if it scores; otherwise the best-scoring candidate wins, and
-    sections with no candidate above the bar get no image at all. Images from
-    pages the section actually cites get a bonus, grounding the figure to the
-    section's evidence. Also stamps ``image_caption`` for display.
+    The model's pick wins when it clears the bar on the image's own evidence
+    (alt text, figcaption, filename); otherwise the best-scoring candidate
+    takes its place. Every candidate must be a figure rather than page
+    furniture, share at least ``min_shared`` distinctive words with the
+    section, and actually load. Sections are served in order of confidence so
+    the few permitted figures land where they mean the most. Anything with
+    nothing that passes is left unillustrated -- and a run where the network
+    probe fails still produces an explanation.
     """
-    by_url = {i.get("src"): i for i in (images or []) if i.get("src")}
+    by_url = {}
+    for i in (images or []):
+        if i.get("src") and i["src"] not in by_url:
+            by_url[i["src"]] = i
     src_urls = [s.get("url") for s in (answer.get("sources") or [])
                 if isinstance(s, dict) and s.get("url")]
+    stats = {"candidates": len(by_url), "assigned": 0,
+             "rejected": {"not_a_figure": 0, "not_an_image_url": 0,
+                          "too_little_overlap": 0, "below_bar": 0,
+                          "already_used": 0, "did_not_load": 0}}
+
+    def reject(reason):
+        stats["rejected"][reason] = stats["rejected"].get(reason, 0) + 1
+
+    scored = []
     for sec in (answer.get("sections") or []):
         if not isinstance(sec, dict):
             continue
@@ -609,30 +840,86 @@ def _assign_images(answer: dict, images: list, min_score: int = 3) -> dict:
                     cited.add(src_urls[idx])
         ranked = []
         for img in by_url.values():
-            score, matched = _image_score(heading, body, img)
-            if img.get("page_url") in cited:
-                score += 2
-            ranked.append((score, img.get("hero", False), matched, img))
-        ranked.sort(key=lambda r: (r[0], r[1]), reverse=True)
-        pick = sec.get("image")
-        if pick in by_url:
-            img = by_url[pick]
-            score, _ = _image_score(heading, body, img)
-            if img.get("page_url") in cited:
-                score += 2
-            if score >= min_score:
-                sec["image_caption"] = (img.get("caption")
-                                        or img.get("alt") or "")[:200]
+            if not _looks_like_image_url(img.get("src") or ""):
+                reject("not_an_image_url")
                 continue
-        if ranked and ranked[0][0] >= min_score:
-            best = ranked[0][3]
-            sec["image"] = best.get("src")
-            sec["image_caption"] = (best.get("caption")
-                                    or best.get("alt") or "")[:200]
+            if not _is_figure(img):
+                reject("not_a_figure")
+                continue
+            score, matched = _image_score(heading, body, img)
+            if len(matched) < min_shared:
+                reject("too_little_overlap")
+                continue
+            if score < min_score:
+                reject("below_bar")
+                continue
+            # Citation bonus and provenance only reorder candidates; neither
+            # can lift an image over the relevance bar on its own.
+            bonus = 2 if img.get("page_url") in cited else 0
+            known = 1 if "figure" in img else 0
+            ranked.append((score + bonus, score, known, matched, img))
+        ranked.sort(key=lambda r: r[0], reverse=True)
+        scored.append((sec, ranked))
+    scored.sort(key=lambda p: p[1][0][0] if p[1] else 0, reverse=True)
+
+    used, budget = set(), probe_budget
+    for sec, ranked in scored:
+        if not ranked:
+            reject("no_qualifying_figure")
+        if stats["assigned"] >= max_figures or not ranked:
+            sec["image"] = None
+            sec.pop("image_caption", None)
+            sec.pop("image_page", None)
+            continue
+        for _r, score, _known, _matched, img in ranked:
+            if img["src"] in used:
+                reject("already_used")
+                continue
+            if budget > 0:
+                try:
+                    loads = _image_loads(img["src"])
+                except Exception:
+                    loads = False
+                if not loads:
+                    reject("did_not_load")
+                    continue
+            budget = max(0, budget - 1)
+            used.add(img["src"])
+            sec["image"] = img["src"]
+            cap = (img.get("caption") or img.get("alt") or "").strip()[:220]
+            if cap:
+                sec["image_caption"] = cap
+            else:
+                sec.pop("image_caption", None)
+            sec["image_page"] = img.get("page_url") or ""
+            stats["assigned"] += 1
+            break
         else:
             sec["image"] = None
             sec.pop("image_caption", None)
+            sec.pop("image_page", None)
+    answer["image_stats"] = stats
     return answer
+
+
+def _pick_cover(answer: dict, images: list) -> dict:
+    """One lead image for the whole explanation, taken from a cited page's
+    og:image and labelled as that page's thumbnail.
+
+    Link-preview cards are perfectly good page headers and terrible section
+    figures, so they are confined to this one labelled slot instead of being
+    sprinkled through the text. Only pages the answer actually cites qualify.
+    """
+    cited = {s.get("url") for s in (answer.get("sources") or [])
+             if isinstance(s, dict) and s.get("url")}
+    heroes = [i for i in (images or [])
+              if i.get("hero") and i.get("src") and i.get("page_url") in cited]
+    if not heroes:
+        return {}
+    heroes.sort(key=lambda i: _figure_named(i.get("src") or ""), reverse=True)
+    h = heroes[0]
+    return {"url": h["src"], "page": h.get("page_url") or "",
+            "caption": (h.get("alt") or h.get("caption") or "").strip()[:160]}
 
 
 def _quote_valid(text: str, quote: str) -> bool:
@@ -701,8 +988,8 @@ def _compose(question: str, pages: list, images: list, mode: str = "explain",
         ctx.append(line)
     img_list = "\n".join(
         f"- {img['src']} (from: {img['page']}; alt: {img.get('alt', '')[:100]}"
-        f"{'; context: ' + img['caption'][:150] if img.get('caption') else ''})"
-        for img in images)
+        f"{'; caption: ' + img['caption'][:150] if img.get('caption') else ''})"
+        for img in images if not img.get("hero"))
     doc_list = "\n".join(
         f"- {d['url']} ({d.get('kind') or 'link'}; {d.get('title', '')[:120]}"
         f"{'; ' + str(d['pages']) + ' pages' if d.get('pages') else ''})"
@@ -751,8 +1038,12 @@ def _compose(question: str, pages: list, images: list, mode: str = "explain",
                  "content": (f"Question: {question}\n\nAudience: {aud_hint}\n\n{mode_rules}"
                              f"{section_hint}\n\n"
                              f"Source budget: {len(pages)} sources.\n\nSources:\n" + "\n\n".join(ctx) +
-                              f"\n\nCandidate images (reference EXACT URLs, don't invent; set a section's "
-                              f"\"image\" only when the image actually depicts that section's topic, else null):\n{img_list or '(none)'}\n\n"
+                              f"\n\nCandidate figures (reference EXACT URLs, don't invent). These "
+                              f"are real diagrams/charts from the sources above; the caption tells you "
+                              f"what each one shows. Set a section's \"image\" ONLY if that figure "
+                              f"literally depicts this section's topic, and never reuse the same figure "
+                              f"in two sections -- prefer null, an unillustrated section is correct "
+                              f"when nothing fits:\n{img_list or '(none)'}\n\n"
                               f"Candidate documents, attach the ones that help understand this topic "
                               f"(reference EXACT URLs, don't invent):\n{doc_list or '(none)'}\n\n"
                               f"This investigation's own artifacts, attach the relevant ones by id:\n{art_list or '(none)'}\n\n"
@@ -780,9 +1071,11 @@ def _compose(question: str, pages: list, images: list, mode: str = "explain",
     if not answer.get("sources"):
         answer["sources"] = [{"title": p["title"], "url": p["url"]} for p in pages]
     # Deterministic image gate: the model's per-section picks survive only if
-    # they actually match the section; otherwise the best-scoring candidate
-    # wins, or the section gets no image rather than a random one.
+    # they clear the bar on the image's own evidence; the best-scoring verified
+    # candidate otherwise takes the slot, the same figure is never reused, and a
+    # section with nothing that passes is left unillustrated.
     _assign_images(answer, images)
+    answer["cover"] = _pick_cover(answer, images)
     # Attachments are validated the same strict way as sources: invented URLs
     # and unknown artifact ids are dropped, never rendered.
     answer["documents"] = _valid_documents(answer.get("documents"), documents)
@@ -1016,7 +1309,12 @@ def _save_corpus(db, inv_id: int, page: dict) -> None:
         row.text = (page.get("text") or "")[:30000]
         row.domain = _domain(url)
         row.published = page.get("published")
-        row.images = json.dumps(page.get("images") or [])[:8000]
+        # Corpus entries also store covers and figures separately so subsequent
+        # runs don't have to scrape them again.
+        data = list(page.get("images") or [])
+        if page.get("cover"):
+            data.append({**page["cover"], "hero": True})
+        row.images = json.dumps(data)[:8000]
         row.fetched_at = datetime.now(timezone.utc)
         db.commit()
     except Exception:
@@ -1047,10 +1345,16 @@ def _collect_corpus_context(db, inv_id: int, question: str, limit: int = 8,
         if score > 0:
             ranked.append((score, row))
     ranked.sort(key=lambda x: x[0], reverse=True)
-    return [{"url": row.url, "title": row.title or row.url, "text": (row.text or "")[:12000],
-             "images": _corpus_images(row), "published": row.published,
-             "corpus": True, "corpus_id": row.id}
-            for _, row in ranked[:limit]]
+    out = []
+    for _, row in ranked[:limit]:
+        cands = _corpus_images(row)
+        cover = next((i for i in cands if i.get("hero")), None)
+        out.append({"url": row.url, "title": row.title or row.url,
+                    "text": (row.text or "")[:12000],
+                    "images": [i for i in cands if not i.get("hero")],
+                    "cover": cover, "published": row.published,
+                    "corpus": True, "corpus_id": row.id})
+    return out
 
 
 def _plan_sections(question: str, mode: str) -> list | None:
@@ -1402,9 +1706,13 @@ def run_explainer(exp_id: int, max_pages: int = MAX_PAGES, max_hops: int = 0):
         if inv:
             for row in db.query(CorpusPage).filter(
                     CorpusPage.investigation_id == inv.id).all():
-                corpus_map[row.url.lower()] = {"url": row.url, "title": row.title or row.url,
-                                               "text": row.text or "", "images": _corpus_images(row),
-                                               "published": row.published}
+                cands = _corpus_images(row)
+                corpus_map[row.url.lower()] = {
+                    "url": row.url, "title": row.title or row.url,
+                    "text": row.text or "",
+                    "images": [i for i in cands if not i.get("hero")],
+                    "cover": next((i for i in cands if i.get("hero")), None),
+                    "published": row.published}
         expand_terms = _expand_terms_for(inv, db) if inv else []
         pref_domains = [d.strip() for d in (inv.preferred_domains or "").split(",")
                         if d.strip()] if inv else []
@@ -1573,7 +1881,9 @@ def run_explainer(exp_id: int, max_pages: int = MAX_PAGES, max_hops: int = 0):
                            "rejected_count": trace["rejected_count"],
                            "graph_context_used": trace["graph_context_used"],
                            "web_skipped": trace["web_skipped"],
-                           "hops": trace["hops"]}
+                           "hops": trace["hops"],
+                           "image_stats": answer.get("image_stats")}
+        trace["image_stats"] = answer.get("image_stats")
         exp.answer = json.dumps(answer)
         exp.trace = json.dumps(trace)
         exp.meta = json.dumps(meta)
@@ -1699,3 +2009,166 @@ def _quiz_from_answer(exp: Explanation) -> dict:
     if not clean:
         raise ValueError("Could not produce quiz items")
     return {"items": clean}
+
+
+# ------------------------------------------------------------------ regrade
+def refresh_corpus_figures(db, investigation_id: int = None, workers: int = 6,
+                           limit: int = 0) -> dict:
+    """Re-scrape stored corpus pages so their images carry real captions.
+
+    Corpus rows written before the figure gate existed hold images with no
+    usable caption -- and a caption is the only honest evidence for matching a
+    figure to a section, since the page title cannot vouch for any one image
+    on the page. Re-fetching the page yields the actual <figcaption>, or proves
+    the image was never a figure at all.
+
+    Only the image columns are rewritten: the stored title, text and date are
+    left exactly as they were.
+    """
+    q = db.query(CorpusPage)
+    if investigation_id is not None:
+        q = q.filter(CorpusPage.investigation_id == investigation_id)
+    targets = []
+    for row in q.all():
+        if not (row.url or "").startswith(("http://", "https://")):
+            continue
+        cands = _corpus_images(row)
+        if not cands:
+            continue
+        if any(i.get("figure") for i in cands):
+            continue                      # already extracted by the current gate
+        if any((i.get("caption") or "").strip() and not i.get("hero") for i in cands):
+            continue                      # already has a real caption
+        targets.append(row)
+    targets = targets[:limit] if limit else targets
+    out = {"pages": len(targets), "updated": 0, "figures": 0, "covers": 0,
+           "failed": []}
+
+    def work(row):
+        try:
+            return row, _fetch_page(row.url, row.title or "")
+        except Exception as exc:
+            return row, ("error", str(exc)[:120])
+
+    if targets:
+        with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+            for row, page in pool.map(work, targets):
+                if not isinstance(page, dict):
+                    if isinstance(page, tuple):
+                        out["failed"].append({"url": row.url, "error": page[1]})
+                    continue
+                data = list(page.get("images") or [])
+                if page.get("cover"):
+                    data.append({**page["cover"], "hero": True})
+                if not data:
+                    continue
+                row.images = json.dumps(data)[:8000]
+                out["updated"] += 1
+                out["figures"] += sum(1 for i in data if not i.get("hero"))
+                out["covers"] += sum(1 for i in data if i.get("hero"))
+        db.commit()
+    return out
+
+
+def regrade_images(db, investigation_id: int = None, exp_id: int = None,
+                   apply: bool = True) -> dict:
+    """Re-apply the current figure gate to explanations that are already stored.
+
+    Older runs were illustrated under weaker rules, so their sections can carry
+    a site logo, a social share card, a 200x200 badge or even a plain HTML page
+    as a "figure". The investigation's stored corpus still lists what each page
+    offered, so the current gate can simply be re-run over those candidates and
+    the saved answer rewritten -- no re-research and no re-generation of text.
+
+    Legacy corpus rows predate the ``figure`` flag, so a stored caption is not
+    treated as proof that an image was a real figure; only a filename that
+    names one, or a descriptive alt text, qualifies it.
+
+    Returns a tally: explanations touched, figures kept, figures dropped.
+    """
+    q = db.query(Explanation).filter(Explanation.status == "done")
+    if exp_id is not None:
+        q = q.filter(Explanation.id == exp_id)
+    if investigation_id is not None:
+        q = q.filter(Explanation.investigation_id == investigation_id)
+    out = {"explanations": 0, "kept": 0, "dropped": 0, "covers": 0, "detail": []}
+    for exp in q.all():
+        if not exp.answer:
+            continue
+        try:
+            answer = json.loads(exp.answer)
+        except Exception:
+            continue
+        if not isinstance(answer, dict):
+            continue
+        before = sum(1 for s in (answer.get("sections") or [])
+                     if isinstance(s, dict) and s.get("image"))
+        cands, covers = [], []
+        for row in db.query(CorpusPage).filter(
+                CorpusPage.investigation_id == exp.investigation_id).all():
+            for img in _corpus_images(row):
+                rec = {**img, "page": (row.title or "")[:80], "page_url": row.url}
+                (covers if img.get("hero") else cands).append(rec)
+        if not cands and not covers:
+            continue
+        _assign_images(answer, cands)
+        answer["cover"] = _pick_cover(answer, covers)
+        after = sum(1 for s in (answer.get("sections") or [])
+                    if isinstance(s, dict) and s.get("image"))
+        if before == after and not answer["cover"] and not apply:
+            continue
+        if apply:
+            exp.answer = json.dumps(answer)
+        out["explanations"] += 1
+        out["kept"] += after
+        out["dropped"] += max(0, before - after)
+        if answer["cover"]:
+            out["covers"] += 1
+        out["detail"].append({"id": exp.id, "before": before, "after": after,
+                              "candidates": len(cands),
+                              "rejected": (answer.get("image_stats") or {}).get("rejected")})
+    if apply:
+        db.commit()
+    return out
+
+
+def _main(argv=None) -> int:
+    import argparse
+    ap = argparse.ArgumentParser(prog="python -m app.explainer",
+                                 description="Explainer maintenance commands.")
+    ap.add_argument("--regrade-images", action="store_true",
+                    help="re-apply the figure gate to stored explanations")
+    ap.add_argument("--refresh-figures", action="store_true",
+                    help="re-scrape corpus pages so their images get real captions")
+    ap.add_argument("--investigation", type=int, default=None)
+    ap.add_argument("--explanation", type=int, default=None)
+    ap.add_argument("--dry-run", action="store_true")
+    a = ap.parse_args(argv)
+    if not (a.refresh_figures or a.regrade_images):
+        ap.print_help()
+        return 1
+    db = SessionLocal()
+    try:
+        if a.refresh_figures:
+            fr = refresh_corpus_figures(db, investigation_id=a.investigation)
+            print(f"refreshed {fr['updated']}/{fr['pages']} corpus pages | "
+                  f"{fr['figures']} figures, {fr['covers']} covers")
+            for f in fr["failed"][:5]:
+                print("  failed:", f["url"], f["error"])
+            if not a.regrade_images:
+                return 0
+        out = regrade_images(db, investigation_id=a.investigation,
+                             exp_id=a.explanation, apply=not a.dry_run)
+        for d in out.pop("detail", []):
+            print(f"  exp#{d['id']}: {d['before']} -> {d['after']} figures "
+                  f"({d['candidates']} candidates) {d['rejected'] or ''}")
+        print("DRY RUN — nothing written" if a.dry_run else "written",
+              f"| {out['explanations']} explanations, {out['kept']} figures kept, "
+              f"{out['dropped']} dropped, {out['covers']} covers")
+        return 0
+    finally:
+        db.close()
+
+
+if __name__ == "__main__":
+    raise SystemExit(_main())

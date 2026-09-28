@@ -287,6 +287,10 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .ev-src a { color: var(--accent); text-decoration: none; }
 /* Mermaid diagrams */
 .diagram-wrap { background: var(--bg3); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; margin: 12px 0; overflow-x: auto; }
+.exp-cover { margin: 12px 0 4px; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--bg3); }
+.exp-cover img { display: block; width: 100%; max-height: 320px; object-fit: cover; }
+.exp-cover figcaption { font-size: 11px; color: var(--text2); padding: 6px 12px; border-top: 1px solid var(--border); }
+.exp-cover figcaption a { color: var(--accent); text-decoration: none; }
 .diagram-wrap .mermaid, .diagram-wrap pre.mermaid { background: transparent; text-align: center; min-width: min-content; }
 .diagram-wrap div.mermaid svg, .diagram-wrap pre.mermaid svg { max-width: 100%; height: auto; }
 /* Follow-ups + threads */
@@ -1862,6 +1866,13 @@ function renderExplanation(exp) {
       ${a.diagram.caption ? `<div style="font-size:11px;color:var(--text2);margin-top:4px;">${escHtml(a.diagram.caption)}</div>` : ''}
     </div>`;
   }
+  if (a.cover && a.cover.url) {
+    let coverHost = '';
+    try { coverHost = new URL(a.cover.page || a.cover.url).hostname; } catch (e) {}
+    html += `<figure class="exp-cover"><img src="${escHtml(a.cover.url)}" alt="${escHtml(a.cover.caption || coverHost || 'source page')}" onerror="this.closest('figure').remove()" />` +
+      `<figcaption>${a.cover.page ? `<a href="${escHtml(a.cover.page)}" target="_blank" rel="noopener">${escHtml(coverHost)}</a>` : escHtml(coverHost)}` +
+      `${a.cover.caption ? ` — ${escHtml(a.cover.caption)}` : ''}</figcaption></figure>`;
+  }
   (a.sections || []).forEach((s, si) => {
     html += `<div style="display:flex;align-items:baseline;gap:8px;"><h3 style="flex:1;">${escHtml(s.heading || '')}</h3>
       <button class="btn btn-ghost btn-sm" onclick="setFuScope(${exp.id}, ${si})" title="Ask a follow-up about this section"><i class="fas fa-reply"></i> Follow-up</button></div><div class="sec-body">${mdBlock(s.body || '')}</div>`;
@@ -1882,8 +1893,14 @@ function renderExplanation(exp) {
     if (s.image) {
       let host = '';
       try { host = new URL(s.image).hostname; } catch (e) {}
-      const cap = s.image_caption || ('Illustration · ' + host);
-      html += `<figure><img src="${escHtml(s.image)}" loading="lazy" alt="${escHtml(s.image_caption || s.heading || 'illustration')}" onerror="this.closest('figure').remove()" /><figcaption>${escHtml(cap)}${s.image_caption && host ? ` · ${escHtml(host)}` : ''}</figcaption></figure>`;
+      const pageHost = s.image_page ? (() => { try { return new URL(s.image_page).hostname; } catch (e) { return ''; } })() : '';
+      const cap = s.image_caption || 'Figure';
+      // Attribution points at the article the figure was lifted from, so a
+      // reader can always see where an illustration came from.
+      const attr = s.image_page
+        ? `<a href="${escHtml(s.image_page)}" target="_blank" rel="noopener">${escHtml(pageHost || host)}</a>`
+        : escHtml(host);
+      html += `<figure><img src="${escHtml(s.image)}" loading="lazy" alt="${escHtml(s.image_caption || s.heading || 'illustration')}" onerror="this.closest('figure').remove()" /><figcaption>${escHtml(cap)} · ${attr}</figcaption></figure>`;
     }
   });
   if (a.comparison && a.comparison.length) {
