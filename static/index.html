@@ -4894,10 +4894,11 @@ async function secLoadStandards(force) {
     const url = secAssessmentId
       ? `${API}/api/standards/score-matrix?assessment_id=${secAssessmentId}`
       : `${API}/api/standards/score-matrix`;
-    const r = await fetch(url);
+    const r = await fetch(url, { cache: 'no-store' });
     if (!r.ok) {
       const d = await r.json().catch(() => ({}));
-      throw new Error(d.detail || `HTTP ${r.status}`);
+      const detail = (d && typeof d.detail === 'string') ? d.detail : null;
+      throw new Error(detail ? `${detail} (HTTP ${r.status} from ${url})` : `HTTP ${r.status} from ${url}`);
     }
     secStdCache[key] = await r.json();
     secStdShowAll = false;

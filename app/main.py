@@ -5,7 +5,7 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import FastAPI, Depends, HTTPException, Query, Request
+from fastapi import FastAPI, Depends, HTTPException, Query, Request, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -1386,14 +1386,20 @@ def list_security_controls():
 
 @app.get("/api/standards/score-matrix")
 def standards_score_matrix(assessment_id: Optional[int] = None,
-                           db: Session = Depends(get_db)):
+                           db: Session = Depends(get_db),
+                           response: Response = None):
     """AI Standards & Regulations score matrix for the Security agent sub-tab.
 
     Without ``assessment_id`` every framework is returned sorted by coverage.
     With one, each framework also carries a deterministic relevance score for
     that assessment (token overlap of its threats, active controls and known
     exploits against the framework text) and rows sort by relevance first.
+
+    Never cacheable: the payload depends on the assessment, and a cached
+    error here once stranded the sub-tab on a stale failure.
     """
+    if response is not None:
+        response.headers["Cache-Control"] = "no-store"
     try:
         return standards_matrix.build_matrix(db, assessment_id)
     except standards_matrix.AssessmentNotFound:

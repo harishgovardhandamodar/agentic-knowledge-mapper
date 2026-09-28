@@ -327,6 +327,11 @@ class TestScoreMatrixRoute(unittest.TestCase):
         self.assertEqual(r.status_code, 200, r.text)
         self.assertIsNone(r.json()["findings"])
 
+    def test_matrix_is_never_cached(self):
+        r = self._get()
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(r.headers.get("cache-control"), "no-store")
+
     def test_unknown_assessment_is_404(self):
         with mock.patch.object(sm, "fetch_dashboard", return_value=FIXTURE_DATA):
             r = self.client.get("/api/standards/score-matrix?assessment_id=999999")
