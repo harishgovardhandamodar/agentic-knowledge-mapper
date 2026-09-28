@@ -62,7 +62,8 @@ ASSESSMENT_RECORD = {
         {"id": "T05", "title": "Prompt injection via asset names",
          "stride": "Tampering", "owasp": "LLM01: Prompt Injection",
          "description": "Injected instructions in imported docs steer the draft.",
-         "controls": ["C02"]},
+         "residual_severity": "High", "residual_score": 14.0,
+         "coverage": 20.0, "controls": ["C02"]},
     ],
     "active_controls": ["C02"],
     "known_exploits": [
@@ -152,6 +153,48 @@ class TestAssessmentQuery(unittest.TestCase):
         query, _ = sm.assessment_query(ASSESSMENT_RECORD)
         for tok in ("the", "or", "of", "and", "to", "in", "a"):
             self.assertNotIn(tok, query)
+
+
+class TestThreatPillars(unittest.TestCase):
+    def test_every_catalogue_threat_has_pillars(self):
+        from app import security as sec  # noqa: E402
+        missing = [tid for tid in sec._THREAT_IDS if tid not in sm.THREAT_PILLARS]
+        self.assertEqual(missing, [])
+        for tid, pillars in sm.THREAT_PILLARS.items():
+            self.assertTrue(pillars, tid)
+            for p in pillars:
+                self.assertIn(p, DIMS, f"{tid} -> {p}")
+
+    def test_standing_takes_the_best_pillar(self):
+        s, via = sm.standing(["security", "robustness"],
+                             {"security": 2, "robustness": 1})
+        self.assertEqual((s, via), (2, ["security"]))
+
+    def test_standing_names_every_pillar_at_the_best_score(self):
+        s, via = sm.standing(["privacy", "transparency"],
+                             {"privacy": 1, "transparency": 1})
+        self.assertEqual((s, via), (1, ["privacy", "transparency"]))
+
+    def test_unmapped_threat_has_no_standing(self):
+        self.assertEqual(sm.standing([], {"security": 2}), (None, []))
+        self.assertEqual(sm.threat_pillars("T99"), [])
+
+    def test_findings_sort_worst_residual_first(self):
+        threats = [
+            {"id": "T05", "title": "inj", "residual_severity": "Low",
+             "residual_score": 2.0, "controls": []},
+            {"id": "T01", "title": "paste", "residual_severity": "High",
+             "residual_score": 14.0, "controls": ["C02"]},
+        ]
+        cov = {"owasp-llm": {"security": 2, "robustness": 2,
+                             "privacy": 0, "data_governance": 0,
+                             "human_oversight": 0}}
+        out = sm.findings_section(threats, cov)
+        self.assertEqual([f["id"] for f in out], ["T01", "T05"])
+        self.assertEqual(out[0]["standings"]["owasp-llm"]["s"], 0)
+        self.assertEqual(out[1]["standings"]["owasp-llm"]["s"], 2)
+        self.assertIn("robustness",
+                      out[1]["standings"]["owasp-llm"]["via"])
 
 
 class TestBuildMatrix(unittest.TestCase):
@@ -266,6 +309,23 @@ class TestScoreMatrixRoute(unittest.TestCase):
         self.assertEqual(top["id"], "owasp-llm")
         self.assertTrue(top["relevant"])
         self.assertIn("owasp", top["matched"])
+
+    def test_scoped_matrix_carries_findings_with_standings(self):
+        aid = _assessment(_investigation("findings-payload"))
+        r = self._get(aid)
+        self.assertEqual(r.status_code, 200, r.text)
+        findings = r.json()["findings"]
+        self.assertEqual(len(findings), 1)
+        f = findings[0]
+        self.assertEqual(f["id"], "T05")
+        self.assertEqual(f["pillars"], ["security", "robustness"])
+        self.assertEqual(f["standings"]["owasp-llm"]["s"], 2)
+        self.assertEqual(f["residual_severity"], "High")
+
+    def test_unscoped_matrix_has_no_findings(self):
+        r = self._get()
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertIsNone(r.json()["findings"])
 
     def test_unknown_assessment_is_404(self):
         with mock.patch.object(sm, "fetch_dashboard", return_value=FIXTURE_DATA):

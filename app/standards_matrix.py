@@ -34,6 +34,71 @@ CACHE_TTL_S = float(os.environ.get("STANDARDS_CACHE_TTL_S", "900"))
 _TAXONOMY_PATH = os.path.join(os.path.dirname(__file__), "standards_taxonomy.json")
 _TOKEN_SPLIT = re.compile(r"[^a-z0-9+]+")
 
+# Threat -> control pillars. Curated from the STRIDE category and OWASP
+# mapping of each catalogue entry in app/security.py; the test suite pins
+# full coverage of the catalogue so a new threat id fails loudly instead of
+# silently dropping out of the findings view.
+THREAT_PILLARS: dict[str, list[str]] = {
+    "T01": ["privacy", "data_governance", "human_oversight"],
+    "T02": ["privacy", "data_governance", "transparency"],
+    "T03": ["data_governance", "accountability"],
+    "T04": ["privacy", "transparency"],
+    "T05": ["security", "robustness"],
+    "T06": ["security", "privacy", "accountability"],
+    "T07": ["security", "lifecycle_eval", "accountability"],
+    "T08": ["accountability", "incident_response"],
+    "T09": ["robustness", "transparency", "human_oversight"],
+    "T10": ["security", "accountability"],
+    "T11": ["privacy", "data_governance", "accountability"],
+    "T12": ["accountability", "risk_management"],
+}
+
+
+def threat_pillars(threat_id: Any) -> list[str]:
+    return list(THREAT_PILLARS.get(str(threat_id or ""), []))
+
+
+def standing(pillars: list[str], coverage: dict[str, Any]) -> tuple[int | None, list[str]]:
+    """(standing 0|1|2|None, via pillars) of one finding vs one framework.
+
+    The finding stands as well as the best-covered of its pillars; ``via``
+    names the pillars that reach that best score. No pillar mapping means no
+    standing (None), which the GUI shows as unmapped rather than a gap.
+    """
+    if not pillars:
+        return None, []
+    scored = [(coverage.get(p, 0), p) for p in pillars]
+    top = max(s for s, _ in scored)
+    return top, sorted(p for s, p in scored if s == top)
+
+
+def findings_section(threats: list[Any],
+                     coverages: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    """Assessment findings with per-framework standings, worst residual first."""
+    out = []
+    for t in threats:
+        if not isinstance(t, dict):
+            continue
+        pillars = threat_pillars(t.get("id"))
+        stands = {}
+        for fid, cov in coverages.items():
+            s, via = standing(pillars, cov)
+            if s is not None:
+                stands[fid] = {"s": s, "via": via}
+        out.append({
+            "id": t.get("id"), "title": t.get("title"),
+            "residual_severity": t.get("residual_severity"),
+            "residual_score": t.get("residual_score"),
+            "coverage": t.get("coverage"),
+            "pillars": pillars,
+            "controls": t.get("controls") or [],
+            "standings": stands,
+        })
+    out.sort(key=lambda f: -(f["residual_score"] or 0)
+             if isinstance(f["residual_score"], (int, float)) else 0)
+    return out
+
+
 # Query-side stopwords: exact matches on these say nothing ("the" hits every
 # framework), and as substrings they match everything ("or" is inside "for").
 _STOP = frozenset("""
@@ -206,6 +271,7 @@ def build_matrix(db=None, assessment_id: int | None = None) -> dict[str, Any]:
     basis: dict[str, int] = {"threats": 0, "controls": 0, "exploits": 0,
                              "query_tokens": 0}
     assessment_meta: dict[str, Any] | None = None
+    record: dict[str, Any] = {}
     if assessment_id is not None:
         if db is None:
             raise AssessmentNotFound()
@@ -250,8 +316,13 @@ def build_matrix(db=None, assessment_id: int | None = None) -> dict[str, Any]:
                                  str(r["name"] or "")))
     else:
         rows.sort(key=lambda r: (-r["coverage_pct"], str(r["name"] or "")))
+    findings = None
+    if assessment_meta is not None:
+        coverages = {r["id"]: r["coverage"] for r in rows if r.get("id")}
+        findings = findings_section(record.get("threats") or [], coverages)
     return {"generated": data.get("generated"),
             "dimensions": tax.get("dimensions", []),
             "score_legend": tax.get("scoreLegend", {}),
             "assessment": assessment_meta,
-            "frameworks": rows}
+            "frameworks": rows,
+            "findings": findings}

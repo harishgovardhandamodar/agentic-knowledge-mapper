@@ -121,5 +121,8 @@ With an assessment open, each framework carries a deterministic relevance
 score -- token overlap of its threats, active controls and known exploits
 against the framework text (exact 2, substring ≥4 chars 1; stopwords dropped)
 -- sorted relevance-first with the matched tokens shown as the reason.
-Matrix and Detail are one toggle apart; colours that already pass contrast
-are left alone. Pinned in `tests/test_standards_matrix.py`.
+Matrix, Detail (expandable rows with provenance, controls and pillar grid)
+and Findings are one toggle apart. Findings maps each threat to control
+pillars (`THREAT_PILLARS`, pinned to cover the whole threat catalogue) and
+shows its standing per selected standard -- up to 3 side-by-side in Compare,
+one in Single -- worst residual first, gaps before covered.

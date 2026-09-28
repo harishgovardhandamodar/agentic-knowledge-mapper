@@ -447,6 +447,23 @@ span.std-cell { display: inline-block; min-width: 24px; padding: 2px 0; border-r
 span.std-cell.v2 { background: #1f6feb; color: #ffffff; }
 span.std-cell.v1 { background: #9ecbff; color: #0d1117; }
 span.std-cell.v0 { color: var(--text2); font-weight: 400; }
+span.std-cell.gap { background: #c93c37; color: #ffffff; }
+.std-sev { display: inline-block; font-size: 10px; font-weight: 700; border-radius: 4px; padding: 2px 7px; white-space: nowrap; flex-shrink: 0; }
+.std-sev.critical { background: #c93c37; color: #ffffff; }
+.std-sev.high { background: #9a6700; color: #ffffff; }
+.std-sev.medium { background: #1f6feb; color: #ffffff; }
+.std-sev.low { background: #2d333b; color: #f0f6fc; }
+.std-sev.unknown { background: var(--bg3); color: var(--text2); }
+#secStdFindBar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 10px 0 12px; }
+#secStdFindBar select { background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-size: 12px; padding: 6px 10px; max-width: 320px; }
+.std-chip { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 600; background: var(--bg3); border: 1px solid var(--border); border-radius: 14px; padding: 3px 6px 3px 11px; color: var(--text2); cursor: pointer; }
+.std-chip.on { color: var(--accent); border-color: var(--accent); background: rgba(88,166,255,0.12); }
+.std-chip button { background: none; border: none; color: inherit; cursor: pointer; font-size: 12px; padding: 0 4px; line-height: 1; }
+.std-find { display: flex; gap: 10px; align-items: flex-start; padding: 8px 4px; border-bottom: 1px solid var(--border); }
+.std-findmain { flex: 1; min-width: 0; }
+.std-findmain strong { display: block; font-size: 12px; }
+td.std-threat { min-width: 200px; max-width: 320px; }
+td.std-threat .std-name { font-weight: 600; display: block; font-size: 11.5px; }
 .std-cov { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
 .std-covbar { width: 56px; height: 6px; border-radius: 3px; background: var(--bg3); overflow: hidden; flex-shrink: 0; }
 .std-covbar > span { display: block; height: 100%; background: var(--accent); border-radius: 3px; }
@@ -880,9 +897,11 @@ body.pane-sec-top-collapsed .sec-topbar-sub { display: none; }
             <select id="secStdKind" aria-label="Type" onchange="secStdFilters.kind=this.value;secStdRender()"></select>
             <button class="std-viewbtn on" id="secStdViewMatrix" onclick="secStdSetView('matrix')">Matrix</button>
             <button class="std-viewbtn" id="secStdViewDetail" onclick="secStdSetView('detail')">Detail</button>
+            <button class="std-viewbtn" id="secStdViewFindings" onclick="secStdSetView('findings')">Findings</button>
             <button class="std-viewbtn" id="secStdShowAll" onclick="secStdShowAll=!secStdShowAll;secStdRender()" hidden>Show all</button>
             <button class="btn btn-ghost btn-sm" onclick="secLoadStandards(true)" title="Re-fetch the taxonomy"><i class="fas fa-rotate"></i></button>
           </div>
+          <div id="secStdFindBar" hidden></div>
           <div id="secStdBody"></div>
           <div id="secStdFoot" class="std-note" style="margin-top:8px;"></div>
         </div>
@@ -4850,6 +4869,8 @@ let secStdView = 'matrix';
 let secStdShowAll = false;
 let secStdOpen = null;
 let secStdFilters = { q: '', jur: 'all', kind: 'all' };
+let secStdPick = [];
+let secStdMode = 'single';
 
 function secSwitchPaneTab(key) {
   if (key !== 'assess' && key !== 'standards') return;
@@ -4881,6 +4902,8 @@ async function secLoadStandards(force) {
     secStdCache[key] = await r.json();
     secStdShowAll = false;
     secStdOpen = null;
+    secStdPick = [];
+    secStdMode = 'single';
   } catch (e) {
     if (body) {
       body.innerHTML = `<div class="std-err">Could not load the standards taxonomy: ${escHtml(e.message || e)}. ` +
@@ -4899,7 +4922,7 @@ async function secLoadStandards(force) {
 }
 
 function secStdSetView(v) {
-  secStdView = v === 'detail' ? 'detail' : 'matrix';
+  secStdView = v === 'detail' ? 'detail' : (v === 'findings' ? 'findings' : 'matrix');
   secStdRender();
 }
 
@@ -4985,6 +5008,147 @@ function secStdDetailHtml(rows, dims, legend, scoped) {
   }).join('');
 }
 
+function secStdStandChip(finding, fid, legend) {
+  const st = (finding.standings || {})[fid];
+  if (!st) return '<span class="std-cell v0" title="No pillar mapping for this threat">–</span>';
+  const via = (st.via || []).join(', ');
+  if (st.s === 2) return `<span class="std-cell v2" title="Directly covered via ${escHtml(via)}">Direct</span>`;
+  if (st.s === 1) return `<span class="std-cell v1" title="Partially covered via ${escHtml(via)}">Partial</span>`;
+  return `<span class="std-cell gap" title="Gap — this standard scores 0 on ${escHtml(via)}">Gap</span>`;
+}
+
+function secStdSevChip(sev) {
+  const s = String(sev || '').toLowerCase();
+  const cls = { critical: 'critical', high: 'high', medium: 'medium', low: 'low' }[s] || 'unknown';
+  return `<span class="std-sev ${cls}">${escHtml(sev || '–')}</span>`;
+}
+
+function secStdPickAdd() {
+  const sel = document.getElementById('secStdPickSel');
+  const id = sel ? sel.value : '';
+  if (!id || secStdPick.includes(id) || secStdPick.length >= 3) return;
+  secStdPick.push(id);
+  secStdRender();
+}
+
+function secStdPickRemove(id) {
+  secStdPick = secStdPick.filter(x => x !== id);
+  secStdRender();
+}
+
+function secStdPickPrimary(id) {
+  secStdPick = [id, ...secStdPick.filter(x => x !== id)];
+  secStdRender();
+}
+
+function secStdSetMode(m) {
+  secStdMode = m === 'compare' ? 'compare' : 'single';
+  secStdRender();
+}
+
+function secStdFindBarHtml(payload) {
+  const options = payload.frameworks.filter(f => !secStdPick.includes(f.id));
+  let bar = `<select id="secStdPickSel" aria-label="Add a standard"${secStdPick.length >= 3 ? ' disabled title="Maximum 3 standards for comparison"' : ''}>` +
+    '<option value="">Add a standard…</option>' +
+    options.map(f => `<option value="${escHtml(f.id)}">${escHtml(f.name || f.id)} · ${Number(f.coverage_pct).toFixed(0)}%</option>`).join('') + '</select>';
+  if (secStdPick.length < 3 && options.length) bar += '<button class="std-viewbtn" onclick="secStdPickAdd()">Add</button>';
+  const byId = {};
+  payload.frameworks.forEach(f => { if (f.id) byId[f.id] = f; });
+  bar += secStdPick.map((id, i) => {
+    const f = byId[id] || {};
+    return `<span class="std-chip${i === 0 ? ' on' : ''}" title="${i === 0 ? 'Primary standard (single view). Click another chip to switch.' : 'Click to make primary'}" onclick="secStdPickPrimary(${JSON.stringify(id).replace(/"/g, '&quot;')})">${escHtml(f.name || id)}<button onclick="event.stopPropagation();secStdPickRemove(${JSON.stringify(id).replace(/"/g, '&quot;')})" title="Remove" aria-label="Remove ${escHtml(f.name || id)}">×</button></span>`;
+  }).join('');
+  bar += `<button class="std-viewbtn${secStdMode === 'single' ? ' on' : ''}" onclick="secStdSetMode('single')">Single</button>` +
+    `<button class="std-viewbtn${secStdMode === 'compare' ? ' on' : ''}" onclick="secStdSetMode('compare')">Compare</button>`;
+  return bar;
+}
+
+function secStdSingleHtml(payload, fid, legend) {
+  const f = (payload.frameworks || []).find(x => x.id === fid);
+  if (!f) return '<div class="std-err">Pick a standard above.</div>';
+  const scoped = !!payload.assessment;
+  const rows = (payload.findings || []).map(t => {
+    const st = (t.standings || {})[fid];
+    return { t, s: st ? st.s : 3 };
+  }).sort((a, b) => (a.s - b.s) || ((b.t.residual_score || 0) - (a.t.residual_score || 0)));
+  let direct = 0, partial = 0, gaps = 0, unmapped = 0;
+  rows.forEach(r => {
+    if (r.s === 2) direct++;
+    else if (r.s === 1) partial++;
+    else if (r.s === 0) gaps++;
+    else unmapped++;
+  });
+  let html = `<div style="margin-bottom:10px;"><strong style="font-size:13px;">${escHtml(f.name || f.id)}</strong> ${secStdCov(f.coverage_pct)}${secStdRel(f, scoped)}` +
+    (f.summary ? `<div class="std-note" style="margin-top:4px;">${escHtml(f.summary)}</div>` : '') +
+    `<div class="std-note">${escHtml([f.issuer, f.version, f.status].filter(Boolean).join(' · '))}` +
+    (f.url ? ` · <a href="${escHtml(f.url)}" target="_blank" rel="noopener">source ↗</a>` : '') + '</div></div>';
+  html += `<div class="std-note" style="margin-bottom:6px;">${rows.length} findings: ` +
+    `<span class="std-cell v2">2</span> ${direct} direct · <span class="std-cell v1">1</span> ${partial} partial · ` +
+    `<span class="std-cell gap">Gap</span> ${gaps}${unmapped ? ` · ${unmapped} unmapped` : ''}</div>`;
+  html += rows.map(r => {
+    const t = r.t;
+    return `<div class="std-find">${secStdSevChip(t.residual_severity)}` +
+      `<span class="std-findmain"><strong>${escHtml((t.id ? t.id + ' · ' : '') + (t.title || ''))}</strong>` +
+      `<span class="std-why">residual ${t.residual_score != null ? escHtml(String(t.residual_score)) : '–'}` +
+      `${(t.controls || []).length ? ' · controls ' + escHtml(t.controls.join(', ')) : ''}` +
+      `${(t.pillars || []).length ? ' · pillars ' + escHtml(t.pillars.join(', ')) : ''}</span></span>` +
+      secStdStandChip(t, fid, legend) + '</div>';
+  }).join('');
+  return { html, foot: `${rows.length} findings vs ${f.name || fid}: ${direct} direct · ${partial} partial · ${gaps} gaps${unmapped ? ` · ${unmapped} unmapped` : ''}` };
+}
+
+function secStdCompareHtml(payload, legend) {
+  const picked = secStdPick
+    .map(id => (payload.frameworks || []).find(x => x.id === id))
+    .filter(Boolean);
+  if (picked.length < 2) return { html: '<div class="std-err">Pick at least two standards to compare.</div>', foot: '' };
+  const rows = (payload.findings || []).map(t => {
+    const worst = Math.min(...picked.map(f => {
+      const st = (t.standings || {})[f.id];
+      return st ? st.s : 3;
+    }));
+    return { t, worst };
+  }).sort((a, b) => (a.worst - b.worst) || ((b.t.residual_score || 0) - (a.t.residual_score || 0)));
+  let html = '<div class="std-matrixwrap"><table class="std-matrix"><thead><tr><th style="text-align:left;">Finding</th><th>Sev</th>' +
+    picked.map(f => `<th title="${escHtml(f.name || f.id)}">${escHtml((f.name || f.id).slice(0, 22))}<br/><span style="font-weight:400;">${Number(f.coverage_pct).toFixed(0)}% cov</span></th>`).join('') +
+    '</tr></thead><tbody>';
+  rows.forEach(r => {
+    const t = r.t;
+    html += '<tr>' +
+      `<td class="std-threat"><span class="std-name" title="${escHtml((t.id ? t.id + ' · ' : '') + (t.title || ''))}">${escHtml((t.id ? t.id + ' · ' : '') + (t.title || ''))}</span></td>` +
+      `<td>${secStdSevChip(t.residual_severity)}</td>` +
+      picked.map(f => `<td class="std-heat">${secStdStandChip(t, f.id, legend)}</td>`).join('') + '</tr>';
+  });
+  html += '</tbody></table></div>';
+  const foot = picked.map(f => {
+    let d = 0, p = 0, g = 0;
+    rows.forEach(r => {
+      const st = (r.t.standings || {})[f.id];
+      if (!st) return;
+      if (st.s === 2) d++;
+      else if (st.s === 1) p++;
+      else g++;
+    });
+    return `${f.name || f.id}: ${d} direct · ${p} partial · ${g} gaps`;
+  }).join(' · ');
+  return { html, foot: `${rows.length} findings across ${picked.length} standards — ${foot}` };
+}
+
+function secStdFindingsHtml(payload, legend) {
+  const findings = payload.findings;
+  if (!findings) return { bar: '', body: '<div class="std-err">Open an assessment to map its findings against the standards.</div>', foot: '' };
+  if (!findings.length) return { bar: '', body: '<div class="std-err">This assessment recorded no findings.</div>', foot: '' };
+  const byId = {};
+  payload.frameworks.forEach(f => { if (f.id) byId[f.id] = f; });
+  secStdPick = secStdPick.filter(id => byId[id]).slice(0, 3);
+  if (!secStdPick.length && payload.frameworks.length) secStdPick = [payload.frameworks[0].id];
+  const bar = secStdFindBarHtml(payload);
+  const out = (secStdMode === 'compare' && secStdPick.length > 1)
+    ? secStdCompareHtml(payload, legend)
+    : secStdSingleHtml(payload, secStdPick[0], legend);
+  return { bar, body: out.html, foot: out.foot };
+}
+
 function secStdRender() {
   const payload = secStdCache[secStdKey()];
   if (!payload) return;
@@ -5006,6 +5170,12 @@ function secStdRender() {
   }
   document.getElementById('secStdViewMatrix').classList.toggle('on', secStdView === 'matrix');
   document.getElementById('secStdViewDetail').classList.toggle('on', secStdView === 'detail');
+  document.getElementById('secStdViewFindings').classList.toggle('on', secStdView === 'findings');
+  const inFind = secStdView === 'findings';
+  ['secStdQ', 'secStdJur', 'secStdKind', 'secStdShowAll'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.hidden = inFind;
+  });
   const showAllBtn = document.getElementById('secStdShowAll');
   if (showAllBtn) {
     showAllBtn.hidden = !scoped;
@@ -5033,19 +5203,28 @@ function secStdRender() {
     `<div class="std-note" style="margin-top:4px;">${scope}${payload.generated ? ` · taxonomy dated ${escHtml(payload.generated)}` : ''}</div>`;
 
   const rows = secStdVisible(payload);
-  document.getElementById('secStdBody').innerHTML = secStdView === 'detail'
-    ? secStdDetailHtml(rows, dimList, legend, scoped)
-    : secStdMatrixHtml(rows, dimList, legend, scoped);
-
-  let foot;
-  if (!rows.length) {
-    foot = 'No frameworks match the current filters.';
+  const findBar = document.getElementById('secStdFindBar');
+  if (inFind) {
+    const f = secStdFindingsHtml(payload, legend);
+    if (findBar) { findBar.hidden = false; findBar.innerHTML = f.bar; }
+    document.getElementById('secStdBody').innerHTML = f.body;
+    document.getElementById('secStdFoot').textContent = f.foot;
   } else {
-    const avgs = dimList.map(d => rows.reduce((a, f) => a + (((f.coverage || {})[d.id]) || 0), 0) / rows.length);
-    foot = `Pillar averages over ${rows.length} visible: ` +
-      dimList.map((d, i) => `${escHtml(d.label)} ${(avgs[i] / 2 * 100).toFixed(0)}%`).join(' · ');
+    if (findBar) findBar.hidden = true;
+    document.getElementById('secStdBody').innerHTML = secStdView === 'detail'
+      ? secStdDetailHtml(rows, dimList, legend, scoped)
+      : secStdMatrixHtml(rows, dimList, legend, scoped);
+
+    let foot;
+    if (!rows.length) {
+      foot = 'No frameworks match the current filters.';
+    } else {
+      const avgs = dimList.map(d => rows.reduce((a, f) => a + (((f.coverage || {})[d.id]) || 0), 0) / rows.length);
+      foot = `Pillar averages over ${rows.length} visible: ` +
+        dimList.map((d, i) => `${escHtml(d.label)} ${(avgs[i] / 2 * 100).toFixed(0)}%`).join(' · ');
+    }
+    document.getElementById('secStdFoot').textContent = foot;
   }
-  document.getElementById('secStdFoot').textContent = foot;
 
   const badge = document.getElementById('secStdCount');
   if (badge) { badge.hidden = false; badge.textContent = String(scoped ? relCount : total); }
