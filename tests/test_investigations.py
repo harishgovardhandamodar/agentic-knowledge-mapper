@@ -172,5 +172,29 @@ class TestCollectionOverview(unittest.TestCase):
         self.assertEqual(r.status_code, 404)
 
 
+class TestShortGoal(unittest.TestCase):
+    def test_short_goal_is_untouched(self):
+        self.assertEqual(agent_mod._short_goal("abc"), "abc")
+
+    def test_long_goal_ends_on_a_word_boundary_with_an_ellipsis(self):
+        """A hard slice cut "...are transmitted" down to "...are transmit",
+        which reads like a broken error in the run log."""
+        goal = ("Investigate open questions from an explanation: "
+                "No documented data-flow architecture: where prompts/outputs "
+                "are transmitted and stored")
+        short = agent_mod._short_goal(goal)
+        self.assertTrue(short.endswith("…"), short)
+        self.assertLessEqual(len(short), 121)
+        # The cut lands on a word boundary: the next character in the original
+        # is a space (or the end), never the middle of "transmitted".
+        body = short[:-1]
+        self.assertTrue(goal.startswith(body))
+        self.assertIn(goal[len(body):len(body) + 1], (" ", ""))
+        self.assertNotIn("transmit ", body + " ", "cut mid-word")
+
+    def test_empty_goal_is_safe(self):
+        self.assertEqual(agent_mod._short_goal(""), "")
+
+
 if __name__ == "__main__":
     unittest.main()

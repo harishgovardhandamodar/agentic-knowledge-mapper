@@ -430,6 +430,22 @@ def launch_run(investigation_id: int, max_items: int = 25, max_rounds: int = 2,
     return t
 
 
+def _short_goal(goal: str, limit: int = 120) -> str:
+    """A one-line plan message that never ends mid-word.
+
+    A hard ``goal[:120]`` slice cut gap text like "...where prompts/outputs
+    are transmitted" down to "...are transmit", which reads like a broken
+    error in the run log instead of what it is: the announcement that a
+    gap-investigation run started. The full goal is already stored on the run's
+    plan row; this is only the display line.
+    """
+    goal = goal or ""
+    if len(goal) <= limit:
+        return goal
+    cut = goal[:limit].rsplit(" ", 1)[0].rstrip(" ,;:")
+    return (cut or goal[:limit]) + "…"
+
+
 def launch_run_with_goal(investigation_id: int, goal: str, max_items: int = 12,
                          max_rounds: int = 1, trigger: str = "explainer_gap"):
     db = SessionLocal()
@@ -439,7 +455,8 @@ def launch_run_with_goal(investigation_id: int, goal: str, max_items: int = 12,
         db.add(run)
         db.commit()
         db.refresh(run)
-        _event(db, run.id, "plan", f"Auto-investigate (from explanation): {goal[:120]}")
+        _event(db, run.id, "plan",
+               f"Auto-investigate (from explanation): {_short_goal(goal)}")
         run_id = run.id
     finally:
         db.close()
