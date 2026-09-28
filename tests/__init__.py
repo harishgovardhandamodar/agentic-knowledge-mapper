@@ -15,6 +15,14 @@ So the environment variable is set here, once, before any test module can
 import the app, and unconditionally: importing ``tests.<anything>`` always
 initialises the package first. A caller may still point the suite at a specific
 file, but never at the live one.
+
+One caveat worth knowing before pointing ``AKM_TEST_DB`` anywhere: a suite run
+expects a database that is *empty to begin with*. The ledger, yield and
+recommendation tests record rows under fixed keys and assert cumulative counts
+("attempts == 3"), so a file that already holds a previous run's rows fails
+about 30 tests with doubled counts -- the modules pass individually, which is
+what makes it look like a cross-module interaction. Use a fresh path per run, or
+unset ``AKM_TEST_DB`` and let the throwaway directory below apply.
 """
 import os
 import sys

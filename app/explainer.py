@@ -22,6 +22,7 @@ from .database import SessionLocal
 from .models import (Explanation, Artifact, CorpusPage, Investigation, Relationship,
                      CveFinding, SecurityAssessment)
 from . import grounding
+from . import writeguard
 from . import llm
 from .search import search_web, UA
 
@@ -989,7 +990,8 @@ def _verify_grounding(answer: dict, pages: list) -> dict:
 def _compose(question: str, pages: list, images: list, mode: str = "explain",
              depth: str = "balanced", audience: str = "intermediate",
              max_tokens: int = 4096, section_plan: list | None = None,
-             documents: list | None = None, artifact_cands: list | None = None) -> dict:
+             documents: list | None = None, artifact_cands: list | None = None,
+             brief_text: str = "") -> dict:
     m = mode or "explain"
     ctx = []
     for i, p in enumerate(pages):
@@ -1104,6 +1106,13 @@ def _compose(question: str, pages: list, images: list, mode: str = "explain",
         conflicts.append({"topic": str(c["topic"])[:200], "view_a": str(c["view_a"])[:600],
                           "view_b": str(c["view_b"])[:600], "sources_a": sa, "sources_b": sb})
     answer["conflicts"] = conflicts
+    # Write-verify-repair runs last, on the finished prose: unsupported
+    # sentences are removed and off-brief sections dropped *before*
+    # _verify_grounding checks citations, so the citation check sees the text the
+    # user will actually read. audit_answer honours AKM_WRITEGUARD itself and
+    # returns {"enabled": False} without touching the answer.
+    answer["write_audit"] = writeguard.audit_answer(
+        question, answer, pages, section_plan=section_plan, brief_text=brief_text)
     return answer
 
 
@@ -1813,10 +1822,15 @@ def run_explainer(exp_id: int, max_pages: int = MAX_PAGES, max_hops: int = 0):
                 parent = None  # only once
             set_phase("composing")
             artifact_cands = _artifact_candidates(db, exp.investigation_id)
+            # The write guard judges drift against the investigation's brief, not
+            # just this question: a section can be off-brief while looking fine
+            # for the sentence that prompted it.
+            brief = " ".join([inv.title or "", inv.keywords or "",
+                              inv.description or ""]) if inv is not None else ""
             answer = _compose(exp.question, pages[:12], images, mode=mode, depth=depth,
                               audience=audience, max_tokens=max_tokens,
                               section_plan=section_plan, documents=documents,
-                              artifact_cands=artifact_cands)
+                              artifact_cands=artifact_cands, brief_text=brief)
             grounding = _verify_grounding(answer, pages)
             eval_res = _eval_answer(exp.question, answer)
             if eval_res.get("needs_more") and (hop + 1) <= max_hops:
@@ -1846,6 +1860,9 @@ def run_explainer(exp_id: int, max_pages: int = MAX_PAGES, max_hops: int = 0):
         if grounding:
             answer["grounding"] = {k: v for k, v in grounding.items()
                                    if k != "grounding_violations"}
+        wa = answer.get("write_audit")
+        if wa and wa.get("enabled"):
+            trace["write_guard"] = dict(wa)
         exp.answer = json.dumps(answer)  # persist before graph save so it extracts real content
         if exp.parent_id is None and not meta.get("watch_of") and inv is not None:
             auto = inv.auto_save_explanations
