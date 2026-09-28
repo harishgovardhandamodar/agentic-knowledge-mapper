@@ -609,6 +609,7 @@ body.pane-sec-top-collapsed .sec-topbar-sub { display: none; }
       <div class="main-tab active" data-view="graph" onclick="switchView('graph')"><i class="fas fa-project-diagram"></i> Knowledge graph</div>
       <div class="main-tab" data-view="artifacts" onclick="switchView('artifacts')"><i class="fas fa-list-check"></i> Review <span id="pendingCount"></span></div>
       <div class="main-tab" data-view="collection" onclick="switchView('collection')"><i class="fas fa-box-archive"></i> Artifacts</div>
+      <div class="main-tab" data-view="cves" onclick="switchView('cves')"><i class="fas fa-bug"></i> Known issues <span id="cveCount"></span></div>
       <div class="main-tab" data-view="timeline" onclick="switchView('timeline')"><i class="fas fa-timeline"></i> Timeline</div>
       <div class="main-tab" data-view="explainer" onclick="switchView('explainer')"><i class="fas fa-lightbulb"></i> Explainer</div>
       <div class="main-tab" data-view="console" onclick="switchView('console')"><i class="fas fa-terminal"></i> Agent console</div>
@@ -650,6 +651,9 @@ body.pane-sec-top-collapsed .sec-topbar-sub { display: none; }
       </div>
       <div class="view" id="collectionView">
         <div id="collectionBody"><div class="audit-empty">Loading collection…</div></div>
+      </div>
+      <div class="view" id="cvesView">
+        <div id="cvesBody"><div class="audit-empty">Loading known issues…</div></div>
       </div>
       <div class="view" id="timelineView">
         <div class="compare-bar">
@@ -1022,6 +1026,10 @@ async function selectInvestigation(id) {
   clusterCache = { category: null, similarity: null };
   clusterMode = 'off'; updateClusterButtons();
   stopPolling(); stopExpPoll();
+  refreshCveBadge(0);
+  fetch(`${API}/investigations/${id}/cves`).then(r => r.json()).then(d => {
+    refreshCveBadge(d.total || 0);
+  }).catch(() => {});
   document.getElementById('articleBox').innerHTML = '';
   const res = await fetch(`${API}/investigations/${id}`);
   const inv = await res.json();
@@ -1048,6 +1056,7 @@ async function selectInvestigation(id) {
   setRunButtons(inv.status === 'running', inv.status === 'running' ? 'Agent running…' : null);
   await Promise.all([loadGraph(), loadArtifacts(), loadTimeline(), loadExplanations()]);
   updatePendingCount();
+  if (document.getElementById('cvesView').classList.contains('visible')) loadCvesView();
 }
 
 async function saveBrief() {
@@ -2723,6 +2732,7 @@ function switchView(view) {
   if (view === 'explainer') loadPrefs();
   if (view === 'audit') loadAuditRuns();
   if (view === 'collection') loadCollection();
+  if (view === 'cves') loadCvesView();
 }
 
 
@@ -3928,6 +3938,72 @@ function secCveSeverityPill(sev) {
   return `<span class="status-pill" style="background:${CVE_SEV_COLORS[s] || CVE_SEV_COLORS.unknown}22;color:${CVE_SEV_COLORS[s] || CVE_SEV_COLORS.unknown};border:1px solid ${CVE_SEV_COLORS[s] || CVE_SEV_COLORS.unknown}66;">${escHtml(s)}</span>`;
 }
 
+// One row builder for every CVE list in the app (security Known-issues
+// sub-tab and the main Known-issues view): same columns everywhere.
+function cveRowsHtml(items) {
+  return items.map(f => {
+    const pub = f.published_date ? escHtml(f.published_date.slice(0, 10)) : '<span style="color:var(--text2)">—</span>';
+    const cvss = (f.cvss === null || f.cvss === undefined) ? '' : ` <span style="color:var(--text2)">(${f.cvss})</span>`;
+    const desc = escHtml((f.description || '').slice(0, 220)) + ((f.description || '').length > 220 ? '…' : '');
+    return `<tr><td style="white-space:nowrap;"><a href="${escHtml(f.source_url || '#')}" target="_blank" rel="noopener" style="color:var(--accent);"><strong>${escHtml(f.cve_id)}</strong></a></td>` +
+      `<td style="white-space:nowrap;">${pub}</td>` +
+      `<td>${secCveSeverityPill(f.severity)}${cvss}</td>` +
+      `<td>${escHtml(f.status || 'unknown')}</td>` +
+      `<td title="${escHtml(f.impact || '')}">${escHtml((f.impact || '').slice(0, 120))}</td>` +
+      `<td title="${escHtml(f.description || '')}">${desc}</td></tr>`;
+  }).join('');
+}
+
+async function postCollectCves() {
+  const res = await fetch(`${API}/investigations/${currentInv}/cves/collect`, { method: 'POST' });
+  if (!res.ok) throw new Error('HTTP ' + res.status);
+  return res.json();
+}
+
+function refreshCveBadge(total) {
+  secCveCount = total || 0;
+  const el = document.getElementById('cveCount');
+  if (el) el.textContent = secCveCount ? `(${secCveCount})` : '';
+  document.querySelectorAll('.sec-subtab[data-key="cves"] .sec-subtab-n').forEach(x => {
+    x.textContent = String(secCveCount);
+  });
+}
+
+async function loadCvesView() {
+  const host = document.getElementById('cvesBody');
+  if (!host) return;
+  if (!currentInv) {
+    host.innerHTML = '<div class="audit-empty">Select an investigation to list its known issues.</div>';
+    return;
+  }
+  host.innerHTML = '<div class="audit-empty"><i class="fas fa-spinner spin"></i> Loading known issues…</div>';
+  let items = [], total = 0;
+  try {
+    const d = await (await fetch(`${API}/investigations/${currentInv}/cves`)).json();
+    items = d.items || []; total = d.total || 0;
+  } catch (e) {
+    host.innerHTML = '<div class="audit-empty" style="color:var(--red);">Could not load known issues.</div>';
+    return;
+  }
+  refreshCveBadge(total);
+  host.innerHTML = `<div class="sec-card"><h3><i class="fas fa-bug"></i> Known issues — ${total} CVE${total === 1 ? '' : 's'}</h3>` +
+    `<div class="sec-btn-row" style="margin-bottom:8px;"><button class="btn btn-ghost btn-sm" onclick="collectCvesMain(this)"><i class="fas fa-rotate"></i> Collect CVEs</button>` +
+    `<span style="font-size:11px;color:var(--text2);">Scans this investigation's artifacts and reports for CVE mentions, enriches via NVD, and adds graph nodes. New runs do this automatically.</span></div>` +
+    (total ? `<div style="overflow-x:auto;"><table class="sec-table"><tr><th>CVE</th><th>Published</th><th>Severity</th><th>Status</th><th>Impact</th><th>Description</th></tr>${cveRowsHtml(items)}</table></div>`
+           : `<p style="color:var(--text2);font-size:12px;">No CVE mentions found yet. Click Collect CVEs after the agent has gathered sources.</p>`) +
+    `</div>`;
+}
+
+async function collectCvesMain(btn) {
+  if (!currentInv) return;
+  if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner spin"></i> Collecting…'; }
+  try {
+    const d = await postCollectCves();
+    showNotif(d.collected && d.collected.length ? `Collected ${d.collected.length} new CVE(s)` : 'No new CVEs found', d.collected && d.collected.length ? 'success' : 'info');
+  } catch (e) { showNotif('CVE collection failed: ' + e.message, 'error'); }
+  await loadCvesView();
+}
+
 async function secRenderCves() {
   const host = document.getElementById('secCvesPane');
   if (!host) return;
@@ -3944,25 +4020,10 @@ async function secRenderCves() {
     host.innerHTML = '<div class="sec-card"><p style="color:var(--red);font-size:12px;">Could not load known issues.</p></div>';
     return;
   }
-  secCveCount = total;
-  document.querySelectorAll('.sec-subtab[data-key="cves"] .sec-subtab-n').forEach(el => {
-    el.textContent = String(total);
-  });
-  const rows = items.map(f => {
-    const pub = f.published_date ? escHtml(f.published_date.slice(0, 10)) : '<span style="color:var(--text2)">—</span>';
-    const cvss = (f.cvss === null || f.cvss === undefined) ? '' : ` <span style="color:var(--text2)">(${f.cvss})</span>`;
-    const desc = escHtml((f.description || '').slice(0, 220)) + ((f.description || '').length > 220 ? '…' : '');
-    return `<tr><td style="white-space:nowrap;"><a href="${escHtml(f.source_url || '#')}" target="_blank" rel="noopener" style="color:var(--accent);"><strong>${escHtml(f.cve_id)}</strong></a></td>` +
-      `<td style="white-space:nowrap;">${pub}</td>` +
-      `<td>${secCveSeverityPill(f.severity)}${cvss}</td>` +
-      `<td>${escHtml(f.status || 'unknown')}</td>` +
-      `<td title="${escHtml(f.impact || '')}">${escHtml((f.impact || '').slice(0, 120))}</td>` +
-      `<td title="${escHtml(f.description || '')}">${desc}</td></tr>`;
-  }).join('');
-  host.innerHTML = `<div class="sec-card"><h3><i class="fas fa-bug"></i> Known issues — ${total} CVE${total === 1 ? '' : 's'}</h3>` +
-    `<div class="sec-btn-row" style="margin-bottom:8px;"><button class="btn btn-ghost btn-sm" onclick="secCollectCves(this)"><i class="fas fa-rotate"></i> Collect CVEs</button>` +
+  refreshCveBadge(total);
+  host.innerHTML = `<div class="sec-card"><h3><i class="fas fa-bug"></i> Known issues — ${total} CVE${total === 1 ? '' : 's'}</h3>` +    `<div class="sec-btn-row" style="margin-bottom:8px;"><button class="btn btn-ghost btn-sm" onclick="secCollectCves(this)"><i class="fas fa-rotate"></i> Collect CVEs</button>` +
     `<span style="font-size:11px;color:var(--text2);">Scans this investigation's artifacts and reports for CVE mentions, enriches via NVD, and adds graph nodes. New runs do this automatically.</span></div>` +
-    (total ? `<div style="overflow-x:auto;"><table class="sec-table"><tr><th>CVE</th><th>Published</th><th>Severity</th><th>Status</th><th>Impact</th><th>Description</th></tr>${rows}</table></div>`
+    (total ? `<div style="overflow-x:auto;"><table class="sec-table"><tr><th>CVE</th><th>Published</th><th>Severity</th><th>Status</th><th>Impact</th><th>Description</th></tr>${cveRowsHtml(items)}</table></div>`
            : `<p style="color:var(--text2);font-size:12px;">No CVE mentions found yet. Click Collect CVEs after the agent has gathered sources.</p>`) +
     `</div>`;
 }
@@ -3971,9 +4032,7 @@ async function secCollectCves(btn) {
   if (!currentInv) return;
   if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner spin"></i> Collecting…'; }
   try {
-    const res = await fetch(`${API}/investigations/${currentInv}/cves/collect`, { method: 'POST' });
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    const d = await res.json();
+    const d = await postCollectCves();
     showNotif(d.collected && d.collected.length ? `Collected ${d.collected.length} new CVE(s)` : 'No new CVEs found', d.collected && d.collected.length ? 'success' : 'info');
   } catch (e) { showNotif('CVE collection failed: ' + e.message, 'error'); }
   await secRenderCves();
