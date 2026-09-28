@@ -4892,8 +4892,8 @@ async function secLoadStandards(force) {
   if (body) body.innerHTML = '<div class="std-err">Loading the standards taxonomy…</div>';
   try {
     const url = secAssessmentId
-      ? `${API}/api/standards/score-matrix?assessment_id=${secAssessmentId}`
-      : `${API}/api/standards/score-matrix`;
+      ? `${API}/standards/score-matrix?assessment_id=${secAssessmentId}`
+      : `${API}/standards/score-matrix`;
     const r = await fetch(url, { cache: 'no-store' });
     if (!r.ok) {
       const d = await r.json().catch(() => ({}));
