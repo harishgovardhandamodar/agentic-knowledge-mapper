@@ -1178,7 +1178,10 @@ def _gen_diagram(question: str, pages: list, mode: str, depth: str) -> dict | No
                          "Reply JSON: {\"diagram_type\": \"none|flowchart|sequenceDiagram|graph|"
                          "mindmap|timeline|erDiagram\", "
                          "\"mermaid\": str (valid Mermaid source, no code fences, nodes the core "
-                         "concepts/steps, keep under 45 nodes/lines with short labels), "
+                         "concepts/steps, keep under 45 nodes/lines with short labels, and use no "
+                         "style/classDef colour directives -- the app supplies a high-contrast "
+                         "theme for both of its themes and a hard-coded light fill is unreadable "
+                         "against the theme's label colour), "
                          "\"title\": str, \"caption\": str (1 sentence), "
                          "\"references\": [int source indices]}")}],
             max_tokens=1400)
