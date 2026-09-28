@@ -3800,6 +3800,18 @@ let secSubTab = 'overview';
 let secPerspectives = [];
 let secAudience = 'executive';
 let secSubPanes = null;
+/* Standards coverage pane-tab state lives with the other security UI state
+ * (not beside the functions that use it): switchApp reads secPaneTab during
+ * initial evaluation on a #security deep link, so this must execute before
+ * the boot call at the end of the script. */
+let secPaneTab = 'assess';
+let secStdCache = {};
+let secStdView = 'matrix';
+let secStdShowAll = false;
+let secStdOpen = null;
+let secStdFilters = { q: '', jur: 'all', kind: 'all' };
+let secStdPick = [];
+let secStdMode = 'single';
 let secCveCount = 0;
 /* The A2A task id doubles as this assessment's ledger run id, which is how the
    audit sub-tab knows which chain to show. */
@@ -4863,15 +4875,6 @@ function secPopulateForm(d) {
  * answers "which standards cover what this run found" without regenerating
  * anything. Dense Matrix and expandable Detail are one toggle apart.
  */
-let secPaneTab = 'assess';
-let secStdCache = {};
-let secStdView = 'matrix';
-let secStdShowAll = false;
-let secStdOpen = null;
-let secStdFilters = { q: '', jur: 'all', kind: 'all' };
-let secStdPick = [];
-let secStdMode = 'single';
-
 function secSwitchPaneTab(key) {
   if (key !== 'assess' && key !== 'standards') return;
   secPaneTab = key;

@@ -128,6 +128,14 @@ that count. What-if control toggles recompute the score instantly.
 
 ![Security report with clickable severity mix](docs/screenshots/05-security-report.png)
 
+The agent pane's **Standards coverage** sub-tab maps the run against the AI
+Standards & Regulations taxonomy (34 frameworks × 10 control pillars):
+a relevance-ranked score matrix, expandable framework detail, and a Findings
+view that grades every threat Direct / Partial / Gap against up to three
+selectable standards side by side. See [docs/standards-coverage.md](docs/standards-coverage.md).
+
+![Standards score matrix scoped to the open assessment](docs/screenshots/08-standards-matrix.png)
+
 ### Agent console
 
 Live stage-colored event log, search plan, and run stats while the agent
