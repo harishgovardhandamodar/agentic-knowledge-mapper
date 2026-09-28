@@ -25,6 +25,7 @@ from . import cve
 from .agent import launch_run, launch_run_with_goal
 from . import security_agent
 from . import security as sec_engine
+from . import standards_matrix
 from .explainer import (launch_explanation, _extract_concepts, MODES,
                         DEPTH_PLAN, AUDIENCE_HINTS, _question_suggestions,
                         _quiz_from_answer, _save_explanation_to_graph,
@@ -1381,6 +1382,24 @@ def list_security_controls():
                 "min_applicability": sec_engine._MIN_APPLICABILITY,
                 "severity_bands": sec_engine.SEVERITY_BANDS,
             }}
+
+
+@app.get("/api/standards/score-matrix")
+def standards_score_matrix(assessment_id: Optional[int] = None,
+                           db: Session = Depends(get_db)):
+    """AI Standards & Regulations score matrix for the Security agent sub-tab.
+
+    Without ``assessment_id`` every framework is returned sorted by coverage.
+    With one, each framework also carries a deterministic relevance score for
+    that assessment (token overlap of its threats, active controls and known
+    exploits against the framework text) and rows sort by relevance first.
+    """
+    try:
+        return standards_matrix.build_matrix(db, assessment_id)
+    except standards_matrix.AssessmentNotFound:
+        raise HTTPException(404, "Assessment not found")
+    except standards_matrix.StandardsUnavailable as e:
+        raise HTTPException(503, e.detail)
 
 
 @app.post("/api/security/assessments/{assessment_id}/rescore")

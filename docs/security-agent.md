@@ -110,3 +110,16 @@ plus executive-summary bullets and paragraph.
 7. Appendix with the A2A task id and hop trail
 
 Export: Markdown download, PDF (reportlab, tables + headings), browser print.
+
+## Standards coverage sub-tab
+
+Beside Assessment, the agent pane has a Standards coverage sub-tab: the AI
+Standards & Regulations taxonomy (frameworks × 10 control pillars, 0|1|2)
+served by `GET /api/standards/score-matrix` from the dashboard's `data.json`
+over the compose network (`STANDARDS_BASE_URL`, cached `STANDARDS_CACHE_TTL_S`).
+With an assessment open, each framework carries a deterministic relevance
+score -- token overlap of its threats, active controls and known exploits
+against the framework text (exact 2, substring ≥4 chars 1; stopwords dropped)
+-- sorted relevance-first with the matched tokens shown as the reason.
+Matrix and Detail are one toggle apart; colours that already pass contrast
+are left alone. Pinned in `tests/test_standards_matrix.py`.

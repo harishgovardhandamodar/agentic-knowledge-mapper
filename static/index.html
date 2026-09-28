@@ -422,6 +422,49 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .sec-subtab .sec-subtab-n { background: var(--bg3); border-radius: 8px; padding: 0 6px; font-size: 10px; color: var(--text2); }
 .sec-subtab.on .sec-subtab-n { background: rgba(88,166,255,0.18); color: var(--accent); }
 .sec-pane[hidden] { display: none; }
+/* Standards coverage sub-tab (Security agent pane). Heat fills are fixed
+ * colours, not theme variables: a light fill with light text is exactly the
+ * 1.07:1 failure this tab exists to expose, so the scale must read in both
+ * of the app's themes. 2 = #1f6feb/#fff (5.1:1), 1 = #9ecbff/#0d1117 (12:1). */
+#secPaneTabs { padding: 0 20px; margin-top: 0; background: var(--bg2); }
+#secStdWrap { padding: 14px 20px; }
+.std-filters { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 10px 0 12px; }
+.std-filters input, .std-filters select { background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-size: 12px; padding: 6px 10px; }
+.std-filters input { flex: 1; min-width: 160px; }
+.std-viewbtn { background: var(--bg3); border: 1px solid var(--border); border-radius: 8px; color: var(--text2); font-size: 11.5px; font-weight: 600; padding: 6px 12px; cursor: pointer; }
+.std-viewbtn.on { color: var(--accent); border-color: var(--accent); background: rgba(88,166,255,0.12); }
+.std-matrixwrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 8px; }
+table.std-matrix { border-collapse: collapse; width: 100%; min-width: 760px; font-size: 11.5px; }
+table.std-matrix thead th { position: sticky; top: 0; background: var(--bg3); z-index: 1; font-size: 10px; text-transform: uppercase; letter-spacing: 0.3px; color: var(--text2); padding: 8px 6px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+table.std-matrix td, table.std-matrix tfoot th, table.std-matrix tfoot td { padding: 5px 6px; border-bottom: 1px solid var(--border); }
+table.std-matrix tbody tr:hover td { background: rgba(88,166,255,0.06); }
+table.std-matrix tbody tr.dim { opacity: 0.45; }
+td.std-fw { min-width: 180px; max-width: 260px; }
+td.std-fw .std-name { font-weight: 600; display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+td.std-fw .std-sub { font-size: 10px; color: var(--text2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+td.std-heat, th.std-heat { text-align: center; }
+span.std-cell { display: inline-block; min-width: 24px; padding: 2px 0; border-radius: 4px; font-weight: 700; text-align: center; }
+span.std-cell.v2 { background: #1f6feb; color: #ffffff; }
+span.std-cell.v1 { background: #9ecbff; color: #0d1117; }
+span.std-cell.v0 { color: var(--text2); font-weight: 400; }
+.std-cov { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+.std-covbar { width: 56px; height: 6px; border-radius: 3px; background: var(--bg3); overflow: hidden; flex-shrink: 0; }
+.std-covbar > span { display: block; height: 100%; background: var(--accent); border-radius: 3px; }
+.std-covnum { font-size: 11px; font-weight: 700; min-width: 42px; text-align: right; }
+.std-rel { display: inline-block; font-size: 10px; font-weight: 700; color: var(--teal); background: rgba(88,166,255,0.14); border-radius: 4px; padding: 1px 6px; margin-left: 6px; white-space: nowrap; }
+.std-why { font-size: 10.5px; color: var(--text2); margin-top: 2px; }
+.std-detail { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 8px; background: var(--bg2); overflow: hidden; }
+.std-detail.dim { opacity: 0.55; }
+.std-detail-head { width: 100%; display: flex; align-items: center; gap: 10px; background: none; border: none; color: inherit; font: inherit; padding: 10px 12px; cursor: pointer; text-align: left; }
+.std-detail-head:hover { background: rgba(88,166,255,0.06); }
+.std-detail-head .std-name { font-weight: 600; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.std-detail-body { padding: 0 12px 12px; font-size: 12px; }
+.std-detail-body .std-pills { display: flex; gap: 4px; flex-wrap: wrap; margin: 6px 0; }
+.std-pill { font-size: 10.5px; background: var(--bg3); border-radius: 10px; padding: 2px 9px; color: var(--text2); }
+.std-mini { display: inline-flex; gap: 3px; flex-wrap: wrap; margin: 4px 0; }
+.std-legend { display: flex; gap: 10px; flex-wrap: wrap; font-size: 11px; color: var(--text2); align-items: center; }
+.std-note { font-size: 11.5px; color: var(--text2); }
+.std-err { padding: 18px; text-align: center; font-size: 12.5px; color: var(--text2); }
 /* audience highlights */
 .sec-audbar { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
 .sec-aud-chip { background: var(--bg3); border: 1px solid var(--border); border-radius: 999px; color: var(--text2); font: inherit; font-size: 11.5px; padding: 5px 12px; cursor: pointer; display: flex; align-items: center; gap: 6px; }
@@ -771,7 +814,11 @@ body.pane-sec-top-collapsed .sec-topbar-sub { display: none; }
           <button class="btn btn-ghost btn-sm" onclick="togglePane('secTop')" title="Collapse this bar"><i class="fas fa-chevron-up"></i></button>
         </div>
       </div>
-      <div class="sec-grid">
+      <div class="sec-subtabs" id="secPaneTabs" role="tablist" aria-label="Security agent views">
+        <button class="sec-subtab on" data-pane="assess" onclick="secSwitchPaneTab('assess')" role="tab"><i class="fas fa-wand-magic-sparkles"></i>Assessment</button>
+        <button class="sec-subtab" data-pane="standards" onclick="secSwitchPaneTab('standards')" role="tab"><i class="fas fa-scale-balanced"></i>Standards coverage<span class="sec-subtab-n" id="secStdCount" hidden></span></button>
+      </div>
+      <div class="sec-grid" id="secAssessWrap">
         <div class="sec-setup">
           <div class="sec-card">
             <div style="font-size:11.5px;color:var(--text2);margin-bottom:10px;">Scoped to investigation: <strong id="secInvName">—</strong>. The agent searches <em>this investigation's knowledge graph</em> for related research, maps known attacks, and writes the report.</div>
@@ -822,6 +869,22 @@ body.pane-sec-top-collapsed .sec-topbar-sub { display: none; }
             <div id="secControls" class="sec-ctl-list">Loading control catalogue…</div>
           </div>
           <div id="secResult"><div class="sec-card"><p style="color:var(--text2)">Pick an investigation, configure the product and exposure, then run the agent. The report includes an executive summary, illustrated data-flow / threat-path / workflow diagrams, a full threat &amp; risk register, a Known Exploits section grounded in this app's graph, and Markdown + PDF export.</p></div></div>
+        </div>
+      </div>
+      <div id="secStdWrap" hidden>
+        <div class="sec-card">
+          <div id="secStdHead"></div>
+          <div class="std-filters">
+            <input id="secStdQ" placeholder="Filter e.g. prompt injection, OWASP, EU…" aria-label="Filter frameworks" oninput="secStdFilters.q=this.value;secStdRender()" />
+            <select id="secStdJur" aria-label="Jurisdiction" onchange="secStdFilters.jur=this.value;secStdRender()"></select>
+            <select id="secStdKind" aria-label="Type" onchange="secStdFilters.kind=this.value;secStdRender()"></select>
+            <button class="std-viewbtn on" id="secStdViewMatrix" onclick="secStdSetView('matrix')">Matrix</button>
+            <button class="std-viewbtn" id="secStdViewDetail" onclick="secStdSetView('detail')">Detail</button>
+            <button class="std-viewbtn" id="secStdShowAll" onclick="secStdShowAll=!secStdShowAll;secStdRender()" hidden>Show all</button>
+            <button class="btn btn-ghost btn-sm" onclick="secLoadStandards(true)" title="Re-fetch the taxonomy"><i class="fas fa-rotate"></i></button>
+          </div>
+          <div id="secStdBody"></div>
+          <div id="secStdFoot" class="std-note" style="margin-top:8px;"></div>
         </div>
       </div>
     </div>
@@ -2943,6 +3006,7 @@ function switchApp(app) {
     updateSecInvName();
     if (!secControlCatalog.length) loadSecurityControls();
     if (!secAssessmentId) secLoadLatestForInvestigation();
+    if (secPaneTab === 'standards') secLoadStandards();
   } else if (app === 'standards') {
     const frame = document.getElementById('standardsFrame');
     if (frame && !frame.src) frame.src = standardsUrl();
@@ -4772,6 +4836,221 @@ function secPopulateForm(d) {
   secUpdateCtlCount();
 }
 
+/* Standards coverage sub-tab (Security agent pane) ========================
+ * The score matrix mirrors the AI Standards & Regulations taxonomy the
+ * dashboard ships (frameworks x 10 control pillars, 0|1|2). The backend
+ * scores each framework's relevance to the assessment in view by token
+ * overlap of its threats, active controls and known exploits, so this tab
+ * answers "which standards cover what this run found" without regenerating
+ * anything. Dense Matrix and expandable Detail are one toggle apart.
+ */
+let secPaneTab = 'assess';
+let secStdCache = {};
+let secStdView = 'matrix';
+let secStdShowAll = false;
+let secStdOpen = null;
+let secStdFilters = { q: '', jur: 'all', kind: 'all' };
+
+function secSwitchPaneTab(key) {
+  if (key !== 'assess' && key !== 'standards') return;
+  secPaneTab = key;
+  document.querySelectorAll('#secPaneTabs .sec-subtab').forEach(b => {
+    b.classList.toggle('on', b.dataset.pane === key);
+  });
+  document.getElementById('secAssessWrap').hidden = key !== 'assess';
+  document.getElementById('secStdWrap').hidden = key !== 'standards';
+  if (key === 'standards') secLoadStandards();
+}
+
+function secStdKey() { return secAssessmentId ? String(secAssessmentId) : 'all'; }
+
+async function secLoadStandards(force) {
+  const key = secStdKey();
+  if (!force && secStdCache[key]) { secStdRender(); return; }
+  const body = document.getElementById('secStdBody');
+  if (body) body.innerHTML = '<div class="std-err">Loading the standards taxonomy…</div>';
+  try {
+    const url = secAssessmentId
+      ? `${API}/api/standards/score-matrix?assessment_id=${secAssessmentId}`
+      : `${API}/api/standards/score-matrix`;
+    const r = await fetch(url);
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      throw new Error(d.detail || `HTTP ${r.status}`);
+    }
+    secStdCache[key] = await r.json();
+    secStdShowAll = false;
+    secStdOpen = null;
+  } catch (e) {
+    if (body) {
+      body.innerHTML = `<div class="std-err">Could not load the standards taxonomy: ${escHtml(e.message || e)}. ` +
+        `<button class="btn btn-ghost btn-sm" onclick="secLoadStandards(true)"><i class="fas fa-rotate"></i> Retry</button></div>`;
+    }
+    document.getElementById('secStdFoot').textContent = '';
+    return;
+  }
+  const payload = secStdCache[key];
+  const n = payload.assessment
+    ? payload.frameworks.filter(f => f.relevant).length
+    : payload.frameworks.length;
+  const badge = document.getElementById('secStdCount');
+  if (badge) { badge.hidden = false; badge.textContent = String(n); }
+  secStdRender();
+}
+
+function secStdSetView(v) {
+  secStdView = v === 'detail' ? 'detail' : 'matrix';
+  secStdRender();
+}
+
+function secStdToggleRow(id) {
+  secStdOpen = secStdOpen === id ? null : id;
+  secStdRender();
+}
+
+function secStdVisible(payload) {
+  const q = secStdFilters.q.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  return payload.frameworks.filter(f => {
+    if (!secStdShowAll && payload.assessment && !f.relevant) return false;
+    if (secStdFilters.jur !== 'all' && !(f.jurisdiction || '').includes(secStdFilters.jur)) return false;
+    if (secStdFilters.kind !== 'all' && f.kind !== secStdFilters.kind) return false;
+    if (q.length) {
+      const hay = [f.name, f.issuer, f.jurisdiction, f.kind, f.summary,
+        (f.controls || []).join(' '), (f.scenarios || []).join(' ')].join(' ').toLowerCase();
+      if (!q.every(t => hay.includes(t))) return false;
+    }
+    return true;
+  });
+}
+
+function secStdCell(v, dim, legend) {
+  const label = `${dim.label}: ${(legend && legend[String(v)]) || ('score ' + v)}`;
+  if (v === 2) return `<span class="std-cell v2" title="${escHtml(label)}">2</span>`;
+  if (v === 1) return `<span class="std-cell v1" title="${escHtml(label)}">1</span>`;
+  return `<span class="std-cell v0" title="${escHtml(label)}">–</span>`;
+}
+
+function secStdCov(pct) {
+  const p = Math.max(0, Math.min(100, Number(pct) || 0));
+  return `<span class="std-cov"><span class="std-covbar"><span style="width:${p.toFixed(0)}%"></span></span>` +
+    `<span class="std-covnum">${p.toFixed(p % 1 ? 1 : 0)}%</span></span>`;
+}
+
+function secStdRel(f, scoped) {
+  if (!scoped) return '';
+  return `<span class="std-rel" title="Relevance to this assessment${(f.matched || []).length ? ': ' + f.matched.join(', ') : ''}">▣ ${Number(f.relevance).toFixed(0)}%</span>`;
+}
+
+function secStdMatrixHtml(rows, dims, legend, scoped) {
+  if (!rows.length) return '<div class="std-err">No frameworks match the current filters.</div>';
+  let html = '<div class="std-matrixwrap"><table class="std-matrix"><thead><tr><th style="text-align:left;">Framework</th>' +
+    dims.map(d => `<th class="std-heat" title="${escHtml(d.description || d.label)}">${escHtml(d.label)}</th>`).join('') +
+    '<th>Coverage</th></tr></thead><tbody>';
+  rows.forEach(f => {
+    html += `<tr${scoped && !f.relevant ? ' class="dim"' : ''}>` +
+      `<td class="std-fw"><span class="std-name" title="${escHtml(f.name || '')}">${escHtml(f.name || f.id)}</span>` +
+      `<span class="std-sub">${escHtml([f.issuer, f.jurisdiction, f.kind].filter(Boolean).join(' · '))}</span>` +
+      `${secStdRel(f, scoped)}</td>` +
+      dims.map(d => `<td class="std-heat">${secStdCell((f.coverage || {})[d.id] || 0, d, legend)}</td>`).join('') +
+      `<td>${secStdCov(f.coverage_pct)}</td></tr>`;
+  });
+  return html + '</tbody></table></div>';
+}
+
+function secStdDetailHtml(rows, dims, legend, scoped) {
+  if (!rows.length) return '<div class="std-err">No frameworks match the current filters.</div>';
+  return rows.map(f => {
+    const open = secStdOpen === f.id;
+    let html = `<div class="std-detail${scoped && !f.relevant ? ' dim' : ''}">` +
+      `<button class="std-detail-head" onclick="secStdToggleRow(${JSON.stringify(f.id).replace(/"/g, '&quot;')})">` +
+      `<i class="fas fa-chevron-${open ? 'down' : 'right'}" style="font-size:10px;color:var(--text2);"></i>` +
+      `<span class="std-name">${escHtml(f.name || f.id)}</span>${secStdRel(f, scoped)}${secStdCov(f.coverage_pct)}</button>`;
+    if (open) {
+      html += '<div class="std-detail-body">';
+      if (f.summary) html += `<div>${escHtml(f.summary)}</div>`;
+      html += `<div class="std-note">${escHtml([f.issuer, f.version, f.status].filter(Boolean).join(' · '))}` +
+        (f.last_checked ? ` · checked ${escHtml(f.last_checked)}` : '') +
+        (f.url ? ` · <a href="${escHtml(f.url)}" target="_blank" rel="noopener">source ↗</a>` : '') + '</div>';
+      html += '<div class="std-mini">' + dims.map(d =>
+        `<span class="std-pill" title="${escHtml(d.description || d.label)}">${escHtml(d.label)} ${secStdCell((f.coverage || {})[d.id] || 0, d, legend)}</span>`).join('') + '</div>';
+      if ((f.controls || []).length) {
+        html += `<div class="std-note">Controls: ${escHtml(f.controls.slice(0, 12).join(' · '))}${f.controls.length > 12 ? ` · +${f.controls.length - 12} more` : ''}</div>`;
+      }
+      if (scoped && (f.matched || []).length) {
+        html += `<div class="std-why">Relevant because: ${escHtml(f.matched.join(', '))}</div>`;
+      }
+      html += '</div>';
+    }
+    return html + '</div>';
+  }).join('');
+}
+
+function secStdRender() {
+  const payload = secStdCache[secStdKey()];
+  if (!payload) return;
+  const dimList = (payload.dimensions || []).filter(d => d && d.id);
+  const legend = payload.score_legend || {};
+  const scoped = !!payload.assessment;
+
+  const jurSel = document.getElementById('secStdJur');
+  const kindSel = document.getElementById('secStdKind');
+  const jurs = ['all', ...new Set(payload.frameworks.map(f => f.jurisdiction).filter(Boolean))].sort();
+  const kinds = ['all', ...new Set(payload.frameworks.map(f => f.kind).filter(Boolean))].sort();
+  if (jurSel) {
+    if (!secStdFilters.jur || !jurs.includes(secStdFilters.jur)) secStdFilters.jur = 'all';
+    jurSel.innerHTML = jurs.map(j => `<option value="${escHtml(j)}"${j === secStdFilters.jur ? ' selected' : ''}>${escHtml(j === 'all' ? 'All jurisdictions' : j)}</option>`).join('');
+  }
+  if (kindSel) {
+    if (!secStdFilters.kind || !kinds.includes(secStdFilters.kind)) secStdFilters.kind = 'all';
+    kindSel.innerHTML = kinds.map(k => `<option value="${escHtml(k)}"${k === secStdFilters.kind ? ' selected' : ''}>${escHtml(k === 'all' ? 'All types' : k)}</option>`).join('');
+  }
+  document.getElementById('secStdViewMatrix').classList.toggle('on', secStdView === 'matrix');
+  document.getElementById('secStdViewDetail').classList.toggle('on', secStdView === 'detail');
+  const showAllBtn = document.getElementById('secStdShowAll');
+  if (showAllBtn) {
+    showAllBtn.hidden = !scoped;
+    if (scoped) {
+      const rel = payload.frameworks.filter(f => f.relevant).length;
+      showAllBtn.textContent = secStdShowAll ? `Relevant only (${rel})` : `Show all (${payload.frameworks.length})`;
+      showAllBtn.classList.toggle('on', secStdShowAll);
+    }
+  }
+
+  const total = payload.frameworks.length;
+  const relCount = payload.frameworks.filter(f => f.relevant).length;
+  let scope;
+  if (scoped) {
+    const a = payload.assessment, b = a.basis || {};
+    scope = `Scoped to assessment #${a.id}${a.product ? ` — ${escHtml(a.product)}` : ''} · ` +
+      `${b.threats || 0} threats · ${b.controls || 0} controls · ${b.exploits || 0} exploits → ${relCount} of ${total} frameworks relevant`;
+  } else {
+    scope = `Full taxonomy (${total} frameworks) — open an assessment to scope by relevance`;
+  }
+  document.getElementById('secStdHead').innerHTML =
+    `<div class="std-legend"><span><span class="std-cell v2">2</span> ${escHtml(legend['2'] || 'direct')}</span>` +
+    `<span><span class="std-cell v1">1</span> ${escHtml(legend['1'] || 'partial')}</span>` +
+    `<span><span class="std-cell v0">–</span> ${escHtml(legend['0'] || 'none')}</span></div>` +
+    `<div class="std-note" style="margin-top:4px;">${scope}${payload.generated ? ` · taxonomy dated ${escHtml(payload.generated)}` : ''}</div>`;
+
+  const rows = secStdVisible(payload);
+  document.getElementById('secStdBody').innerHTML = secStdView === 'detail'
+    ? secStdDetailHtml(rows, dimList, legend, scoped)
+    : secStdMatrixHtml(rows, dimList, legend, scoped);
+
+  let foot;
+  if (!rows.length) {
+    foot = 'No frameworks match the current filters.';
+  } else {
+    const avgs = dimList.map(d => rows.reduce((a, f) => a + (((f.coverage || {})[d.id]) || 0), 0) / rows.length);
+    foot = `Pillar averages over ${rows.length} visible: ` +
+      dimList.map((d, i) => `${escHtml(d.label)} ${(avgs[i] / 2 * 100).toFixed(0)}%`).join(' · ');
+  }
+  document.getElementById('secStdFoot').textContent = foot;
+
+  const badge = document.getElementById('secStdCount');
+  if (badge) { badge.hidden = false; badge.textContent = String(scoped ? relCount : total); }
+}
+
 async function loadSecurityById(id) {
   try {
     const data = await (await fetch(`${API}/security/assessments/${id}`)).json();
@@ -4784,6 +5063,7 @@ async function loadSecurityById(id) {
     }
     secPopulateForm(data);
     renderSecurityReport(data);
+    if (secPaneTab === 'standards') secLoadStandards();
   } catch (e) { showNotif('Failed to load assessment', 'error'); }
 }
 
