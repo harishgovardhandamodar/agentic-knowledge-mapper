@@ -59,6 +59,24 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .mgr-pill.ready { background: rgba(88,166,255,0.14); color: var(--accent); }
 .mgr-pill.done { background: rgba(63,185,80,0.16); color: #3fb950; }
 .mgr-cmd { font-size: 12px; color: var(--text2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mgr-strip { display: flex; align-items: stretch; flex-wrap: wrap; margin: 4px 0 12px; }
+.mgr-step { display: flex; gap: 7px; align-items: flex-start; font-size: 11.5px; padding: 6px 9px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg2); }
+.mgr-step .mgr-dot { font-size: 11px; margin-top: 1px; }
+.mgr-step.done .mgr-dot { color: #3fb950; }
+.mgr-step.active .mgr-dot { color: var(--accent); }
+.mgr-step.pending { opacity: 0.55; }
+.mgr-step.pending .mgr-dot { color: var(--text2); }
+.mgr-link { align-self: center; width: 14px; height: 1px; background: var(--border); flex-shrink: 0; }
+.mgr-lane { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 8px; background: var(--bg2); overflow: hidden; }
+.mgr-lanehead { padding: 8px 12px; font-size: 12px; font-weight: 600; border-bottom: 1px solid var(--border); background: var(--bg3); }
+.mgr-ev { display: flex; gap: 8px; align-items: baseline; padding: 5px 12px; font-size: 11.5px; border-bottom: 1px solid var(--border); }
+.mgr-ev:last-child { border-bottom: none; }
+.mgr-t { color: var(--text2); font-variant-numeric: tabular-nums; min-width: 52px; flex-shrink: 0; }
+.mgr-ev .mgr-dot { font-size: 9px; flex-shrink: 0; }
+.mgr-ev .mgr-dot.done { color: #3fb950; }
+.mgr-ev .mgr-dot.active { color: var(--accent); }
+.mgr-evbody { min-width: 0; }
+.mgr-evbody a { color: var(--accent); }
 #standardsFrame { flex: 1 1 auto; min-height: 0; min-height: min(70vh, 600px); width: 100%; border: none; background: var(--bg); display: block; }
 .sidebar { background: var(--bg2); border-right: 1px solid var(--border); padding: 16px; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; }
 .llm-dot { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text2); }
@@ -3033,6 +3051,7 @@ let currentApp = 'akm';
  * switchApp can run during initial evaluation on a #manager deep link. */
 let mgrPlan = null;
 let mgrRunsTimer = null;
+let mgrFlowOpen = [];
 
 const APP_TITLES = {
   akm: 'Agentic Knowledge Mapper',
@@ -5412,12 +5431,15 @@ function mgrRenderRuns(runs) {
         kids +
         `<div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;">` +
         (run.summary_investigation_id ? `<button class="btn btn-ghost btn-sm" onclick="mgrOpenInv(${run.summary_investigation_id})"><i class="fas fa-book-open"></i> Summary #${run.summary_investigation_id}</button>` : '') +
-        `<button class="btn btn-primary btn-sm"${canCompile ? '' : ' disabled'} onclick="mgrCompile(${run.id})" title="${canCompile ? 'Synthesize finished children into the summary' : (run.compiled ? 'Already compiled' : 'Waiting for children to finish')}"><i class="fas fa-clipboard-check"></i> Compile summary</button></div></div>`;
+        `<button class="std-viewbtn${mgrFlowOpen.includes(run.id) ? ' on' : ''}" data-mgr-flowbtn="${run.id}" onclick="mgrToggleFlow(${run.id})">Flow</button>` +
+        `<button class="btn btn-primary btn-sm"${canCompile ? '' : ' disabled'} onclick="mgrCompile(${run.id})" title="${canCompile ? 'Synthesize finished children into the summary' : (run.compiled ? 'Already compiled' : 'Waiting for children to finish')}"><i class="fas fa-clipboard-check"></i> Compile summary</button></div>` +
+      `<div id="mgrFlow-${run.id}"${mgrFlowOpen.includes(run.id) ? '' : ' hidden'}></div></div>`;
     }).join('');
   }
   const needPoll = runs.some(r => !r.all_done && !r.compiled);
   if (needPoll && !mgrRunsTimer) mgrRunsTimer = setInterval(mgrLoadRuns, 5000);
   if (!needPoll && mgrRunsTimer) { clearInterval(mgrRunsTimer); mgrRunsTimer = null; }
+  mgrFlowOpen.forEach(id => mgrRefreshFlow(id));
 }
 
 async function mgrCompile(id) {
@@ -5435,6 +5457,74 @@ function mgrOpenInv(id) {
   if (!id) return;
   selectInvestigation(Number(id));
   switchApp('akm');
+}
+
+function mgrRel(ms) {
+  if (!(ms >= 0)) return '';
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `+${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `+${m}m${String(s % 60).padStart(2, '0')}s`;
+  return `+${Math.floor(m / 60)}h${String(m % 60).padStart(2, '0')}m`;
+}
+
+function mgrToggleFlow(id) {
+  const i = mgrFlowOpen.indexOf(id);
+  if (i >= 0) mgrFlowOpen.splice(i, 1);
+  else mgrFlowOpen.push(id);
+  const open = mgrFlowOpen.includes(id);
+  const btn = document.querySelector(`[data-mgr-flowbtn="${id}"]`);
+  if (btn) btn.classList.toggle('on', open);
+  const panel = document.getElementById('mgrFlow-' + id);
+  if (panel) {
+    panel.hidden = !open;
+    if (open) mgrRefreshFlow(id);
+  }
+}
+
+async function mgrRefreshFlow(id) {
+  const panel = document.getElementById('mgrFlow-' + id);
+  if (!panel || panel.hidden) return;
+  try {
+    const r = await fetch(`${API}/manager/runs/${id}/timeline`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const tl = await r.json();
+    const live = document.getElementById('mgrFlow-' + id);
+    if (live) live.innerHTML = mgrFlowHtml(tl);
+  } catch (e) {
+    panel.innerHTML = `<p style="color:var(--text2);font-size:12px;">Could not load flow: ${escHtml(e.message)}</p>`;
+  }
+}
+
+function mgrFlowHtml(tl) {
+  const t0 = tl.t0 ? new Date(tl.t0).getTime() : null;
+  const step = f => {
+    const cls = f.state === 'done' ? 'done' : (f.state === 'active' ? 'active' : 'pending');
+    const mark = f.state === 'done' ? '✓' : (f.state === 'active' ? '●' : '○');
+    return `<span class="mgr-step ${cls}"><span class="mgr-dot">${mark}</span>` +
+      `<span><strong>${escHtml(f.label)}</strong><br/><span class="std-note">${escHtml(f.detail || '')}</span></span></span>`;
+  };
+  let html = `<div class="mgr-strip">${(tl.flow || []).map((f, i) => (i ? '<span class="mgr-link"></span>' : '') + step(f)).join('')}</div>`;
+  const byLane = {};
+  (tl.events || []).forEach(e => { (byLane[e.lane] = byLane[e.lane] || []).push(e); });
+  html += (tl.lanes || []).map(l => {
+    const evs = byLane[l.id] || [];
+    const rows = evs.map(e => {
+      const rel = (t0 && e.t) ? mgrRel(new Date(e.t).getTime() - t0) : '';
+      const ref = e.ref && e.ref.type === 'investigation' && e.ref.id
+        ? ` <a href="#" onclick="mgrOpenInv(${e.ref.id});return false;">#${e.ref.id}</a>` : '';
+      const dot = e.status === 'running' ? 'active' : 'done';
+      return `<div class="mgr-ev"><span class="mgr-t">${escHtml(rel)}</span>` +
+        `<span class="mgr-dot ${dot}">●</span>` +
+        `<span class="mgr-evbody"><span class="std-pill">${escHtml(e.agent || '')}</span> ` +
+        `<span style="color:var(--text2);">${escHtml(e.stage || '')}</span> — ${escHtml(e.label || '')}${ref}</span></div>`;
+    }).join('');
+    const trunc = ((tl.truncated || {})[l.id]) || 0;
+    return `<div class="mgr-lane"><div class="mgr-lanehead">${escHtml(l.label)} ` +
+      `<span class="std-note">${evs.length} action${evs.length === 1 ? '' : 's'}${trunc ? ` (+${trunc} more)` : ''}</span></div>` +
+      (rows || '<div class="std-note" style="padding:6px 12px;">No actions yet.</div>') + '</div>';
+  }).join('');
+  return html;
 }
 
 async function loadSecurityById(id) {

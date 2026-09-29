@@ -1699,6 +1699,16 @@ def manager_compile(run_id: int, db: Session = Depends(get_db)):
         raise HTTPException(409, {"pending": e.pending})
 
 
+@app.get("/api/manager/runs/{run_id}/timeline")
+def manager_timeline(run_id: int, db: Session = Depends(get_db)):
+    """Execution flow of a run: lanes, timestamped subagent actions, and a
+    flow strip for the overview. Pure reads; safe to poll."""
+    try:
+        return manager_mod.run_timeline(db, run_id)
+    except LookupError:
+        raise HTTPException(404, "Manager run not found")
+
+
 @app.get("/api/security/assessments/{assessment_id}/markdown")
 def get_security_markdown(assessment_id: int, db: Session = Depends(get_db)):
     from fastapi.responses import PlainTextResponse

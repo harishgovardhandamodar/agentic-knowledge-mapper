@@ -19,8 +19,8 @@ os.environ["AKM_DATABASE_URL"] = os.environ.get("AKM_TEST_DB") or (
 from app import database  # noqa: E402
 from app import manager as mgr  # noqa: E402
 from app.database import SessionLocal  # noqa: E402
-from app.models import (AgentRun, Artifact, Investigation, ManagerRun,  # noqa: E402
-                        SecurityAssessment)
+from app.models import (AgentEvent, AgentRun, Artifact, Investigation,  # noqa: E402
+                        ManagerRun, SecurityAssessment)
 
 database.init_db()
 
@@ -275,6 +275,141 @@ class TestCompile(unittest.TestCase):
             db.close()
 
 
+class TestSubagentMap(unittest.TestCase):
+    def test_known_stages_map_to_roles(self):
+        self.assertEqual(mgr.subagent("research", "search"), "research-collector")
+        self.assertEqual(mgr.subagent("security", "gate"), "control-analyst")
+        self.assertEqual(mgr.subagent("security", "score"), "scoring")
+        self.assertEqual(mgr.subagent("manager", "compile"), "synthesizer")
+
+    def test_unknown_stage_falls_through(self):
+        self.assertEqual(mgr.subagent("research", "frobnicator"), "frobnicator")
+        self.assertEqual(mgr.subagent("nope", "plan"), "plan")
+
+
+def _timeline_run(db, n=1):
+    with mock.patch.object(mgr, "launch_run"), \
+         mock.patch.object(mgr, "launch_security_assessment"):
+        row = mgr.run_plan(db, _plan(n), None)
+    return row["id"]
+
+
+class TestTimeline(unittest.TestCase):
+    def test_empty_run_has_lanes_and_pending_flow(self):
+        db = _db()
+        try:
+            rid = _timeline_run(db)
+            tl = mgr.run_timeline(db, rid)
+        finally:
+            db.close()
+        self.assertEqual(tl["run_id"], rid)
+        ids = [l["id"] for l in tl["lanes"]]
+        self.assertEqual(ids[0], "manager")
+        self.assertEqual(ids[-1], "summary")
+        self.assertEqual(len(ids), 3)
+        self.assertTrue(ids[1].startswith("topic-"))
+        self.assertTrue(any(e["stage"] == "command" for e in tl["events"]))
+        flow = {f["key"]: f for f in tl["flow"]}
+        self.assertEqual(flow["research"]["state"], "pending")
+        self.assertEqual(flow["summary"]["state"], "pending")
+
+    def test_events_map_to_subagents_and_flow_advances(self):
+        from datetime import datetime, timedelta
+        db = _db()
+        try:
+            rid = _timeline_run(db)
+            run = db.query(ManagerRun).filter(ManagerRun.id == rid).first()
+            plan = json.loads(run.plan_json)
+            inv_id = plan["topics"][0]["investigation_id"]
+            t0 = datetime(2026, 1, 1, 12, 0, 0)
+            rr = AgentRun(investigation_id=inv_id, status="done",
+                          trigger="manual", started_at=t0,
+                          finished_at=t0 + timedelta(minutes=2))
+            db.add(rr)
+            db.commit()
+            db.refresh(rr)
+            db.add(AgentEvent(run_id=rr.id, stage="search",
+                              message="Round 1: 5 queries",
+                              created_at=t0 + timedelta(seconds=10)))
+            sr = AgentRun(investigation_id=inv_id, status="running",
+                          trigger="security", started_at=t0 + timedelta(minutes=3))
+            db.add(sr)
+            db.commit()
+            db.refresh(sr)
+            db.add(AgentEvent(run_id=sr.id, stage="gate",
+                              message="Awaiting approval",
+                              created_at=t0 + timedelta(minutes=4)))
+            db.add(SecurityAssessment(
+                investigation_id=inv_id, product_name="T",
+                exposure="confidential_data", overall_pct=40.0,
+                markdown="# r"))
+            db.commit()
+            tl = mgr.run_timeline(db, rid)
+        finally:
+            db.close()
+        by_stage = {}
+        for e in tl["events"]:
+            by_stage.setdefault(e["stage"], []).append(e)
+        search = [e for e in by_stage.get("search", [])
+                  if e["lane"].startswith("topic-")]
+        self.assertTrue(search)
+        self.assertEqual(search[0]["agent"], "research-collector")
+        gate = by_stage.get("gate", [])
+        self.assertTrue(gate)
+        self.assertEqual(gate[0]["agent"], "control-analyst")
+        running = [e for e in tl["events"] if e["status"] == "running"]
+        self.assertTrue(any("running" in e["label"] for e in running))
+        score = [e for e in by_stage.get("score", [])
+                 if e["agent"] == "scoring"]
+        self.assertTrue(score)
+        flow = {f["key"]: f for f in tl["flow"]}
+        self.assertEqual(flow["research"]["state"], "done")
+        times = [e["t"] for e in tl["events"] if e["t"]]
+        self.assertEqual(times, sorted(times))
+
+    def test_lane_cap_keeps_head_and_tail(self):
+        from datetime import datetime, timedelta
+        db = _db()
+        old_cap = mgr.MAX_EVENTS_PER_LANE
+        mgr.MAX_EVENTS_PER_LANE = 10
+        try:
+            rid = _timeline_run(db)
+            run = db.query(ManagerRun).filter(ManagerRun.id == rid).first()
+            plan = json.loads(run.plan_json)
+            inv_id = plan["topics"][0]["investigation_id"]
+            rr = AgentRun(investigation_id=inv_id, status="done",
+                          trigger="manual")
+            db.add(rr)
+            db.commit()
+            db.refresh(rr)
+            t0 = datetime(2026, 1, 1, 12, 0, 0)
+            for i in range(30):
+                db.add(AgentEvent(run_id=rr.id, stage="search",
+                                  message=f"m{i}",
+                                  created_at=t0 + timedelta(seconds=i)))
+            db.commit()
+            tl = mgr.run_timeline(db, rid)
+        finally:
+            mgr.MAX_EVENTS_PER_LANE = old_cap
+            db.close()
+        lane_id = f"topic-{inv_id}"
+        lane_events = [e for e in tl["events"] if e["lane"] == lane_id]
+        self.assertEqual(len(lane_events), 10)
+        # created + run-start + 30 search events in the lane, capped at 10.
+        self.assertEqual(tl["truncated"].get(lane_id), 22)
+        labels = [e["label"] for e in lane_events]
+        self.assertIn("m0", labels)
+        self.assertIn("m29", labels)
+
+    def test_unknown_run_is_lookup_error(self):
+        db = _db()
+        try:
+            with self.assertRaises(LookupError):
+                mgr.run_timeline(db, 999999)
+        finally:
+            db.close()
+
+
 class TestManagerRoutes(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -298,6 +433,21 @@ class TestManagerRoutes(unittest.TestCase):
     def test_run_rejects_bad_plan(self):
         r = self.client.post("/api/manager/run", json={"plan": {"topics": []}})
         self.assertEqual(r.status_code, 422)
+
+    def test_timeline_route_shape_and_404(self):
+        db = _db()
+        try:
+            rid = _timeline_run(db)
+        finally:
+            db.close()
+        r = self.client.get(f"/api/manager/runs/{rid}/timeline")
+        self.assertEqual(r.status_code, 200, r.text)
+        body = r.json()
+        for key in ("run_id", "t0", "lanes", "events", "flow"):
+            self.assertIn(key, body)
+        self.assertTrue(any(l["kind"] == "topic" for l in body["lanes"]))
+        r = self.client.get("/api/manager/runs/999999/timeline")
+        self.assertEqual(r.status_code, 404)
 
     def test_run_lists_and_compiles(self):
         with mock.patch.object(mgr, "launch_run"), \

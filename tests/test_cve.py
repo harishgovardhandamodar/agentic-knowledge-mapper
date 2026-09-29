@@ -21,8 +21,8 @@ from app import agent as agent_mod  # noqa: E402
 from app import cve as cve_mod  # noqa: E402
 from app import database  # noqa: E402
 from app.database import SessionLocal  # noqa: E402
-from app.models import (Artifact, AgentRun, CveFinding, Investigation,  # noqa: E402
-                        Relationship)
+from app.models import (Artifact, AgentEvent, AgentRun, CveFinding,  # noqa: E402
+                        Investigation, Relationship)
 
 database.init_db()
 
@@ -86,8 +86,11 @@ class TestNvdParsing(unittest.TestCase):
 class TestCollection(unittest.TestCase):
     def setUp(self):
         self.db = SessionLocal()
-        for table in (CveFinding, Relationship, Artifact, AgentRun,
-                      Investigation):
+        # AgentEvent rides along: bulk deletes skip ORM cascades, so wiping
+        # runs without their events orphans rows that rowid reuse later
+        # attaches to unrelated runs in other test modules.
+        for table in (CveFinding, Relationship, Artifact, AgentEvent,
+                      AgentRun, Investigation):
             self.db.query(table).delete()
         self.db.commit()
 

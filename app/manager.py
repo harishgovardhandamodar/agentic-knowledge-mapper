@@ -21,7 +21,8 @@ from typing import Any
 
 from . import llm
 from .agent import launch_run
-from .models import AgentRun, Artifact, Investigation, SecurityAssessment
+from .models import (AgentEvent, AgentRun, Artifact, Investigation,
+                     SecurityAssessment)
 from .security import EXPOSURE_META
 from .security_agent import launch_security_assessment
 
@@ -339,3 +340,191 @@ class PendingChildren(Exception):
     def __init__(self, pending: list[str]):
         super().__init__("children still running")
         self.pending = pending
+
+
+# Stage -> subagent role, per runner kind. Unknown stages fall through to
+# the stage name itself so a new event never renders blank.
+SUBAGENTS = {
+    "manager": {"command": "orchestrator", "plan": "orchestrator",
+                "create": "orchestrator", "launch": "orchestrator",
+                "compile": "synthesizer"},
+    "research": {"plan": "planner", "search": "research-collector",
+                 "analyze": "analyzer", "map": "mapper",
+                 "summary": "writer", "cve": "cve-sweeper",
+                 "queue": "queue"},
+    "security": {"plan": "security-orchestrator", "gate": "control-analyst",
+                 "controls": "control-analyst", "score": "scoring",
+                 "search": "research-collector", "analyze": "threat-intel",
+                 "map": "mapper", "summary": "report-writer",
+                 "queue": "queue", "cve": "cve-sweeper"},
+}
+
+MAX_EVENTS_PER_LANE = 50
+
+
+def subagent(kind: str, stage: Any) -> str:
+    stage = str(stage or "")
+    return SUBAGENTS.get(kind, {}).get(stage, stage or "unknown")
+
+
+def _iso(ts: Any) -> str | None:
+    """ISO timestamp, normalized to naive UTC so DB rows and fresh markers
+    sort and subtract comparably (SQLite returns naive datetimes)."""
+    try:
+        if ts is None:
+            return None
+        if getattr(ts, "tzinfo", None) is not None:
+            ts = ts.astimezone(timezone.utc).replace(tzinfo=None)
+        return ts.isoformat()
+    except Exception:
+        return None
+
+
+def run_timeline(db, run_id: int) -> dict[str, Any]:
+    """Execution flow of a manager run: lanes, timestamped subagent actions,
+    and a flow strip for the overview. Pure reads; safe to poll."""
+    from .models import ManagerRun
+    run = db.query(ManagerRun).filter(ManagerRun.id == run_id).first()
+    if run is None:
+        raise LookupError("manager run not found")
+    row = _run_row(db, run)
+    try:
+        plan = json.loads(run.plan_json or "{}")
+    except Exception:
+        plan = {}
+    topics = plan.get("topics") or []
+
+    lanes = [{"id": "manager", "label": "Manager", "kind": "manager"}]
+    for i, t in enumerate(topics):
+        lanes.append({"id": f"topic-{t.get('investigation_id') or i}",
+                      "label": t.get("title") or f"Topic {i + 1}",
+                      "kind": "topic",
+                      "investigation_id": t.get("investigation_id")})
+    summary_title = ((plan.get("summary") or {}).get("title")
+                     or "Summary")
+    lanes.append({"id": "summary", "label": summary_title, "kind": "summary",
+                  "investigation_id": run.summary_investigation_id})
+
+    events: list[dict[str, Any]] = []
+
+    def ev(ts, lane, agent, stage, label, status="done", ref=None):
+        if ts is None:
+            return
+        events.append({"t": _iso(ts), "lane": lane, "agent": agent,
+                       "stage": stage, "label": str(label or "")[:280],
+                       "status": status, "ref": ref or {}})
+
+    ev(run.created_at, "manager", "orchestrator", "command",
+       f"Command received ({len(run.command or '')} chars)", "done",
+       {"type": "run", "id": run.id})
+    ev(run.created_at, "manager", "orchestrator", "plan",
+       f"Plan: {len(topics)} topics "
+       f"({(plan.get('parsed_by') or 'unknown')})", "done",
+       {"type": "run", "id": run.id})
+
+    for i, t in enumerate(topics):
+        inv_id = t.get("investigation_id")
+        lane = f"topic-{inv_id or i}"
+        inv = db.query(Investigation).filter(
+            Investigation.id == inv_id).first() if inv_id else None
+        if inv is not None:
+            ev(inv.created_at, lane, "orchestrator", "create",
+               f"Investigation #{inv.id} created", "done",
+               {"type": "investigation", "id": inv.id})
+        if not inv_id:
+            continue
+        runs = (db.query(AgentRun)
+                .filter(AgentRun.investigation_id == inv_id)
+                .order_by(AgentRun.id).all())
+        for r in runs:
+            kind = "security" if (r.trigger or "") == "security" \
+                else "research"
+            agent = ("security-agent" if kind == "security"
+                     else "investigation-agent")
+            ev(r.started_at or (r.events[0].created_at if r.events else None),
+               lane, agent, "run",
+               f"{agent} run #{r.id} started"
+               + (f" ({r.trigger})" if r.trigger else ""), "done",
+               {"type": "run", "id": r.id})
+            for e in (db.query(AgentEvent)
+                      # Join, don't just filter by run_id: bulk deletes elsewhere
+                      # (query.delete() skips ORM cascades) can orphan events
+                      # whose run is gone, and rowid reuse would then attach
+                      # ghosts to a later run with the same id.
+                      .join(AgentRun, AgentEvent.run_id == AgentRun.id)
+                      .filter(AgentEvent.run_id == r.id)
+                      .order_by(AgentEvent.id).all()):
+                ev(e.created_at, lane, subagent(kind, e.stage), e.stage,
+                   e.message, "done", {"type": "run", "id": r.id})
+            if (r.status or "") not in ("done", "error"):
+                ev(_now(), lane, agent, "run",
+                   f"Run #{r.id} {r.status}…", "running",
+                   {"type": "run", "id": r.id})
+            else:
+                ev(r.finished_at, lane, agent, "run",
+                   f"Run #{r.id} {r.status}", "done",
+                   {"type": "run", "id": r.id})
+        rec = (db.query(SecurityAssessment)
+               .filter(SecurityAssessment.investigation_id == inv_id)
+               .order_by(SecurityAssessment.id.desc()).first())
+        if rec is not None:
+            ev(rec.created_at, lane, "scoring", "score",
+               f"Assessment #{rec.id}: residual {rec.residual_pct}/100", "done",
+               {"type": "assessment", "id": rec.id})
+
+    if run.summary_investigation_id:
+        synth = (db.query(Artifact)
+                 .filter(Artifact.investigation_id == run.summary_investigation_id,
+                         Artifact.tags.like(f"%{SYNTH_TAG}%"))
+                 .order_by(Artifact.id.desc()).first())
+        if synth is not None:
+            ev(synth.created_at, "summary", "synthesizer", "compile",
+               f"Summary compiled (artifact #{synth.id})", "done",
+               {"type": "artifact", "id": synth.id})
+
+    events.sort(key=lambda e: (e["t"] or "", e["lane"]))
+    by_lane: dict[str, list] = {}
+    for e in events:
+        by_lane.setdefault(e["lane"], []).append(e)
+    truncated: dict[str, int] = {}
+    capped: list[dict[str, Any]] = []
+    for lane_id, evs in by_lane.items():
+        if len(evs) > MAX_EVENTS_PER_LANE:
+            half = MAX_EVENTS_PER_LANE // 2
+            truncated[lane_id] = len(evs) - MAX_EVENTS_PER_LANE
+            evs = evs[:half] + evs[-(MAX_EVENTS_PER_LANE - half):]
+        capped.extend(evs)
+    capped.sort(key=lambda e: (e["t"] or "", e["lane"]))
+
+    options = plan.get("options", {})
+    children = row.get("children") or []
+    r_done = sum(1 for c in children if (c.get("research") or {}).get("done"))
+    r_total = sum(1 for _ in children) if options.get("research", True) else 0
+    a_done = sum(1 for c in children if c.get("assessment_done"))
+    a_total = sum(1 for _ in children) if options.get("assessment", True) else 0
+    summ_state = "done" if row.get("compiled") else (
+        "active" if row.get("all_done") else "pending")
+    flow = [
+        {"key": "command", "label": "Command", "state": "done",
+         "detail": f"{len(run.command or '')} chars"},
+        {"key": "plan", "label": "Plan",
+         "state": "done",
+         "detail": f"{len(topics)} topics ({plan.get('parsed_by') or '?'})"},
+        {"key": "topics", "label": "Investigations",
+         "state": "done" if children else "pending",
+         "detail": f"{len(children)} created"},
+        {"key": "research", "label": "Research",
+         "state": ("done" if r_total and r_done >= r_total else
+                   "active" if r_done else "pending") if r_total else "pending",
+         "detail": f"{r_done}/{r_total} done" if r_total else "skipped"},
+        {"key": "assessment", "label": "Assessments",
+         "state": ("done" if a_total and a_done >= a_total else
+                   "active" if a_done else "pending") if a_total else "pending",
+         "detail": f"{a_done}/{a_total} done" if a_total else "skipped"},
+        {"key": "summary", "label": "Summary", "state": summ_state,
+         "detail": ("compiled" if row.get("compiled") else
+                    "ready to compile" if row.get("all_done") else "waiting")},
+    ]
+    return {"run_id": run.id, "t0": _iso(run.created_at),
+            "lanes": lanes, "events": capped, "flow": flow,
+            "truncated": truncated}

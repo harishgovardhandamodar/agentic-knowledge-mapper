@@ -34,3 +34,18 @@ investigation.
 Implementation: `app/manager.py`, `ManagerRun` model (new table, created by
 `create_all`), routes in `app/main.py`. Pinned in `tests/test_manager.py`
 (launchers and model mocked).
+
+## Execution flow
+
+Each run card has a **Flow** toggle: a six-step strip (Command → Plan →
+Investigations → Research → Assessments → Summary, with done/active/pending
+states and counts) above per-lane action lists. Lanes are the Manager, one
+per topic, and the Summary; every action carries its timestamp relative to
+the command, the subagent role behind it (planner, research-collector,
+threat-intel, control-analyst, scoring, report-writer, synthesizer …),
+mapped from the recorded agent-event stages, and links back to its
+investigation. `GET /api/manager/runs/{id}/timeline` serves it as pure
+reads (capped at 50 actions per lane, head and tail), so open flows refresh
+with the runs poll.
+
+![Execution flow of a run: strip, lanes, subagent actions](screenshots/12-manager-flow.png)
