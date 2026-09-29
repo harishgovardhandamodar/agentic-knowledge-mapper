@@ -4534,6 +4534,7 @@ function secSwitchSubTab(key) {
     secSubPanes.forEach(p => { p.hidden = p.dataset.sub !== key; });
   }
   if (key === 'audit') secRenderAudit();
+  if (key === 'investigation') secLoadInvSummary();
   if (key === 'cves') secRenderCves();
   const el = document.getElementById('secResult');
   if (el) secEnsureMermaid(el);
@@ -4688,8 +4689,11 @@ function secSwitchAudience(key) {
 function secInvestigationPane() {
   const p = secPerspectives.find(x => x.key === secAudience);
   const inv = (p && p.investigation) || null;
+  const summaryCard = '<div class="sec-card"><h3><i class="fas fa-file-alt"></i> Executive summary</h3>' +
+    '<div id="secInvSummary"><p style="color:var(--text2);font-size:12px;">Loading…</p></div></div>';
   if (!inv || !inv.total_artifacts) {
-    return '<div class="sec-card"><h3><i class="fas fa-diagram-project"></i> Investigation view</h3>' +
+    return summaryCard +
+      '<div class="sec-card"><h3><i class="fas fa-diagram-project"></i> Investigation view</h3>' +
       '<p style="color:var(--text2);font-size:12px;">No investigation artifacts are attached to this assessment. ' +
       'Re-run the agent from an investigation that has collected sources, then the per-role view will populate.</p></div>';
   }
@@ -4715,7 +4719,7 @@ function secInvestigationPane() {
         (hits ? `<div class="sec-art-hits">${hits}</div>` : '') +
       '</div></div>';
   }).join('');
-  return '<div class="sec-card">' +
+  return summaryCard + '<div class="sec-card">' +
     `<h3><i class="fas fa-diagram-project"></i> Investigation — ${escHtml(p.label)} lens</h3>` +
     '<p style="font-size:12px;color:var(--text2);">Artifacts from this investigation ranked for the selected role. ' +
     'Switch the audience above to re-rank; the underlying corpus is shared, only the lens changes.</p>' +
@@ -4723,6 +4727,40 @@ function secInvestigationPane() {
     (domains ? `<div class="sec-aud-focus">${domains}</div>` : '') +
     (arts || '<p style="color:var(--text2);font-size:12px;">No artifacts matched this role\'s terms.</p>') +
     '</div>';
+}
+
+async function secLoadInvSummary() {
+  const box = document.getElementById('secInvSummary');
+  if (!box || !currentInv) return;
+  try {
+    const r = await fetch(`${API}/investigations/${currentInv}/summary`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const d = await r.json();
+    const c = d.counts || {};
+    const tf = d.top_findings || {};
+    let html = `<p style="font-size:12.5px;line-height:1.55;">${escHtml(d.executive_summary || '')}</p>` +
+      `<p style="font-size:11.5px;color:var(--text2);">${c.artifacts || 0} artifacts (${c.papers || 0} papers) · ` +
+      `${c.threats || 0} threats scored · ${c.explanations || 0} explanations · ${c.cves || 0} known issues</p>`;
+    const arts = (d.top_artifacts || []).slice(0, 5);
+    if (arts.length) {
+      html += '<div style="margin-top:6px;">' + arts.map(a =>
+        `<div class="rel-item" style="cursor:pointer;" onclick="openDetailOverlay(${a.id})">` +
+        `<span class="rel-type">${escHtml(a.artifact_type || 'item')}</span><span>${escHtml(a.title || '')}</span></div>`
+      ).join('') + '</div>';
+    }
+    const threats = (tf.threats || []).slice(0, 3);
+    if (threats.length) {
+      html += '<div style="font-size:12px;margin-top:6px;">' + threats.map(t =>
+        `<div style="padding:2px 0;"><strong>${escHtml(t.id || '')}</strong> ${escHtml(t.title || '')} ` +
+        `<span style="color:var(--text2);">· ${escHtml(t.severity || '')}${t.residual != null ? ' ' + t.residual : ''}</span></div>`
+      ).join('') + '</div>';
+    }
+    const live = document.getElementById('secInvSummary');
+    if (live) live.innerHTML = html;
+  } catch (e) {
+    box.innerHTML = `<p style="color:var(--text2);font-size:12px;">Could not load summary: ${escHtml(e.message)} ` +
+      `<button class="btn btn-ghost btn-sm" onclick="secLoadInvSummary()">Retry</button></p>`;
+  }
 }
 
 function secAudiencePanel() {
@@ -5022,6 +5060,7 @@ function renderSecurityReport(data) {
   secSubPanes = Array.from(el.querySelectorAll('.sec-pane'));
   secAuditExpanded = new Set();
   if (secSubTab === 'audit') secRenderAudit();
+  if (secSubTab === 'investigation') secLoadInvSummary();
   if (secSubTab === 'cves') secRenderCves();
   const audHost = document.getElementById('secAudPanel');
   if (audHost) audHost.innerHTML = secAudiencePanel();
