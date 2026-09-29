@@ -117,6 +117,12 @@ same renderer the rest of the app uses.
 small and their text lands on neighbouring elements, differently on every load.
 If you are tempted to parallelise it for speed, re-read that sentence first.
 
+`mmFixContrast()` rechecks every label after render against the colour actually
+behind it, using computed paint rather than inline style — Mermaid's injected
+theme paints most fills through its own stylesheet. The viewer relies on the
+same mechanism: its clone keeps a rewritten copy of the SVG id so the id-scoped
+theme rules keep matching. Break either half and diagrams go monochrome.
+
 - **Rail** — the ten documents in reading order, grouped (Start here →
   Structure → Behaviour → User-facing → Privacy & assurance). Each row carries
   the question it answers and its diagram count, read from the file rather than

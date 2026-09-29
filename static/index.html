@@ -2576,12 +2576,45 @@ const MM_TEXT_BG = {
   noteText: 'noteBkgColor', loopLabel: 'labelBoxBkgColor',
 };
 
-function mmShapeFill(shape, theme, key) {
-  if (!shape) return mmParseColor(theme[key]) || mmParseColor(theme.background);
-  const authored = mmParseColor(shape.style && shape.style.fill);
-  if (authored) return authored;
-  return mmParseColor(shape.getAttribute && shape.getAttribute('fill'))
-      || mmParseColor(theme[key]) || mmParseColor(theme.background);
+function mmShapeFill(shape) {
+  // The fill of one shape, or null. Transparent is null, not black: the
+  // contrast math below ignores alpha, so a transparent edge line would read
+  // as a black background and flip its label white on a light diagram.
+  if (!shape) return null;
+  const fill = mmComputedPaint(shape)
+      || mmParseColor(shape.style && shape.style.fill)
+      || mmParseColor(shape.getAttribute && shape.getAttribute('fill'));
+  return fill && fill.a > 0 ? fill : null;
+}
+
+function mmPaintBelow(el) {
+  // Last resort, and the most truthful one: what is actually painted under the
+  // label's centre. Mermaid leaves some labels outside its named groups -- ER
+  // text floats without one -- where the page background is only a guess, and
+  // for those the guess is wrong exactly when it matters (a white attribute
+  // row in dark mode). Paint order cannot be wrong in that way: transparent
+  // containers are looked through, the first opaque layer wins.
+  try {
+    const doc = el.ownerDocument || document;
+    const r = el.getBoundingClientRect();
+    if (!r.width || !r.height || !doc.elementsFromPoint) return null;
+    const stack = doc.elementsFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    for (const n of stack) {
+      if (n === el) continue;
+      const tag = (n.tagName || '').toLowerCase();
+      if (tag === 'text' || tag === 'tspan') continue;
+      if (/^(rect|polygon|circle|ellipse|path)$/.test(tag)) {
+        const fill = mmShapeFill(n);
+        if (fill) return fill;
+        continue;
+      }
+      for (let up = n; up && up !== doc; up = up.parentNode) {
+        const b = mmParseColor(getComputedStyle(up).backgroundColor);
+        if (b && b.a > 0) return b;
+      }
+    }
+  } catch (e) { /* hit-testing unavailable; caller falls back */ }
+  return null;
 }
 
 function mmBgForText(el, theme, pageBg) {
@@ -2593,10 +2626,34 @@ function mmBgForText(el, theme, pageBg) {
   }
   const group = el.closest ? el.closest(MM_GROUPS) : null;
   if (group) {
-    const fill = mmShapeFill(group.querySelector('rect, polygon, circle, ellipse, path'), theme, 'primaryColor');
-    if (fill) return fill.a < 1 ? mmOver(fill, pageBg) : fill;
+    // First opaque shape wins. Skipping transparent ones matters: an edge
+    // label's group can hold the (unfilled) edge path before its background
+    // rect, and the path must not stand in for the background.
+    const shapes = group.querySelectorAll('rect, polygon, circle, ellipse, path');
+    for (const shape of shapes) {
+      const fill = mmShapeFill(shape);
+      if (fill) return fill.a < 1 ? mmOver(fill, pageBg) : fill;
+    }
   }
-  return pageBg;
+  return mmPaintBelow(el) || pageBg;
+}
+
+function mmComputedPaint(el) {
+  // What the pixel actually is. Inline style and presentation attributes are
+  // empty exactly when a stylesheet provides the paint -- Mermaid's injected
+  // per-diagram theme does this for most fills -- so reading only those
+  // evaluates stylesheet-painted text as the theme default and leaves e.g.
+  // white-on-white actor labels unfixed. Computed style sees everything:
+  // stylesheets, inheritance, and earlier fixes. HTML labels in foreignObject
+  // paint with `color` (a `fill` there, e.g. from an authored classDef, is
+  // inert); SVG text paints with `fill`.
+  try {
+    const cs = getComputedStyle(el);
+    const tag = el.tagName ? el.tagName.toLowerCase() : '';
+    if (tag === 'span' || tag === 'p' || tag === 'div') return mmParseColor(cs.color);
+    const v = cs.fill && cs.fill !== 'none' ? cs.fill : cs.color;
+    return mmParseColor(v);
+  } catch (e) { return null; }
 }
 
 function mmFixContrast(root) {
@@ -2605,8 +2662,7 @@ function mmFixContrast(root) {
   let checked = 0, fixed = 0;
   root.querySelectorAll('span, p, text').forEach(el => {
     const bg = mmBgForText(el, theme, pageBg);
-    const cur = mmParseColor(el.style.color) || mmParseColor(el.style.fill)
-             || mmParseColor(el.getAttribute && el.getAttribute('fill')) || mmParseColor(theme.textColor);
+    const cur = mmComputedPaint(el) || mmParseColor(theme.textColor);
     if (!bg || !cur) return;
     checked++;
     if (mmContrast(cur, bg) >= MM_MIN_CONTRAST) return;
@@ -3895,7 +3951,22 @@ function designZoomShow(idx) {
   const canvas = document.getElementById('designZoomCanvas');
   canvas.innerHTML = '';
   const clone = svg.cloneNode(true);
-  clone.removeAttribute('id');
+  // Mermaid bakes the diagram's theme into a <style> tag inside the SVG whose
+  // selectors are rooted at the SVG's own id (#mermaid-123 .actor, ...). The
+  // first version of this viewer dropped the id to avoid duplicates -- and
+  // orphaned every one of those rules, so the clone fell back to SVG defaults:
+  // black text on whatever shape sat behind it. Instead the clone takes a new
+  // id and the selectors are rewritten to match, which keeps the theme without
+  // duplicating ids. (Duplicate ids would style correctly too, but
+  // getElementById and url(#...) references would silently bind the original.)
+  const newId = `${svg.id || 'mermaid-zoom'}-zoom`;
+  clone.id = newId;
+  if (svg.id) {
+    const sel = new RegExp('#' + svg.id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(?![A-Za-z0-9_-])', 'g');
+    clone.querySelectorAll('style').forEach(st => {
+      st.textContent = st.textContent.replace(sel, `#${newId}`);
+    });
+  }
   // Natural size, not column size: the inline copy is constrained to 100% of
   // a narrow column, but here there is a whole tab, so use the viewBox.
   const vb = svg.viewBox && svg.viewBox.baseVal;
