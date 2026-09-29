@@ -65,3 +65,55 @@ reads (capped at 50 actions per lane, head and tail), so open flows refresh
 with the runs poll.
 
 ![Execution flow of a run: strip, lanes, subagent actions](screenshots/12-manager-flow.png)
+
+## The command record
+
+Each run stores the exact command that produced it, so a run six weeks later
+is still reproducible: `ManagerRun.command` holds the raw text, and
+`plan_json` holds the confirmed `{domain, exposure, topics[], summary}` with
+whatever edits were made before launch (unchecked topics, per-topic exposure,
+launcher toggles). `GET /api/manager/runs` returns all of it.
+
+`status` is `running` until a compile succeeds, then `compiled` — which is what
+the run card's **View summary** toggle keys off, and why compiling twice is
+idempotent rather than an error.
+
+![A compiled manager run with the summary investigation](screenshots/18-manager-summary.png)
+
+## The state diagram
+
+```mermaid
+stateDiagram-v2
+    [*] --> running : POST /api/manager/run
+    running --> compiled : compile_run (all children terminal, synthesis stored)
+    running --> running : statuses derived from child runs (no state of its own)
+    compiled --> compiled : compile_run again → idempotent
+    compiled --> [*]
+
+    note right of running
+        ManagerRun carries no per-child progress of its own.
+        "all_done" is computed live from the agent and
+        security tables, so a restart mid-fan-out strands
+        nothing: the children are ordinary runs.
+    end note
+    note right of compiled
+        Compiling is refused with 409 while any child is
+        still running — there is nothing to synthesise yet.
+    end note
+```
+
+## Relationship to the rest of the system
+
+- Each topic's research run is a normal `AgentRun` with `trigger='manual'`-style
+  focus terms; each topic's assessment is a normal security run, with its own
+  job, ledger run, and A2A task id.
+- The summary is a real investigation holding a `manager-synthesis` artifact,
+  so it is readable in the mapper, nestable in the sidebar, and answerable by
+  the Explainer like any other graph.
+- Every fan-out and every synthesis is a normal audited run — the Manager is
+  not a privileged path around the ledger.
+
+Implementation: `app/manager.py`, `ManagerRun` model (created by `create_all`),
+routes in `app/main.py`. Pinned in `tests/test_manager.py` (launchers and model
+mocked). Diagrams: [../design/interaction.md](../design/interaction.md),
+[../design/activity.md](../design/activity.md).

@@ -33,6 +33,7 @@ flowchart TB
     W -- yes --> DR["drift verdict vs original"]
     W -- no --> DONE
     DR --> DONE(["status=done\nanswer + trace + quiz-able"])
+
 ```
 
 ## Inputs
@@ -65,6 +66,7 @@ flowchart LR
     ROOT -.-> W["watch: scheduler re-answers daily\n→ drift verdict stored in meta"]
     ROOT --> QUIZ["quiz: SRS flashcards\ngenerated from answer"]
     ALL["all explanations"] --> ROAD["roadmap: open gaps aggregated"]
+
 ```
 
 - Follow-ups reuse the parent's excerpt as a synthetic cited source
@@ -89,7 +91,15 @@ flowchart LR
 - `GET …/investigations/{id}/summary`: executive summary (model prose with
   a 45s bound, deterministic factual brief on failure), top artifacts by
   relevance, top threats and recent explanations, novel areas. Shown in the
-  brief panel's Executive summary overlay.
+  brief panel's Executive summary overlay, and reused verbatim by the security
+  pane's Investigation sub-tab.
+- `GET …/investigations/{id}/recommendations`: the same gaps, plus the three
+  derived recommendations — **coverage gaps** (which frameworks/controls have
+  no supporting artifact), **control leverage** (which threat's residual score
+  would move most per point of efficacy gained), and **stale brief** (a
+  security assessment older than the evidence underneath it). Each names the
+  action and the artifact that justifies it; nothing is suggested that the
+  graph cannot cite.
 
 ## Answer JSON (stored in `Explanation.answer`)
 
@@ -107,3 +117,27 @@ flowchart LR
   "as_of": "2026-…"
 }
 ```
+
+## The write guard on the way out
+
+`app/writeguard.py` is the last thing an answer passes through, and it is
+deliberately boring: **audit → repair → strip → drift gate**, in that order.
+
+- **audit** — every claim's citations are checked against the pages actually
+  fetched; anything unresolvable is a finding, not a silent omission.
+- **repair** — a missing citation is retried once against the corpus cache
+  before being accepted as a finding.
+- **strip** — a claim that still cannot be supported is removed from the
+  rendered answer, and the removal is recorded, so the answer is shorter
+  rather than wrong.
+- **drift gate** — when the answer is a watch re-answer, the drift verdict is
+  computed *before* the new answer is stored, and a `major` verdict is
+  surfaced to the reader rather than swapped in silently.
+
+Pinned in `tests/test_writeguard.py`; the ordering itself is asserted, so
+adding a step that would let an unaudited claim reach storage fails CI.
+
+## Related
+
+[architecture](architecture.md) · [data-model](data-model.md) ·
+[frontend](frontend.md) · [../design/interaction.md](../design/interaction.md)

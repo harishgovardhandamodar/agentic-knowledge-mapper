@@ -14,13 +14,23 @@ Ollama or mesh peers — no external API keys).
 
 ## Documentation (design, with diagrams)
 
+**Start with [design/](design/README.md)** — the whole system drawn: context,
+UML, data model, sequences, activity, state, UI interaction, privacy, and the
+control catalogue.
+
 | Doc | Contents |
 |---|---|
+| [**design/**](design/README.md) | Nine diagram documents: [context](design/01-system-context.md) · [UML](design/02-uml.md) · [data model](design/data-model.md) · [interaction](design/interaction.md) · [activity](design/activity.md) · [state](design/state.md) · [UI](design/ui-interaction.md) · [privacy](design/privacy.md) · [controls](design/controls.md) |
 | [docs/architecture.md](docs/architecture.md) | System context, containers, UML component/class diagrams, runtime flows |
 | [docs/agent-loop.md](docs/agent-loop.md) | Collection loop state machine, activity flow, stage protocol, guards |
-| [docs/explainer.md](docs/explainer.md) | Q&A pipeline, graph-first routing, grounding, threads/quiz/watch |
-| [docs/security-agent.md](docs/security-agent.md) | A2A envelope protocol, threat model, report structure |
+| [docs/explainer.md](docs/explainer.md) | Q&A pipeline, graph-first routing, grounding, write guard, threads/quiz/watch |
+| [docs/security-agent.md](docs/security-agent.md) | A2A envelope protocol, five agent cards, threat model, report structure |
+| [docs/threatpack.md](docs/threatpack.md) | The versioned scoring catalog: 12 threats, 15 controls, exposure tiers, evalkit |
+| [docs/agentic-manager.md](docs/agentic-manager.md) | Command parsing, fan-out, timeline, summary compilation, nesting |
+| [docs/standards-coverage.md](docs/standards-coverage.md) | 34 frameworks × 10 pillars, score matrix, Findings grading, dashboard |
 | [docs/data-model.md](docs/data-model.md) | ER diagram, tables, review lifecycle, migrations |
+| [docs/ledger.md](docs/ledger.md) | The hash chain, mandates, approvals, proofs, sessions, offline verification |
+| [docs/privacy.md](docs/privacy.md) | What is stored, what is hashed, what leaves — and what is *not* implemented |
 | [docs/frontend.md](docs/frontend.md) | View map, tab flows, GUI conventions |
 | [docs/operations.md](docs/operations.md) | Deploy, config, LLM failover, scheduler, recovery |
 
@@ -57,7 +67,15 @@ Details: [agent-loop](docs/agent-loop.md).
                  └────────────────┘
 ```
 
-Components, UML diagrams, and data flows: [architecture](docs/architecture.md).
+Components, UML diagrams, and data flows: [architecture](docs/architecture.md)
+and [design/01-system-context.md](design/01-system-context.md).
+
+**Four apps in one page.** The app switcher opens *Mapper* (collect, map,
+review, explain), *AI Security* (assess, score, control), *Agentic Manager*
+(one command → N investigations + a summary), and *AI Standards* (34
+frameworks × 10 pillars). Mapper has eight views; Security has nine
+sub-tabs; long jobs run through a persisted, lease-based job queue so a restart
+resumes rather than loses.
 
 ## GUI tour
 
@@ -70,6 +88,17 @@ agent on a schedule. Investigations can be **hidden** (eye icon) instead of
 deleted — hidden ones leave the list but keep every run, artifact, and
 history entry, and come back with “Show hidden”.
 
+Two buttons in the sidebar close the loop the agent leaves open:
+
+- **Executive summary** — a single overlay with the aggregate numbers, the top
+  threats, the highest-value findings, and the supporting artifacts, each
+  clickable back into the graph.
+- **Find open gaps** — reads which dimensions of the brief have *nothing at
+  all*, and offers to launch a targeted run at each one. An answer that finds
+  its own research.
+
+![Executive summary overlay with aggregates, top threats and findings](docs/screenshots/17-executive-summary.png)
+
 ### Knowledge graph
 
 vis-network graph over the investigation's artifacts. **Node color =
@@ -81,13 +110,45 @@ contradicts · builds_upon · responds_to · similar_to`). A legend overlay
 so it cannot drift out of sync. Category/similarity clustering, timeline
 compare-highlight, and click-through to the artifact overlay are built in.
 
-![Review queue with relevance rings and accept/reject](docs/screenshots/02-review-queue.png)
+![Knowledge graph of the "frontier model" investigation, with legend](docs/screenshots/01-knowledge-graph.png)
 
 ### Review queue
 
 Pending/accepted/rejected triage with relevance ring, the agent's reason,
 sentiment, tags, and source links. Accept/reject/delete per item; accepting
 feeds the knowledge graph, rejecting dims the node.
+
+![Review queue with relevance rings and accept/reject](docs/screenshots/02-review-queue.png)
+
+### Artifacts
+
+The *collected* view, as opposed to the *triage* view: every artifact the
+investigation holds, filterable by type, review state, source, and drift, with
+the collection timeline, what each was collected for, and how the actors
+divided the work. Artifacts flagged off-brief by drift detection stay here
+with a **drift** pill — flagged, dimmed, never silently deleted.
+
+![Collected artifacts with collection timeline and filters](docs/screenshots/14-artifacts-collection.png)
+
+### Known issues
+
+CVEs are first-class. Anything a kept artifact or a security report mentions
+becomes a `CVE_FINDING` row, enriched from NVD with CIRCL as a fallback and
+**`unknown` as an honest terminal state** when both fail — a guess would sit
+beside a real enrichment looking identical. Each finding also becomes a light
+artifact node in the graph, so the vulnerability is visible in the same place
+as the research that mentions it.
+
+![Known issues with CVE severity, cvss and status](docs/screenshots/15-known-issues.png)
+
+### Research gaps
+
+The sidebar's **Find open gaps** button, and the gap list behind
+`POST /api/explanations/{id}/investigate_gaps`. Coverage is computed from what
+is actually in the graph; each gap can launch a focused run, which is how an
+answer that admits it does not know everything goes and finds out.
+
+![Open research gaps with coverage per dimension](docs/screenshots/16-research-gaps.png)
 
 ### Explainer
 
@@ -105,17 +166,29 @@ own most relevant artifacts, which open in the detail overlay.
 
 ![Explainer answer with critique pass and conflicting views](docs/screenshots/03-explainer.png)
 
-### Audit ledger
+### Agent console
+
+Live stage-colored event log, search plan, and run stats while the agent
+works.
+
+### Timeline
 
 One hash-chained timeline per run over every actor (A2A hops, model calls,
-human actions, claims). The **Timeline** view interleaves every chain into a
-single newest-first stream; clicking any run id opens that chain. Browser
-work is grouped into session sittings with their own verification spine:
-violations, token use, activity, per-run health, and failed runs. The
-browser sends `X-AKM-Session`; the ledger stays out of the product's way, so
-audit outages cannot turn product calls into 500s.
+human actions, claims), and the **Timeline** view interleaves every chain into
+a single newest-first stream. Browser work is grouped into session sittings
+with their own verification spine: violations, token use, activity, per-run
+health, and failed runs. The browser sends `X-AKM-Session`; the ledger stays
+out of the product's way, so audit outages cannot turn product calls into 500s.
 
 ![Ledger-wide timeline across all chains](docs/screenshots/04-audit-timeline.png)
+
+### Audit ledger
+
+The audit view proper: pick a run, read the chain, verify it, inspect per-event
+proofs, read claims and their grounding verdicts, trace a claim's blast radius,
+and export a bundle that verifies offline with no database attached.
+
+![A run's hash-chained events with verdicts, in the security pane](docs/screenshots/23-security-audit-chain.png)
 
 ### AI Security
 
@@ -128,6 +201,37 @@ that count. What-if control toggles recompute the score instantly.
 
 ![Security report with clickable severity mix](docs/screenshots/05-security-report.png)
 
+The Assessment pane has **nine sub-tabs**, and each answers a different
+question about the same run:
+
+| Sub-tab | What it is |
+|---|---|
+| Overview | the aggregates, posture string, severity distribution, perspectives |
+| Threats | T01–T12 with inherent vs residual likelihood, impact, and severity band |
+| Controls | C01–C15 with efficacy, applicability, and the plan the analyst proposes |
+| Investigation | the collected evidence the control judgements were made against |
+| Evidence | every claim with its sources, `matched_on`, and claim hash |
+| Known issues | the CVEs found in the evidence, as graph nodes |
+| Agents | the five A2A cards and exactly what each one returned |
+| Audit chain | the one hash-chained ledger run behind this assessment |
+| Report | the markdown, §§1–11 + appendix, with the generated diagrams |
+
+![Controls tab with efficacy, applicability and the proposed plan](docs/screenshots/19-security-controls.png)
+
+![Threat assessment with per-threat inherent and residual scores](docs/screenshots/20-security-investigation-summary.png)
+
+![Evidence with per-claim sources and claim hashes](docs/screenshots/21-security-evidence.png)
+
+![The five A2A agents and what each returned](docs/screenshots/22-security-agents.png)
+
+**Approvals.** Tick *require approval* and the run parks at
+`awaiting_approval` before doing any work: an approval request lands on the
+chain with a `hold` verdict, and a named person who is **not** the requester
+grants or denies it. An empty identity fails closed, an identical
+requester/approver is a `403`, and the decision itself is a chained event, so
+it cannot be edited afterwards. Granting re-queues the same job under the same
+key — uniqueness is over *live* jobs, so a parked run can be resumed.
+
 The agent pane's **Standards coverage** sub-tab maps the run against the AI
 Standards & Regulations taxonomy (34 frameworks × 10 control pillars):
 a relevance-ranked score matrix, expandable framework detail, and a Findings
@@ -136,10 +240,13 @@ selectable standards side by side. See [docs/standards-coverage.md](docs/standar
 
 ![Standards score matrix scoped to the open assessment](docs/screenshots/08-standards-matrix.png)
 
-### Agent console
+The **AI Standards** app is a separate service in an iframe, served on `:5173`,
+reading the same database:
 
-Live stage-colored event log, search plan, and run stats while the agent
-works.
+![AI Standards & Regulations dashboard](docs/screenshots/24-standards-dashboard.png)
+
+The scoring pack is versioned and fingerprinted, so a moved number is a CI
+failure rather than a surprise — see [docs/threatpack.md](docs/threatpack.md).
 
 ### Agentic Manager
 
@@ -150,7 +257,15 @@ investigation per topic with research and security assessment launched on
 each, and compiles the finished children into a summary investigation on
 demand. See [docs/agentic-manager.md](docs/agentic-manager.md).
 
-GUI map and flows: [frontend](docs/frontend.md).
+**Understand** parses a command into a plan with *no side effects* — you can
+parse as often as you like, uncheck a topic, set a per-topic exposure tier,
+and toggle the launchers before anything is created. **Compile** is refused
+with a `409` while any child is still running, and is idempotent once it has
+run. The finished topics nest under the summary in the mapper sidebar.
+
+![Manager run with per-lane timeline and the compiled summary](docs/screenshots/18-manager-summary.png)
+
+GUI map and flows: [frontend](docs/frontend.md), [design/ui-interaction.md](design/ui-interaction.md).
 
 ## Proofs
 
@@ -246,6 +361,8 @@ an action are provable afterwards:
 
 ## API (selection)
 
+93 paths; `GET /openapi.json` lists them all.
+
 | Method | Path | Description |
 |---|---|---|
 | GET | `/api/health` | Health + LLM gateway status |
@@ -258,15 +375,26 @@ an action are provable afterwards:
 | GET | `/api/runs/{id}/events?after_id=` | Poll new events |
 | GET | `/api/investigations/{id}/graph` | Nodes + edges |
 | GET | `/api/investigations/{id}/graph/clusters?mode=` | category \| similarity centroids |
+| GET | `/api/investigations/{id}/summary` | Executive summary overlay data |
 | GET | `/api/investigations/{id}/artifacts?review=&search=` | Review queue |
 | GET | `/api/investigations/{id}/artifacts/overview` | Collection: timeline, purpose, actor involvement shares |
+| GET | `/api/investigations/{id}/recommendations` | Coverage gaps, control leverage, stale brief, query yields |
+| POST | `/api/investigations/{id}/detect-drift` | Flag off-brief artifacts (kept, never deleted) |
+| GET | `/api/investigations/{id}/cves` | Known issues: list |
+| POST | `/api/investigations/{id}/cves/collect` | Collect + enrich (NVD → CIRCL → honest `unknown`) |
 | GET/POST | `/api/investigations/{id}/explain`, `/api/investigations/{id}/explanations` | Ask / history |
 | GET | `/api/explanations/{id}`, `…/thread`, `…/suggestions` | Detail / thread / follow-up ideas |
 | POST | `/api/explanations/{id}/followup`, `…/quiz`, `…/bookmark`, `…/watch`, `…/feedback`, `…/save_to_graph`, `…/investigate_gaps` | Threads, quiz, curation, watch, gap runs |
 | POST | `/api/investigations/{id}/security/assess` | Start security assessment run |
 | GET | `/api/investigations/{id}/security/assessments` | Assessment history |
 | GET | `/api/security/assessments/{id}`, `…/markdown`, `…/pdf` | Report / exports |
-| GET | `/api/agents/cards`, `/.well-known/agents` | A2A agent registry |
+| POST | `/api/security/runs/{id}/approval` | Grant or deny a parked run (≠ the requester) |
+| GET | `/api/agents/cards`, `/.well-known/agents` | A2A agent registry (five cards) |
+| GET | `/api/standards/score-matrix?assessment_id=` | Relevance-ranked framework matrix for an assessment |
+| POST | `/api/manager/parse`, `/api/manager/run` | Understand a command (no side effects) / fan out |
+| GET | `/api/manager/runs`, `/api/manager/runs/{id}` | Run status list / one run |
+| POST | `/api/manager/runs/{id}/compile` | Synthesise the summary (409 while a child runs) |
+| GET | `/api/manager/runs/{id}/timeline`, `/api/manager/links` | Six-step strip + per-lane actions / sidebar nesting |
 | PATCH/DELETE | `/api/artifacts/{id}` | Review state / delete |
 | POST | `/api/relationships` | Manual edge |
 | GET | `/api/ledger/timeline` | Whole ledger as one newest-first stream |
@@ -278,6 +406,7 @@ an action are provable afterwards:
 | GET | `/api/ledger/runs/{id}/claims`, `…/contamination/{ref}` | Claim grounding / blast radius of one claim |
 | GET/POST | `/api/ledger/runs/{id}/export`, `/api/ledger/verify-export` | Self-contained bundle + offline verification |
 | POST | `/api/ledger/runs/{id}/actions`, `…/approvals`, `/api/ledger/approvals/{id}/decide` | Land an MCP / human / peer action on the chain; decide a gate |
+| GET | `/api/ledger/audit-drops` | What the chain failed to write (fail-open, but never silent) |
 
 ## Setup
 
@@ -357,37 +486,78 @@ Privacy is architectural here, not a toggle:
   token; security reports render from stored Markdown with no report files
   written to disk.
 
+The full privacy picture — including what is **not** implemented (no auth, no
+encryption at rest, no TLS, no retention schedule) — is in
+[docs/privacy.md](docs/privacy.md) and [design/privacy.md](design/privacy.md).
+Stating the gaps is what stops the rest from being read as more than it is.
+
 Runtime data (investigations, artifacts, reports, ledger chains) lives in
 SQLite — `data/akm.db` for local dev, a persistent `akm_data` Docker volume
 for the container — and is never committed to git. Security reports persist
 as rows (Markdown included); PDFs render on demand.
+
+## Screenshots
+
+| # | Screen | # | Screen |
+|---|---|---|---|
+| 01 | [Knowledge graph](docs/screenshots/01-knowledge-graph.png) | 13 | [Manager nesting](docs/screenshots/13-manager-nest.png) |
+| 02 | [Review queue](docs/screenshots/02-review-queue.png) | 14 | [Collected artifacts](docs/screenshots/14-artifacts-collection.png) |
+| 03 | [Explainer answer](docs/screenshots/03-explainer.png) | 15 | [Known issues (CVEs)](docs/screenshots/15-known-issues.png) |
+| 04 | [Audit timeline](docs/screenshots/04-audit-timeline.png) | 16 | [Research gaps](docs/screenshots/16-research-gaps.png) |
+| 05 | [Security report](docs/screenshots/05-security-report.png) | 17 | [Executive summary](docs/screenshots/17-executive-summary.png) |
+| 06 | [fox-services gateway](docs/screenshots/06-fox-services.png) | 18 | [Manager summary](docs/screenshots/18-manager-summary.png) |
+| 07 | [Security sub-tabs](docs/screenshots/07-security-subtabs.png) | 19 | [Security controls](docs/screenshots/19-security-controls.png) |
+| 08 | [Standards matrix](docs/screenshots/08-standards-matrix.png) | 20 | [Threat assessment](docs/screenshots/20-security-investigation-summary.png) |
+| 09 | [Standards detail](docs/screenshots/09-standards-detail.png) | 21 | [Security evidence](docs/screenshots/21-security-evidence.png) |
+| 10 | [Findings, single](docs/screenshots/10-findings-single.png) | 22 | [Security agents](docs/screenshots/22-security-agents.png) |
+| 11 | [Findings, compare](docs/screenshots/11-findings-compare.png) | 23 | [Security audit chain](docs/screenshots/23-security-audit-chain.png) |
+| 12 | [Manager flow](docs/screenshots/12-manager-flow.png) | 24 | [Standards dashboard](docs/screenshots/24-standards-dashboard.png) |
 
 ## Structure
 
 ```
 agentic-knowledge-mapper/
 ├── app/
-│   ├── main.py           # FastAPI routes
-│   ├── agent.py          # plan→search→analyze→map loop (background thread)
-│   ├── explainer.py      # Q&A pipeline: research→compose→ground→critique→diagram
-│   ├── security_agent.py # security runs (background thread, trigger=security)
-│   ├── agents.py         # A2A envelope protocol: collector→intel→writer
-│   ├── security.py       # threat catalog, diagrams, Markdown/PDF report engine
-│   ├── scheduler.py      # cron timetables + watch/drift re-answers
-│   ├── search.py         # RSS / arXiv / DuckDuckGo providers
-│   ├── llm.py            # fox-services gateway client (OpenAI-compat + fallback)
-│   ├── ledger.py         # hash-chained audit ledger: chains, mandates, proofs,
-│   │                     #   grounding, sessions, insights, exports
-│   ├── ledger_api.py     # audit HTTP surface (runs, sessions, timeline, verify)
-│   ├── ledger_models.py  # LedgerRun / LedgerEvent / LedgerClaim / LedgerApproval
-│   ├── models.py         # Investigation, Artifact, Relationship, AgentRun,
-│   │                     #   AgentEvent, Explanation, CorpusPage, SecurityAssessment
-│   └── database.py       # SQLite WAL engine + migrations
-├── docs/                 # design documentation with Mermaid diagrams
-│   └── screenshots/      # GUI captures used above
-├── static/index.html     # GUI (all CSS/JS inline)
-├── tests/                # unittest suites (ledger, sessions, proofs, UI paths)
-├── docker-compose.yml    # port 8204
+│   ├── main.py            # FastAPI routes
+│   ├── agent.py           # plan→search→analyze→map loop (background thread)
+│   ├── explainer.py       # Q&A pipeline: research→compose→ground→critique→diagram
+│   ├── security_agent.py  # security runs (job queue, approval gate, A2A dispatch)
+│   ├── agents.py          # A2A envelope protocol + the five agent cards
+│   ├── security.py        # threat/control catalog, scoring, report engine
+│   ├── threatpack.py      # version, fingerprint, CVSS mapping
+│   ├── evalkit.py         # pinned scoring cases + invariants (CI gate)
+│   ├── manager.py         # command parsing, fan-out, summary compilation
+│   ├── standards_matrix.py # relevance-ranked framework score matrix
+│   ├── cve.py             # CVE collection and enrichment (NVD → CIRCL → unknown)
+│   ├── recommend.py       # coverage gaps, control leverage, stale brief, yields
+│   ├── drift.py           # deterministic prefilter + LLM judge
+│   ├── yield_.py          # cumulative per-query-shape yield
+│   ├── writeguard.py      # audit → repair → strip → drift gate
+│   ├── grounding.py       # verbatim citation checks (stdlib only)
+│   ├── jobqueue.py        # row-before-thread queue with leases
+│   ├── approvals.py       # requester ≠ approver, fail closed
+│   ├── openshell.py       # sandboxed fetch, egress policy, broker fallback
+│   ├── obs.py             # traces and contextvars
+│   ├── scheduler.py       # cron timetables + watch/drift re-answers
+│   ├── search.py          # RSS / arXiv / DuckDuckGo providers
+│   ├── llm.py             # fox-services gateway client (OpenAI-compat + fallback)
+│   ├── ledger.py          # hash-chained audit ledger: chains, mandates, proofs,
+│   │                      #   grounding, sessions, insights, exports, redaction
+│   ├── ledger_api.py      # audit HTTP surface (runs, sessions, timeline, verify)
+│   ├── ledger_models.py   # LedgerRun / LedgerEvent / LedgerClaim /
+│   │                      #   LedgerApproval / LedgerAuditDrop
+│   ├── models.py          # Investigation, Artifact, Relationship, AgentRun,
+│   │                      #   AgentEvent, Explanation, CorpusPage,
+│   │                      #   SecurityAssessment, CveFinding, QueryShapeYield,
+│   │                      #   ManagerRun, Job
+│   └── database.py        # SQLite WAL engine + additive migrations
+├── design/                # nine diagram documents (see design/README.md)
+├── docs/                  # written documentation with Mermaid diagrams
+│   └── screenshots/       # 24 GUI captures used above
+├── static/index.html      # GUI (all CSS/JS inline, ~5.9k lines, no build step)
+├── tests/                 # 26 pytest suites (ledger, proofs, approvals, jobs,
+│                          #   security, explainer, writeguard, standards, …)
+├── docker-compose.yml     # port 8204
 ├── Dockerfile
 └── requirements.txt
 ```

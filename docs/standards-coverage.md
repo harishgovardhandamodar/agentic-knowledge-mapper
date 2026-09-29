@@ -74,3 +74,19 @@ partial / gaps. Unmapped threats (no pillar mapping) show `–`, never a gap.
 - The shipped tab logic is exercised headlessly (matrix/detail/findings,
   picker add/remove/max-3/primary, filters, error + retry) and captured
   above from a real browser session against assessment #25.
+
+## The standalone dashboard
+
+The taxonomy is also a service of its own: the **AI Standards dashboard**
+(`standards-dashboard/`, port 5173) renders the same `data.json` as a browsable
+map — 34 frameworks, 10 pillars, and the coverage scores — for browsing the
+taxonomy without an assessment in hand. The mapper consumes it read-only
+over `STANDARDS_BASE_URL`; the dashboard has no knowledge of the mapper, so
+either can be down without the other's data going stale.
+
+![The standalone standards dashboard](screenshots/24-standards-dashboard.png)
+
+Note what this does *not* imply: a `2` in the matrix means the framework's
+control text covers that pillar, not that this product satisfies the
+requirement. Coverage is a map from finding to control text, in one direction,
+with no compliance judgement attached.
