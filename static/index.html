@@ -47,7 +47,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 #managerPane.visible { display: flex; flex-direction: column; }
 /* design & architecture pane */
 #designPane { grid-column: 1 / -1; min-height: 0; overflow: hidden; display: none; }
-#designPane.visible { display: grid; grid-template-columns: 296px 1fr; }
+#designPane.visible { display: grid; grid-template-columns: 296px 1fr; position: relative; }
 .design-rail { border-right: 1px solid var(--border); background: var(--bg2); overflow-y: auto; min-height: 0; padding-bottom: 16px; }
 .design-rail-head { padding: 12px 16px 10px; border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--bg2); z-index: 2; }
 .design-rail-title { font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
@@ -98,6 +98,29 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .design-ref, .design-img { display: inline-flex; align-items: center; gap: 5px; border-bottom: 1px dotted var(--border); color: var(--text2); }
 .design-ref code, .design-img code { font-size: 10.5px; background: var(--bg3); padding: 0 4px; border-radius: 3px; }
 .design-img i { color: var(--teal); }
+/* diagram expand button: a quiet affordance on every rendered design diagram */
+.diagram-wrap.design-zoomable { position: relative; }
+.design-expand { position: absolute; top: 8px; right: 8px; z-index: 2; display: inline-flex; align-items: center; gap: 5px;
+  font-size: 10.5px; padding: 3px 9px; border-radius: 7px; cursor: pointer; font-family: inherit;
+  background: var(--bg2); border: 1px solid var(--border); color: var(--text2); opacity: 0.55; }
+.design-expand:hover, .design-expand:focus-visible { opacity: 1; color: var(--accent); border-color: var(--accent); }
+/* full-tab diagram viewer: the whole tab becomes one large diagram */
+.design-zoom[hidden] { display: none; }
+.design-zoom { position: absolute; inset: 0; z-index: 10; background: var(--bg); display: flex; flex-direction: column; }
+.design-zoom-bar { display: flex; align-items: center; gap: 8px; padding: 9px 14px; background: var(--bg2);
+  border-bottom: 1px solid var(--border); flex-shrink: 0; flex-wrap: wrap; }
+.design-zoom-title { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 38vw; }
+.design-zoom-count { font-size: 10.5px; color: var(--text2); white-space: nowrap; }
+.design-zoom-tools { margin-left: auto; display: flex; gap: 6px; align-items: center; }
+.design-zoom-pct { min-width: 46px; text-align: center; font-size: 11.5px; color: var(--text2); font-variant-numeric: tabular-nums; }
+.design-zoom-stage { flex: 1 1 auto; min-height: 0; overflow: hidden; position: relative; cursor: grab;
+  background: var(--bg); touch-action: none; }
+.design-zoom-stage.panning { cursor: grabbing; }
+.design-zoom-canvas { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+.design-zoom-canvas svg { display: block; }
+.design-zoom-hint { padding: 6px 14px; font-size: 10.5px; color: var(--text2); border-top: 1px solid var(--border);
+  background: var(--bg2); flex-shrink: 0; }
+.design-zoom-hint kbd { font-family: inherit; background: var(--bg3); border: 1px solid var(--border); border-radius: 4px; padding: 0 5px; }
 .design-note { font-size: 11.5px; color: var(--orange); margin: 0 0 12px; }
 .design-empty { font-size: 12.5px; color: var(--text2); }
 #mgrWrap { padding: 14px 20px; overflow-y: auto; flex: 1 1 auto; min-height: 0; }
@@ -1094,6 +1117,25 @@ body.pane-sec-top-collapsed .sec-topbar-sub { display: none; }
         <div class="design-doc" id="designDoc"></div>
       </div>
     </div>
+  <div class="design-zoom" id="designZoom" hidden role="dialog" aria-modal="true" aria-label="Diagram viewer">
+    <div class="design-zoom-bar">
+      <button class="btn btn-ghost btn-sm" id="designZoomPrev" onclick="designZoomStep(-1)" title="Previous diagram (←)"><i class="fas fa-chevron-left"></i></button>
+      <button class="btn btn-ghost btn-sm" id="designZoomNext" onclick="designZoomStep(1)" title="Next diagram (→)"><i class="fas fa-chevron-right"></i></button>
+      <span class="design-zoom-title" id="designZoomTitle">Diagram</span>
+      <span class="design-zoom-count" id="designZoomCount"></span>
+      <div class="design-zoom-tools">
+        <button class="btn btn-ghost btn-sm" onclick="designZoomBy(1 / 1.25)" title="Zoom out (−)"><i class="fas fa-minus"></i></button>
+        <button class="btn btn-ghost btn-sm design-zoom-pct" id="designZoomPct" onclick="designZoomFit()" title="Fit to tab (0)">100%</button>
+        <button class="btn btn-ghost btn-sm" onclick="designZoomBy(1.25)" title="Zoom in (+)"><i class="fas fa-plus"></i></button>
+        <button class="btn btn-ghost btn-sm" onclick="designZoomNatural()" title="Natural size (1)">1:1</button>
+        <button class="btn btn-ghost btn-sm" id="designZoomClose" onclick="designZoomClose()" title="Close (Esc)"><i class="fas fa-times"></i></button>
+      </div>
+    </div>
+    <div class="design-zoom-stage" id="designZoomStage" title="Scroll to zoom · drag to pan · double-click toggles fit / 1:1">
+      <div class="design-zoom-canvas" id="designZoomCanvas"></div>
+    </div>
+    <div class="design-zoom-hint">Scroll to zoom · drag to pan · double-click toggles fit / natural size · <kbd>←</kbd><kbd>→</kbd> diagrams · <kbd>+</kbd><kbd>−</kbd> zoom · <kbd>0</kbd> fit · <kbd>Esc</kbd> close</div>
+  </div>
   </div>
 </div>
 <div class="overlay" id="detailOverlay">
@@ -3381,6 +3423,7 @@ function switchApp(app) {
   if (!APP_TITLES[app]) app = 'akm';
   currentApp = app;
   if (app !== 'manager' && mgrRunsTimer) { clearInterval(mgrRunsTimer); mgrRunsTimer = null; }
+  if (app !== 'design' && typeof designZoomClose === 'function') designZoomClose();
   document.querySelectorAll('.app-tab').forEach(t => t.classList.toggle('active', t.dataset.app === app));
   const akm = document.getElementById('akmPane');
   const sec = document.getElementById('securityPane');
@@ -3552,7 +3595,7 @@ function designRender(md) {
       const src = buf.join('\n');
       const lang = (fence[2] || '').toLowerCase();
       out.push(lang === 'mermaid'
-        ? `<div class="diagram-wrap"><pre class="mermaid">${escHtml(src)}</pre></div>`
+        ? `<div class="diagram-wrap design-zoomable"><button class="design-expand" onclick="designZoomOpen(this)" title="Open large with zoom"><i class="fas fa-expand"></i> enlarge</button><pre class="mermaid">${escHtml(src)}</pre></div>`
         : `<pre class="md-code"><code>${escHtml(src)}</code></pre>`);
       continue;
     }
@@ -3701,6 +3744,7 @@ async function designShow(id, skipHash) {
 }
 
 function designRenderDoc() {
+  designZoomClose();   // the wraps it points at are being replaced
   const d = designDoc;
   const box = document.getElementById('designDoc');
   const title = document.getElementById('designTitle');
@@ -3795,6 +3839,138 @@ function designOpenSource() {
   setTimeout(() => URL.revokeObjectURL(url), 30000);
 }
 
+/* ---------- Design diagram viewer (full-tab overlay + zoom) ---------- */
+/* A document's diagrams are scaled to fit the column, which makes dense ones
+   hard to read. The enlarge button on each diagram opens it across the whole
+   tab at its natural size, with wheel/button/keyboard zoom and drag pan.
+   The overlay clones the already-rendered SVG -- re-running Mermaid would
+   re-enter the render queue behind every other diagram for no reason. */
+let designZoomIdx = -1;
+let designZoomScale = 1;
+let designZoomX = 0;
+let designZoomY = 0;
+let designZoomFocus = null;
+
+function designZoomWraps() {
+  return [...document.querySelectorAll('#designDoc .diagram-wrap')]
+    .filter(w => w.querySelector('svg'));
+}
+
+function designZoomLabel(wrap) {
+  let el = wrap.previousElementSibling, head = null;
+  while (el) {
+    if (/^H[1-4]$/.test(el.tagName)) { head = el.textContent.trim(); break; }
+    el = el.previousElementSibling;
+  }
+  const doc = (designDoc && designDoc.title) || 'Diagram';
+  return head ? `${doc} — ${head}` : doc;
+}
+
+function designZoomOpen(btn) {
+  const wraps = designZoomWraps();
+  const wrap = btn && btn.closest ? btn.closest('.diagram-wrap') : null;
+  const idx = wraps.indexOf(wrap);
+  if (idx < 0) { showNotif('That diagram has not rendered yet', 'warn'); return; }
+  designZoomFocus = document.activeElement;
+  document.getElementById('designZoom').hidden = false;
+  designZoomShow(idx);
+  document.getElementById('designZoomClose').focus();
+}
+
+function designZoomClose() {
+  const z = document.getElementById('designZoom');
+  if (!z || z.hidden) return;
+  z.hidden = true;
+  document.getElementById('designZoomCanvas').innerHTML = '';
+  designZoomIdx = -1;
+  if (designZoomFocus && designZoomFocus.focus) designZoomFocus.focus();
+  designZoomFocus = null;
+}
+
+function designZoomShow(idx) {
+  const wraps = designZoomWraps();
+  if (idx < 0 || idx >= wraps.length) return;
+  designZoomIdx = idx;
+  const svg = wraps[idx].querySelector('svg');
+  const canvas = document.getElementById('designZoomCanvas');
+  canvas.innerHTML = '';
+  const clone = svg.cloneNode(true);
+  clone.removeAttribute('id');
+  // Natural size, not column size: the inline copy is constrained to 100% of
+  // a narrow column, but here there is a whole tab, so use the viewBox.
+  const vb = svg.viewBox && svg.viewBox.baseVal;
+  const w = (vb && vb.width) || svg.getBoundingClientRect().width || 800;
+  const h = (vb && vb.height) || svg.getBoundingClientRect().height || 600;
+  clone.setAttribute('width', w);
+  clone.setAttribute('height', h);
+  clone.style.maxWidth = 'none';
+  clone.dataset.vbW = w;
+  clone.dataset.vbH = h;
+  canvas.appendChild(clone);
+  document.getElementById('designZoomTitle').textContent = designZoomLabel(wraps[idx]);
+  document.getElementById('designZoomCount').textContent = `${idx + 1} of ${wraps.length}`;
+  document.getElementById('designZoomPrev').disabled = idx === 0;
+  document.getElementById('designZoomNext').disabled = idx === wraps.length - 1;
+  designZoomFit();
+}
+
+function designZoomGeom() {
+  const stage = document.getElementById('designZoomStage');
+  const canvas = document.getElementById('designZoomCanvas');
+  const svg = canvas ? canvas.querySelector('svg') : null;
+  if (!stage || !svg) return null;
+  const r = stage.getBoundingClientRect();
+  const w = parseFloat(svg.dataset.vbW) || svg.getBoundingClientRect().width || 1;
+  const h = parseFloat(svg.dataset.vbH) || svg.getBoundingClientRect().height || 1;
+  return { sw: r.width, sh: r.height, w, h };
+}
+
+function designZoomApply() {
+  const g = designZoomGeom();
+  if (!g) return;
+  document.getElementById('designZoomCanvas').style.transform =
+    `translate(${designZoomX}px, ${designZoomY}px) scale(${designZoomScale})`;
+  const pct = document.getElementById('designZoomPct');
+  if (pct) pct.textContent = `${Math.round(designZoomScale * 100)}%`;
+}
+
+function designZoomCenter(scale) {
+  const g = designZoomGeom();
+  if (!g) return;
+  designZoomScale = scale;
+  designZoomX = (g.sw - g.w * scale) / 2;
+  designZoomY = (g.sh - g.h * scale) / 2;
+  designZoomApply();
+}
+
+function designZoomFit() {
+  const g = designZoomGeom();
+  if (!g) return;
+  designZoomCenter(Math.min(g.sw / g.w, g.sh / g.h));
+}
+
+function designZoomNatural() {
+  designZoomCenter(1);
+}
+
+function designZoomBy(factor, cx, cy) {
+  const g = designZoomGeom();
+  if (!g) return;
+  const s = Math.min(8, Math.max(0.1, designZoomScale * factor));
+  const k = s / designZoomScale;
+  cx = (cx === undefined) ? g.sw / 2 : cx;
+  cy = (cy === undefined) ? g.sh / 2 : cy;
+  designZoomX = cx - (cx - designZoomX) * k;
+  designZoomY = cy - (cy - designZoomY) * k;
+  designZoomScale = s;
+  designZoomApply();
+}
+
+function designZoomStep(d) {
+  const n = designZoomIdx + d;
+  if (n >= 0 && n < designZoomWraps().length) designZoomShow(n);
+}
+
 /* One delegated listener for the rail and one scroll listener for the
    spy, attached once, since the pane's markup never changes. */
 (function designWire() {
@@ -3805,6 +3981,50 @@ function designOpenSource() {
   });
   const box = document.getElementById('designDoc');
   if (box) box.addEventListener('scroll', designScrollSpy, { passive: true });
+  // Viewer gestures, wired once: wheel zoom, drag pan, double-click fit.
+  const stage = document.getElementById('designZoomStage');
+  if (stage) {
+    stage.addEventListener('wheel', ev => {
+      if (document.getElementById('designZoom').hidden) return;
+      ev.preventDefault();
+      const r = stage.getBoundingClientRect();
+      designZoomBy(Math.exp(-ev.deltaY * 0.0015), ev.clientX - r.left, ev.clientY - r.top);
+    }, { passive: false });
+    let pan = null;
+    stage.addEventListener('pointerdown', ev => {
+      pan = { x: ev.clientX, y: ev.clientY, ox: designZoomX, oy: designZoomY, moved: false };
+      try { stage.setPointerCapture(ev.pointerId); } catch (e) { /* older browsers */ }
+    });
+    stage.addEventListener('pointermove', ev => {
+      if (!pan) return;
+      const dx = ev.clientX - pan.x, dy = ev.clientY - pan.y;
+      if (Math.abs(dx) + Math.abs(dy) > 3) { pan.moved = true; stage.classList.add('panning'); }
+      if (pan.moved) { designZoomX = pan.ox + dx; designZoomY = pan.oy + dy; designZoomApply(); }
+    });
+    const endPan = () => { pan = null; stage.classList.remove('panning'); };
+    stage.addEventListener('pointerup', endPan);
+    stage.addEventListener('pointercancel', endPan);
+    stage.addEventListener('dblclick', ev => {
+      ev.preventDefault();
+      const g = designZoomGeom();
+      if (!g) return;
+      const fit = Math.min(g.sw / g.w, g.sh / g.h);
+      if (Math.abs(designZoomScale - fit) / Math.max(fit, 1e-6) < 0.05) designZoomNatural();
+      else designZoomFit();
+    });
+  }
+  document.addEventListener('keydown', ev => {
+    const z = document.getElementById('designZoom');
+    if (!z || z.hidden) return;
+    if (ev.key === 'Escape') designZoomClose();
+    else if (ev.key === 'ArrowRight') designZoomStep(1);
+    else if (ev.key === 'ArrowLeft') designZoomStep(-1);
+    else if (ev.key === '+' || ev.key === '=') designZoomBy(1.25);
+    else if (ev.key === '-' || ev.key === '_') designZoomBy(1 / 1.25);
+    else if (ev.key === '0') designZoomFit();
+    else return;
+    ev.preventDefault();
+  });
 })();
 
 

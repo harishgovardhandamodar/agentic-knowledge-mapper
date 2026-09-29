@@ -514,6 +514,8 @@ as rows (Markdown included); PDFs render on demand.
 | 10 | [Findings, single](docs/screenshots/10-findings-single.png) | 22 | [Security agents](docs/screenshots/22-security-agents.png) |
 | 11 | [Findings, compare](docs/screenshots/11-findings-compare.png) | 23 | [Security audit chain](docs/screenshots/23-security-audit-chain.png) |
 | 12 | [Manager flow](docs/screenshots/12-manager-flow.png) | 24 | [Standards dashboard](docs/screenshots/24-standards-dashboard.png) |
+| | | 25 | [Design & Architecture](docs/screenshots/25-design-architecture.png) |
+| | | 26 | [Design viewer, zoomed](docs/screenshots/26-design-viewer.png) |
 
 ## Structure
 

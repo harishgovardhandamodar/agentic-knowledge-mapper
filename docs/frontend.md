@@ -131,6 +131,11 @@ If you are tempted to parallelise it for speed, re-read that sentence first.
 - **Deep links** — the selected document is in the fragment (`#design/privacy`),
   and a `hashchange` listener picks it up so a pasted link works in an open tab.
   An id that is not in the index falls back to the first document.
+- **Viewer** — the enlarge button on every diagram opens it across the whole tab
+  at its natural size, with zoom (wheel, `+`/`-` buttons and keys, 10%–800%),
+  drag pan, double-click toggling fit/natural, `←`/`→` stepping through the
+  document's diagrams, and `Esc` to close. The viewer clones the already-rendered
+  SVG; it never re-runs Mermaid, so opening it cannot re-race a render.
 
 Relative links and images inside these documents point at files the API does
 not serve, so they render as a visible path reference (`.design-ref`) rather
@@ -157,7 +162,7 @@ in the [README](../README.md).
 | Findings single | [10](screenshots/10-findings-single.png) | Security audit chain | [23](screenshots/23-security-audit-chain.png) |
 | Findings compare | [11](screenshots/11-findings-compare.png) | Standards dashboard | [24](screenshots/24-standards-dashboard.png) |
 | Manager flow | [12](screenshots/12-manager-flow.png) | Manager nesting | [13](screenshots/13-manager-nest.png) |
-| Design & Architecture | [25](screenshots/25-design-architecture.png) | | |
+| Design & Architecture | [25](screenshots/25-design-architecture.png) | Design viewer (zoom) | [26](screenshots/26-design-viewer.png) |
 
 ![Design & Architecture tab: document rail on the left, a rendered Mermaid diagram on the right](screenshots/25-design-architecture.png)
 
