@@ -99,6 +99,19 @@ DLP-bypass exfiltration) are mapped onto the threat IDs and joined with the
 locally-found evidence, producing **§6 Known exploits & research evidence**
 plus executive-summary bullets and paragraph.
 
+## Applicability (why scores differ)
+
+Each threat carries an applicability 0..1: below 0.3 it is reported but
+excluded from the aggregates, otherwise it counts fully. The
+control-analyst proposes it from product, use case and focus areas; then
+threat-intel re-judges it against the collected evidence with the same
+deterministic heuristic (`agents.heuristic_applicability`). Evidence and
+focus can only confirm relevance -- lift toward 1.0, never acquit below
+what was proposed -- so the 0.45 floor survives while real signals
+differentiate topics. The keyword table carries finance-domain bridges
+(payment, customer, ledger, PCI …); the LLM, when reachable, still gets
+the last word per threat.
+
 ## Report structure (§§)
 
 1. Product & evidence base (fetched URLs + workflow context)

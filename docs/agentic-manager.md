@@ -17,10 +17,12 @@ investigation.
    topics) takes over; the preview says which path served it. No side
    effects.
 2. **Run** (`POST /api/manager/run`): the confirmed plan (topics can be
-   unchecked, exposure and both launchers adjusted) creates N
+   unchecked, exposure set per topic, launchers adjusted) creates N
    investigations plus the summary shell, then launches per topic. At most
    6 topics; duplicates dropped. Runs queue through the existing agent and
-   security workers.
+   security workers. Each topic carries focus terms (from the parse, or
+   content words of its title) into the assessment so applicability
+   reflects the topic, not just the catalogue baseline.
 3. **Track** (`GET /api/manager/runs`): per-topic research status and latest
    assessment score, polled while anything runs. Statuses derive live from
    the agent/security tables -- no background watcher, so restarts strand

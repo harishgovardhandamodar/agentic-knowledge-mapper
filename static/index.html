@@ -5419,7 +5419,6 @@ function mgrRenderPlan() {
   const body = document.getElementById('mgrPlanBody');
   if (!mgrPlan) { card.hidden = true; body.innerHTML = ''; return; }
   card.hidden = false;
-  const exps = ['restricted_data', 'confidential_data', 'internal', 'public'];
   body.innerHTML =
     `<div style="font-size:12px;color:var(--text2);margin-bottom:8px;">Understood` +
     `${mgrPlan.parsed_by === 'heuristic' ? ' (offline heuristic — the model was unreachable)' : ''}` +
@@ -5427,10 +5426,11 @@ function mgrRenderPlan() {
     `${mgrPlan.domain ? ` · domain: <strong>${escHtml(mgrPlan.domain)}</strong>` : ''}</div>` +
     mgrPlan.topics.map((t, i) =>
       `<label class="mgr-topic"><input type="checkbox" data-mgr-topic="${i}" checked />` +
-      `<span class="grow"><strong>${escHtml(t.title)}</strong><br/><span style="color:var(--text2);">${escHtml(t.description || '')}</span></span></label>`
+      `<span class="grow"><strong>${escHtml(t.title)}</strong><br/><span style="color:var(--text2);">${escHtml(t.description || '')}</span></span>` +
+      `<select data-mgr-exp="${i}" aria-label="Exposure for ${escHtml(t.title)}" title="Exposure tier for this topic" onclick="event.stopPropagation();" style="background:var(--bg2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:11px;padding:3px 6px;flex-shrink:0;">` +
+      `${['restricted_data', 'confidential_data', 'internal', 'public'].map(e => `<option value="${e}"${(t.exposure || mgrPlan.exposure) === e ? ' selected' : ''}>${e.replace(/_/g, ' ')}</option>`).join('')}</select></label>`
     ).join('') +
     `<div class="std-filters" style="margin-top:10px;">` +
-    `<select id="mgrExposure" aria-label="Exposure">${exps.map(e => `<option value="${e}"${e === mgrPlan.exposure ? ' selected' : ''}>${e.replace(/_/g, ' ')}</option>`).join('')}</select>` +
     `<label style="font-size:12px;display:flex;gap:6px;align-items:center;"><input type="checkbox" id="mgrOptResearch" checked /> Research run</label>` +
     `<label style="font-size:12px;display:flex;gap:6px;align-items:center;"><input type="checkbox" id="mgrOptAssess" checked /> Security assessment</label>` +
     `<button class="btn btn-primary btn-sm" onclick="mgrRun()"><i class="fas fa-play"></i> Run ${mgrPlan.topics.length} investigations + summary</button></div>` +
@@ -5439,12 +5439,16 @@ function mgrRenderPlan() {
 
 async function mgrRun() {
   if (!mgrPlan) return;
-  const keep = mgrPlan.topics.filter((t, i) => {
+  const keep = [];
+  mgrPlan.topics.forEach((t, i) => {
     const box = document.querySelector(`[data-mgr-topic="${i}"]`);
-    return box && box.checked;
+    if (box && box.checked) {
+      const expSel = document.querySelector(`[data-mgr-exp="${i}"]`);
+      keep.push({ ...t, exposure: expSel ? expSel.value : (t.exposure || mgrPlan.exposure) });
+    }
   });
   if (!keep.length) { showNotif('Keep at least one topic', 'error'); return; }
-  const plan = { ...mgrPlan, topics: keep, exposure: document.getElementById('mgrExposure').value };
+  const plan = { ...mgrPlan, topics: keep };
   const options = { research: document.getElementById('mgrOptResearch').checked, assessment: document.getElementById('mgrOptAssess').checked };
   if (!options.research && !options.assessment) { showNotif('Launch at least one run type', 'error'); return; }
   const command = document.getElementById('mgrCommand').value.trim();

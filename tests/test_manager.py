@@ -97,6 +97,16 @@ class TestHeuristicSplit(unittest.TestCase):
         self.assertEqual(plan["parsed_by"], "heuristic")
         self.assertEqual(len(plan["topics"]), 2)
 
+    def test_heuristic_derives_focus_and_domain_context(self):
+        plan = mgr.split_command("Customer information / Trade logs")
+        by_title = {t["title"]: t for t in plan["topics"]}
+        self.assertIn("customer", by_title["Customer information"]["focus"])
+        self.assertIn("trade", by_title["Trade logs"]["focus"])
+        self.assertTrue(
+            by_title["Customer information"]["description"].startswith(
+                "Customer information"))
+        self.assertIsNone(by_title["Customer information"]["exposure"])
+
 
 def _db():
     return SessionLocal()
@@ -153,6 +163,20 @@ class TestRunPlan(unittest.TestCase):
                  mock.patch.object(mgr, "launch_security_assessment"):
                 row = mgr.run_plan(db, _plan(1), None, "Do the thing")
             self.assertEqual(row["command"], "Do the thing")
+        finally:
+            db.close()
+
+    def test_per_topic_exposure_overrides_and_falls_back(self):
+        db = _db()
+        try:
+            plan = _plan(2)
+            plan["topics"][0]["exposure"] = "internal"
+            plan["topics"][1]["exposure"] = "martian"
+            with mock.patch.object(mgr, "launch_run"), \
+                 mock.patch.object(mgr, "launch_security_assessment") as la:
+                mgr.run_plan(db, plan, None)
+            calls = [c[0][1]["exposure"] for c in la.call_args_list]
+            self.assertEqual(calls, ["internal", "confidential_data"])
         finally:
             db.close()
 

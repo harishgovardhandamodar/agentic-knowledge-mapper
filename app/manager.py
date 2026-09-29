@@ -37,6 +37,19 @@ _LEAD = re.compile(
     re.IGNORECASE)
 _SPLIT = re.compile(r"\s*/\s*|\s*;\s*|\n+|\s*\d+[.)]\s+")
 
+_FOCUS_STOP = frozenset(
+    ("agents agent ai data system systems platform application app service "
+     "services tool tools new detailed run investigation research study studies "
+     "group team the and for with from that this these those its are was were "
+     "has have had will would can not all any per via into over under "
+     "on about of to in a an").split())
+
+
+def _focus_terms(title: str) -> list[str]:
+    """Content words of a topic title: focus areas for applicability."""
+    return [t for t in re.split(r"[^a-z0-9+]+", (title or "").lower())
+            if len(t) > 2 and t not in _FOCUS_STOP][:8]
+
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
@@ -58,8 +71,10 @@ def split_command(command: str) -> dict[str, Any]:
     if not domain:
         domain = _LEAD.sub("", text).strip().rstrip(".")
     parts = [p.strip().rstrip(".") for p in _SPLIT.split(rest) if p.strip()]
-    topics = [{"title": p[:120], "description": p,
-               "keywords": p, "focus": []} for p in parts if p]
+    topics = [{"title": p[:120],
+               "description": (f"{p} — {domain}" if domain else p),
+               "keywords": p, "focus": _focus_terms(p), "exposure": None}
+              for p in parts if p]
     domain = re.sub(r"\s+", " ", domain).strip().rstrip(".")[:200]
     return {"domain": domain, "exposure": "confidential_data",
             "topics": topics,
@@ -74,8 +89,9 @@ def _llm_parse(command: str) -> dict[str, Any]:
          "content": ("You split a research command into scoped investigations. "
                      "Reply JSON only: {\"domain\": str, "
                      "\"exposure\": one of restricted_data|confidential_data|internal|public, "
-                     "\"topics\": [{\"title\": str (<=120 chars), \"description\": str, "
-                     "\"keywords\": str, \"focus\": [str]}], "
+                         "\"topics\": [{\"title\": str (<=120 chars), \"description\": str, "
+                         "\"keywords\": str, \"focus\": [str], "
+                         "\"exposure\": one of restricted_data|confidential_data|internal|public|null (null = plan default)}, "
                      "\"summary\": {\"title\": str, \"description\": str}}. "
                      "Cover each named sub-topic as its own topic; no filler topics.")},
         {"role": "user", "content": command[:2000]}],
@@ -87,10 +103,12 @@ def _llm_parse(command: str) -> dict[str, Any]:
     for t in topics:
         if not isinstance(t, dict):
             continue
+        exp = t.get("exposure")
         norm.append({"title": str(t.get("title") or "")[:120],
                      "description": str(t.get("description") or ""),
                      "keywords": str(t.get("keywords") or "")[:1000],
-                     "focus": [str(f) for f in (t.get("focus") or [])][:8]})
+                     "focus": [str(f) for f in (t.get("focus") or [])][:8],
+                     "exposure": (exp if exp in EXPOSURE_META else None)})
     summary = out.get("summary") or {}
     return {"domain": str(out.get("domain") or "")[:200],
             "exposure": str(out.get("exposure") or "confidential_data"),
@@ -129,10 +147,12 @@ def validate_plan(plan: dict[str, Any]) -> dict[str, Any]:
         if not title or title.lower() in seen:
             continue
         seen.add(title.lower())
+        exp = t.get("exposure")
         topics.append({"title": title[:120],
                        "description": str(t.get("description") or title),
                        "keywords": str(t.get("keywords") or title)[:1000],
-                       "focus": [str(f) for f in (t.get("focus") or [])][:8]})
+                       "focus": [str(f) for f in (t.get("focus") or [])][:8],
+                       "exposure": (exp if exp in EXPOSURE_META else None)})
     if not topics:
         raise ValueError("no usable topics in command")
     truncated = False
@@ -245,7 +265,7 @@ def run_plan(db, plan: dict[str, Any], options: dict[str, Any] | None = None,
                 inv.id,
                 {"product_name": t["title"][:120],
                  "use_case": t.get("description", ""),
-                 "exposure": plan["exposure"],
+                 "exposure": (t.get("exposure") or plan["exposure"]),
                  "declared_controls": [],
                  "doc_urls": [],
                  "focus": t.get("focus", [])},

@@ -154,6 +154,58 @@ def reply_envelope(
 
 # -------------------------------------------------- control-analyst agent ---
 
+# Threat -> keyword hits for the deterministic applicability heuristic.
+# The base lists describe the AI writing-assistant threat model; the
+# domain bridges extend it to adjacent products (finance, payments) so
+# assessments outside the original vocabulary still differentiate instead
+# of collapsing every threat to the floor.
+APPLICABILITY_KEYWORDS: dict[str, tuple[str, ...]] = {
+    "T01": ("paste", "prompt", "free text", "user", "employee", "assistant",
+            "customer", "client", "pii"),
+    "T02": ("retain", "train", "logging", "debug", "vendor",
+            "transaction", "financial"),
+    "T03": ("classif", "label", "metadata", "catalog", "ledger"),
+    "T04": ("schema", "description", "semantic", "field", "column",
+            "balance", "ledger", "account"),
+    "T05": ("import", "inject", "instruction", "external", "linked doc",
+            "payment", "transfer", "transaction"),
+    "T06": ("insider", "export", "share", "exfil", "abuse",
+            "customer", "fund", "account"),
+    "T07": ("vendor", "subprocessor", "saas", "third-party", "external model",
+            "payment", "processor", "bank"),
+    "T08": ("audit", "provenance", "lineage", "log", "who",
+            "transaction", "journal"),
+    "T09": ("hallucinat", "stale", "accuracy", "trust", "quality",
+            "amount", "balance"),
+    "T10": ("role", "permission", "admin", "privilege", "least-privilege"),
+    "T11": ("region", "residency", "gdpr", "transfer", "cross-border", "eu"),
+    "T12": ("compliance", "dpia", "iso", "soc 2", "gdpr", "audit",
+            "financial", "bank", "pci", "finance"),
+}
+
+APPLICABILITY_FLOOR = 0.45
+APPLICABILITY_HIT = 0.18
+
+
+def heuristic_applicability(product: str, use_case: str = "",
+                            evidence: list[dict[str, Any]] | None = None,
+                            focus: list[str] | None = None) -> dict[str, float]:
+    """Keyword-driven applicability: a threat counts when the product, use
+    case, focus areas or evidence plausibly exercise it. The floor keeps
+    catalog-inherent threats visible; keyword hits lift toward 1.0."""
+    ev_blob = " ".join(
+        f"{e.get('title', '')} {e.get('tags', '')} {e.get('snippet', '')}"
+        for e in (evidence or []) if isinstance(e, dict))
+    blob = (f"{product or ''} {use_case or ''} {ev_blob} "
+            f"{' '.join(focus or [])}").lower()
+    app: dict[str, float] = {}
+    for tid, terms in APPLICABILITY_KEYWORDS.items():
+        hits = sum(1 for t in terms if t in blob)
+        # base floor keeps catalog-inherent threats visible; keywords lift them
+        app[tid] = round(min(1.0, APPLICABILITY_FLOOR + APPLICABILITY_HIT * hits), 2)
+    return app
+
+
 def control_analyst_handle(env: dict[str, Any]) -> dict[str, Any]:
     """Intent ``analyse_controls``: control coverage + per-threat applicability.
 
@@ -169,36 +221,8 @@ def control_analyst_handle(env: dict[str, Any]) -> dict[str, Any]:
     declared = [str(c).strip().upper() for c in (payload.get("declared_controls") or [])]
     declared = [c for c in declared if c in sec._CONTROL_BY_ID]
     evidence = payload.get("evidence", []) or []
-    ev_blob = " ".join(
-        f"{e.get('title','')} {e.get('tags','')} {e.get('snippet','')}".lower()
-        for e in evidence)
-
-    def _heuristic_applicability() -> dict[str, float]:
-        """Keyword-driven applicability: a threat counts when the evidence or the
-        use case plausibly exercises it. Confident defaults keep the score honest."""
-        app: dict[str, float] = {}
-        blob = f"{product} {use_case} {ev_blob}".lower()
-        kw: dict[str, tuple[str, ...]] = {
-            "T01": ("paste", "prompt", "free text", "user", "employee", "assistant"),
-            "T02": ("retain", "train", "logging", "debug", "vendor"),
-            "T03": ("classif", "label", "metadata", "catalog"),
-            "T04": ("schema", "description", "semantic", "field", "column"),
-            "T05": ("import", "inject", "instruction", "external", "linked doc"),
-            "T06": ("insider", "export", "share", "exfil", "abuse"),
-            "T07": ("vendor", "subprocessor", "saas", "third-party", "external model"),
-            "T08": ("audit", "provenance", "lineage", "log", "who"),
-            "T09": ("hallucinat", "stale", "accuracy", "trust", "quality"),
-            "T10": ("role", "permission", "admin", "privilege", "least-privilege"),
-            "T11": ("region", "residency", "gdpr", "transfer", "cross-border", "eu"),
-            "T12": ("compliance", "dpia", "iso", "soc 2", "gdpr", "audit"),
-        }
-        for tid, terms in kw.items():
-            hits = sum(1 for t in terms if t in blob)
-            # base floor keeps catalog-inherent threats visible; keywords lift them
-            app[tid] = round(min(1.0, 0.45 + 0.18 * hits), 2)
-        return app
-
-    applicability = _heuristic_applicability()
+    applicability = heuristic_applicability(
+        product, use_case, evidence, payload.get("focus") or [])
     proposed_extra: list[dict[str, Any]] = []
     confidence = 0.5
     source = "deterministic heuristic (no LLM)"
@@ -591,6 +615,21 @@ def threat_intel_handle(env: dict[str, Any]) -> dict[str, Any]:
         except (TypeError, ValueError):
             applicability[tid] = 0.7
 
+    # Deterministic evidence re-judge: the analyst judged before any evidence
+    # existed. Evidence (and focus) can only confirm relevance -- lift toward
+    # 1.0, never acquit below what was proposed -- so the floor philosophy
+    # stays intact while real signals differentiate the threats.
+    rej = heuristic_applicability(payload.get("product_name", ""),
+                                  payload.get("use_case", ""),
+                                  evidence, payload.get("focus") or [])
+    for tid in threat_ids:
+        if tid in rej:
+            try:
+                applicability[tid] = max(float(applicability.get(tid, 0.0)),
+                                         rej[tid])
+            except (TypeError, ValueError):
+                pass
+
     return reply_envelope(
         env, "threat-intel", "attacks_mapped",
         {"known_exploits": known_exploits, "catalogue_size": len(KNOWN_ATTACKS),
@@ -968,6 +1007,7 @@ def run_security_a2a_workflow(
     exposure: str = "confidential_data",
     declared_controls: Optional[list[str]] = None,
     score_fn: Any = None,
+    focus: Optional[list[str]] = None,
     control_plan_override: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """Orchestrator: control-analyst → collector → intel → writer. Never raises.
@@ -1010,7 +1050,8 @@ def run_security_a2a_workflow(
             env0 = new_envelope(
                 "security-orchestrator", "control-analyst", "analyse_controls",
                 {"product_name": product_name, "use_case": use_case,
-                 "exposure": exposure, "declared_controls": declared_controls or []},
+                 "exposure": exposure, "declared_controls": declared_controls or [],
+                 "focus": focus or []},
                 task_id=task_id, trace=trace,
                 note="read declared controls, propose applicability + extra controls",
             )
@@ -1042,7 +1083,9 @@ def run_security_a2a_workflow(
             "security-orchestrator", "threat-intel", "map_attacks",
             {"evidence": evidence, "threat_ids": threat_ids,
              "declared_controls": control_plan.get("declared_controls", []),
-             "applicability": base_applicability},
+             "applicability": base_applicability,
+             "product_name": product_name, "use_case": use_case,
+             "focus": focus or []},
             task_id=task_id, trace=trace,
             note="map known attacks, join local evidence, judge applicability",
         )

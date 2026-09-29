@@ -1066,6 +1066,7 @@ def build_assessment(
         exposure=exposure,
         declared_controls=declared_controls or [],
         score_fn=_score,
+        focus=focus,
         control_plan_override=control_plan_override,
     )
 
