@@ -56,7 +56,7 @@ class TestOpenshellControls(unittest.TestCase):
                 self.assertIn(tid, sec._THREAT_IDS, f"{cid} -> {tid}")
 
     def test_pack_version_bumped_for_new_controls(self):
-        self.assertEqual(tp.PACK_VERSION, "2.0.0")
+        self.assertEqual(tp.PACK_VERSION, "2.1.0")
 
 
 class TestPolicyYaml(unittest.TestCase):

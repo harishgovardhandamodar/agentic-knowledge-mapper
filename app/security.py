@@ -518,7 +518,9 @@ def score_assessment(
       scaled), ``impact``.
     - ``active_controls``: control ids the organisation has in place.
     - ``applicability``: per-threat 0..1 relevance; threats below
-      ``_MIN_APPLICABILITY`` are reported but excluded from the aggregate.
+      ``_MIN_APPLICABILITY`` are reported but excluded from the aggregate,
+      and the rest weight the aggregate by relevance (renormalized, so a
+      uniform map scores exactly as unweighted).
 
     Returns threats (inherent + residual per threat), the aggregates, the
     posture, and a full breakdown so the UI can explain every number.
@@ -565,8 +567,22 @@ def score_assessment(
     applicable = [r for r in rows if r["applicable"]]
     if not applicable:  # never produce a meaningless 0 for an empty scope
         applicable = rows
-    inh = _aggregate([r["inherent_score"] for r in applicable]) / 25.0
-    res = _aggregate([r["residual_score"] for r in applicable]) / 25.0
+    weights = []
+    for r in applicable:
+        try:
+            weights.append(max(0.0, min(1.0, float(app.get(r["id"], 1.0)))))
+        except (TypeError, ValueError):
+            weights.append(1.0)
+    norm = (sum(weights) / len(weights)) if weights else 0.0
+    if norm <= 0:
+        # nothing claims relevance: fall back to the unweighted aggregate
+        # rather than manufacturing a zero
+        weights = [1.0] * len(applicable)
+        norm = 1.0
+    inh = _aggregate([s * w for s, w in zip(
+        [r["inherent_score"] for r in applicable], weights)]) / (25.0 * norm)
+    res = _aggregate([s * w for s, w in zip(
+        [r["residual_score"] for r in applicable], weights)]) / (25.0 * norm)
     inherent_pct = round(min(100.0, inh * 100.0), 1)
     residual_pct = round(min(100.0, res * 100.0), 1)
 
@@ -590,6 +606,7 @@ def score_assessment(
         },
         "breakdown": {
             "method": "weighted worst-case (55%) + breadth (45%), normalized to the 1-25 LxI range; "
+                      "threat contributions scale by applicability and renormalize (uniform maps score as unweighted); "
                       "residual applies control efficacy with diminishing returns; "
                       "controls never reduce likelihood below 35% of inherent",
             "worst_weight": _WORST_WEIGHT,

@@ -254,6 +254,62 @@ class TestStaleBrief(unittest.TestCase):
             db.close()
 
 
+class TestApplicabilityWeighting(unittest.TestCase):
+    def _inh(self, exposure="confidential_data"):
+        weight = float(sec.EXPOSURE_META[exposure]["weight"])
+        return [{"id": t[0], "title": t[1],
+                 "likelihood": float(sec._scale_likelihood(t[4], weight)),
+                 "impact": float(t[5])} for t in sec._THREAT_CATALOG]
+
+    def _res(self, app, exposure="confidential_data", active=()):
+        return sec.score_assessment(exposure, self._inh(exposure),
+                                    active_controls=list(active),
+                                    applicability=app)["residual_pct"]
+
+    def test_uniform_maps_score_as_unweighted(self):
+        ids = [t[0] for t in sec._THREAT_CATALOG]
+        self.assertEqual(self._res(None), self._res({t: 0.45 for t in ids}))
+        self.assertEqual(self._res(None), self._res({t: 1.0 for t in ids}))
+        self.assertEqual(self._res(None), 68.8)
+
+    def test_varied_map_moves_the_score(self):
+        ids = [t[0] for t in sec._THREAT_CATALOG]
+        base = {t: 0.45 for t in ids}
+        lifted = dict(base, T02=1.0, T05=1.0)
+        got = self._res(lifted)
+        plain = self._res(base)
+        self.assertNotEqual(got, plain)
+        self.assertGreater(got, plain)
+        self.assertLessEqual(got, 100.0)
+
+    def test_all_zero_falls_back_instead_of_zeroing(self):
+        ids = [t[0] for t in sec._THREAT_CATALOG]
+        self.assertEqual(self._res({t: 0.0 for t in ids}), self._res(None))
+
+    def test_single_applicable_threat_scores_alone(self):
+        ids = [t[0] for t in sec._THREAT_CATALOG]
+        got = self._res({"T05": 1.0, **{t: 0.0 for t in ids if t != "T05"}})
+        self.assertGreater(got, 0.0)
+        self.assertLess(got, self._res(None))
+
+    def test_weights_clamp(self):
+        ids = [t[0] for t in sec._THREAT_CATALOG]
+        over = {"T05": 1.5, **{t: 0.45 for t in ids if t != "T05"}}
+        capped = {"T05": 1.0, **{t: 0.45 for t in ids if t != "T05"}}
+        self.assertEqual(self._res(over), self._res(capped))
+
+    def test_weighting_holds_with_controls_active(self):
+        ids = [t[0] for t in sec._THREAT_CATALOG]
+        base = {t: 0.45 for t in ids}
+        plain = sec.score_assessment("confidential_data", self._inh(),
+                                     active_controls=["C02"],
+                                     applicability=None)["residual_pct"]
+        weighted = sec.score_assessment("confidential_data", self._inh(),
+                                        active_controls=["C02"],
+                                        applicability=base)["residual_pct"]
+        self.assertEqual(plain, weighted)
+
+
 class TestControlLeverage(unittest.TestCase):
     def test_no_assessment_is_no_recommendations(self):
         inv = new_inv()

@@ -35,7 +35,7 @@ from . import security as sec
 #: intentionally. Bump the patch for a wording fix, minor for a re-weighting,
 #: major for adding or removing threats or controls.
 PACK_ID = "akm-threat-pack"
-PACK_VERSION = "2.0.0"
+PACK_VERSION = "2.1.0"
 
 #: The external references the catalog encodes. Recorded so an assessment can be
 #: read against the revision it was scored with, and so re-basing the catalog
@@ -164,7 +164,7 @@ def pack_fingerprint() -> str:
                      for c in sec._CONTROL_CATALOG],
         "exposures": {k: v.get("weight") for k, v in sec.EXPOSURE_META.items()},
         "scoring": [sec._WORST_WEIGHT, sec._BREADTH_WEIGHT, sec._TOP_N,
-                    RESIDUAL_FLOOR, MIN_APPLICABILITY],
+                    RESIDUAL_FLOOR, MIN_APPLICABILITY, "applicability-weighted-v1"],
     }
     blob = json.dumps(payload, sort_keys=True, default=str, separators=(",", ":"))
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:12]

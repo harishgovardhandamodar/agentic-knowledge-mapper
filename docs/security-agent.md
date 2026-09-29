@@ -102,7 +102,9 @@ plus executive-summary bullets and paragraph.
 ## Applicability (why scores differ)
 
 Each threat carries an applicability 0..1: below 0.3 it is reported but
-excluded from the aggregates, otherwise it counts fully. The
+excluded from the aggregates, and the rest weight the aggregate by
+relevance, renormalized so a uniform map scores exactly as unweighted
+(pack 2.1.0, method `applicability-weighted-v1` in the fingerprint). The
 control-analyst proposes it from product, use case and focus areas; then
 threat-intel re-judges it against the collected evidence with the same
 deterministic heuristic (`agents.heuristic_applicability`). Evidence and
