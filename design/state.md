@@ -21,10 +21,12 @@ stateDiagram-v2
     running --> draft : delete (cascades)
     ready --> [*] : delete (cascades)
 
-    note right of running<br/>A run that is already going is not<br/>restarted: a second POST returns 429.<br/>The scheduler and the gap loop both<br/>check before launching.
+    note right of running
+        A run that is already going is not<br/>restarted: a second POST returns 429.<br/>The scheduler and the gap loop both<br/>check before launching.
     end note
 
-    note right of ready<br/>A recurring investigation keeps its<br/>own status "ready" between ticks.<br/>The schedule (cron + next_run_at +<br/>max_items + max_rounds) is what makes<br/>"ready" a repeating state.
+    note right of ready
+        A recurring investigation keeps its<br/>own status "ready" between ticks.<br/>The schedule (cron + next_run_at +<br/>max_items + max_rounds) is what makes<br/>"ready" a repeating state.
     end note
 
 ```
@@ -38,9 +40,11 @@ stateDiagram-v2
     running --> error : unhandled exception, error text stored
     error --> running : re-run (a new run row, the old one is kept)
 
-    note right of running<br/>A row is created before the worker<br/>thread starts, so a run that dies with<br/>the process still appears in history<br/>rather than vanishing.
+    note right of running
+        A row is created before the worker<br/>thread starts, so a run that dies with<br/>the process still appears in history<br/>rather than vanishing.
     end note
-    note right of error<br/>The error is stored on the row and<br/>surfaced in the run list. Partial<br/>artifacts collected before the failure<br/>are kept — a half-finished sweep is<br/>still evidence.
+    note right of error
+        The error is stored on the row and<br/>surfaced in the run list. Partial<br/>artifacts collected before the failure<br/>are kept — a half-finished sweep is<br/>still evidence.
     end note
 
 ```
@@ -59,9 +63,11 @@ stateDiagram-v2
     done --> [*]
     error --> [*]
 
-    note right of awaiting_approval<br/>The job that parked the run COMPLETED<br/>normally (status done). done is not in<br/>the live set (pending/retry/running), so<br/>the approval's fresh job can reuse key<br/>security:{run_id} without colliding.<br/>"parked" is a state of the run, not of<br/>the job.
+    note right of awaiting_approval
+        The job that parked the run COMPLETED<br/>normally (status done). done is not in<br/>the live set (pending/retry/running), so<br/>the approval's fresh job can reuse key<br/>security:{run_id} without colliding.<br/>"parked" is a state of the run, not of<br/>the job.
     end note
-    note right of running<br/>"busy" for this investigation is<br/>running or awaiting_approval — a run<br/>parked at a gate still holds the<br/>investigation.
+    note right of running
+        "busy" for this investigation is<br/>running or awaiting_approval — a run<br/>parked at a gate still holds the<br/>investigation.
     end note
 
 ```
@@ -81,11 +87,14 @@ stateDiagram-v2
     done --> [*]
     failed --> [*]
 
-    note right of pending<br/>The row exists before any thread, so a<br/>crash between enqueue and start leaves<br/>visible, countable work.
+    note right of pending
+        The row exists before any thread, so a<br/>crash between enqueue and start leaves<br/>visible, countable work.
     end note
-    note right of retry<br/>Backoff is on next_attempt_at, and the<br/>live-key index is partial (only<br/>pending/retry/running), so a re-enqueue<br/>of the same key re-attaches instead of<br/>duplicating.
+    note right of retry
+        Backoff is on next_attempt_at, and the<br/>live-key index is partial (only<br/>pending/retry/running), so a re-enqueue<br/>of the same key re-attaches instead of<br/>duplicating.
     end note
-    note right of running<br/>A worker heartbeats its lease. Only an<br/>expired lease is recoverable, so a<br/>slow job is never duplicated by a<br/>second worker.
+    note right of running
+        A worker heartbeats its lease. Only an<br/>expired lease is recoverable, so a<br/>slow job is never duplicated by a<br/>second worker.
     end note
 
 ```
@@ -103,9 +112,11 @@ stateDiagram-v2
     error --> [*]
     done --> [*]
 
-    note right of running<br/>meta.phase is the finer-grained view the<br/>UI polls: researching → composing →<br/>checking → revising → enriching. The<br/>run is "running" through all of it.
+    note right of running
+        meta.phase is the finer-grained view the<br/>UI polls: researching → composing →<br/>checking → revising → enriching. The<br/>run is "running" through all of it.
     end note
-    note right of done<br/>Done is not final: a watched<br/>explanation is re-answered by the<br/>scheduler, and the old answer is kept<br/>alongside the new one — the drift<br/>verdict is the record of what changed.
+    note right of done
+        Done is not final: a watched<br/>explanation is re-answered by the<br/>scheduler, and the old answer is kept<br/>alongside the new one — the drift<br/>verdict is the record of what changed.
     end note
 
 ```
@@ -120,9 +131,11 @@ stateDiagram-v2
     compiled --> compiled : compile_run again → idempotent
     compiled --> [*]
 
-    note right of running<br/>ManagerRun carries no per-child<br/>progress of its own: "all_done" is<br/>computed live from the agent/security<br/>tables. A restart mid-fan-out therefore<br/>strands nothing — the children are<br/>ordinary runs.
+    note right of running
+        ManagerRun carries no per-child<br/>progress of its own: "all_done" is<br/>computed live from the agent/security<br/>tables. A restart mid-fan-out therefore<br/>strands nothing — the children are<br/>ordinary runs.
     end note
-    note right of compiled<br/>Compiling is refused with 409 while any<br/>child is still running: there is<br/>nothing to synthesise yet.
+    note right of compiled
+        Compiling is refused with 409 while any<br/>child is still running: there is<br/>nothing to synthesise yet.
     end note
 
 ```
@@ -146,7 +159,8 @@ stateDiagram-v2
         drifted --> clean : a later sweep finds it on-brief
     }
 
-    note right of drift<br/>Drift is a flag, not a state. Nothing<br/>is deleted for being off-brief: the<br/>artifact stays, dimmed in the graph,<br/>with a "drift" pill in the review<br/>queue. Hiding a person from seeing<br/>what was collected is a different<br/>decision, and it is explicit<br/>(investigation.hidden).
+    note right of drift
+        Drift is a flag, not a state. Nothing<br/>is deleted for being off-brief: the<br/>artifact stays, dimmed in the graph,<br/>with a "drift" pill in the review<br/>queue. Hiding a person from seeing<br/>what was collected is a different<br/>decision, and it is explicit<br/>(investigation.hidden).
     end note
 
 ```
@@ -162,9 +176,11 @@ stateDiagram-v2
     closed --> [*]
     aborted --> [*]
 
-    note right of open<br/>Two kinds share this machine.<br/>A task's chain holds its own events.<br/>A session's chain holds one anchor per<br/>adopted task, in adoption order —<br/>so each task verifies alone and the<br/>session independently proves the order<br/>they happened in.
+    note right of open
+        Two kinds share this machine.<br/>A task's chain holds its own events.<br/>A session's chain holds one anchor per<br/>adopted task, in adoption order —<br/>so each task verifies alone and the<br/>session independently proves the order<br/>they happened in.
     end note
-    note right of closed<br/>Closing is not deletion: the chain,<br/>its claims and its approvals stay<br/>queryable and verifiable after the<br/>investigation that produced them is<br/>gone. That is the point of the ledger.
+    note right of closed
+        Closing is not deletion: the chain,<br/>its claims and its approvals stay<br/>queryable and verifiable after the<br/>investigation that produced them is<br/>gone. That is the point of the ledger.
     end note
 
 ```
@@ -180,7 +196,8 @@ stateDiagram-v2
     granted --> [*]
     denied --> [*]
 
-    note right of pending<br/>The decision is itself a chained<br/>event, so it cannot be forged into<br/>the record after the fact. An<br/>identical requester/approver is 403,
+    note right of pending
+        The decision is itself a chained<br/>event, so it cannot be forged into<br/>the record after the fact. An<br/>identical requester/approver is 403,
         and an empty identity fails closed.
     end note
 
@@ -195,7 +212,8 @@ stateDiagram-v2
     scored --> scored : a later sweep refreshes the risk view
     scored --> [*]
 
-    note right of scored<br/>Assessments are never mutated by a<br/>human. Re-running an assessment writes<br/>a new run (and can write a new row);<br/>the previous report is what it said at<br/>the time, including the threat-pack<br/>version and fingerprint it was scored<br/>against.
+    note right of scored
+        Assessments are never mutated by a<br/>human. Re-running an assessment writes<br/>a new run (and can write a new row);<br/>the previous report is what it said at<br/>the time, including the threat-pack<br/>version and fingerprint it was scored<br/>against.
     end note
 
 ```
@@ -210,7 +228,8 @@ stateDiagram-v2
     ticking --> ticking : missed windows skipped, never backfilled
     ticking --> [*] : shutdown
 
-    note right of ticking<br/>The scheduler is the only component<br/>that acts without a person, so every<br/>state transition here is also an<br/>event on the ledger (actor_type<br/>"system") — the app can be read back<br/>to see what it did while nobody was<br/>looking.
+    note right of ticking
+        The scheduler is the only component<br/>that acts without a person, so every<br/>state transition here is also an<br/>event on the ledger (actor_type<br/>"system") — the app can be read back<br/>to see what it did while nobody was<br/>looking.
     end note
 
 ```

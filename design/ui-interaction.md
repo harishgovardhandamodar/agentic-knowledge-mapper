@@ -1,6 +1,6 @@
 # 07 — UI interaction
 
-How a person actually moves through the app: four top-level apps, their views,
+How a person actually moves through the app: five top-level apps, their views,
 the overlays that sit on top, and what each control does to the system behind
 it.
 
@@ -12,7 +12,7 @@ browser-local state.
 Related: [interaction.md](interaction.md) (what the API does) ·
 [../docs/frontend.md](../docs/frontend.md) · [state.md](state.md)
 
-## The four apps
+## The five apps
 
 ```mermaid
 flowchart TB
@@ -21,10 +21,12 @@ flowchart TB
     A -->|2| SEC["AI Security<br/>assess · score · control"]
     A -->|3| MGR["Agentic Manager<br/>command · fan-out · summary"]
     A -->|4| STD["AI Standards<br/>frameworks · coverage"]
+    A -->|5| DSG["Design & Architecture<br/>diagrams · data model · privacy"]
     MAP --> M8
     SEC --> S2
     MGR --> M3
     STD --> SD1
+    DSG --> D2
 
     M8["8 Mapper views"]
     M8 --> m1["Knowledge graph"]
@@ -47,6 +49,12 @@ flowchart TB
 
     SD1["Standalone dashboard in an iframe<br/>(its own service on :5173)"]
 
+    D2["Design set: 10 documents"]
+    D2 --> d2a["Rail<br/>grouped, in reading order,<br/>with diagram counts"]
+    D2 --> d2b["Rendered document<br/>Markdown + live Mermaid"]
+    D2 --> d2c["Outline<br/>h2/h3 anchors, scroll spy"]
+    D2 --> d2d["Source toggle<br/>the raw Markdown"]
+
 ```
 
 The Standards tab is the odd one out and deliberately so: it is a **different
@@ -54,6 +62,12 @@ service** in an `<iframe>`, not another view. The same data is also available
 as a scored matrix inside Security → Standards coverage, computed by the
 mapper itself — the iframe shows the dashboard's own view, the sub-tab shows
 the assessment-specific score.
+
+The Design tab is different in kind again: it has no service and no data model.
+It reads the `design/` directory in this repository over
+`GET /api/design/docs` and renders it, so the diagrams on screen are the ones
+in the repository rather than screenshots of them. The selected document lives
+in the fragment (`#design/privacy`), which makes every document linkable.
 
 ## Mapper: the loop a person is actually in
 

@@ -50,6 +50,13 @@ and they are not layers of one thing — they are peers with different jobs:
 The mapper is the only one that holds research data. Everything else is either
 a dependency it calls or a dataset it reads.
 
+Do not confuse this with the **five app tabs** in the mapper's own UI. AI
+Standards is a separate container that the Mapper *iframes*; the other four
+tabs — Mapper, AI Security, Agentic Manager, and Design & Architecture — are
+pane switches inside the single `static/index.html`. Design & Architecture
+additionally has no service of its own: it reads `design/` through
+`app/design_docs.py`.
+
 ![The standalone standards dashboard](screenshots/24-standards-dashboard.png)
 
 ## Containers
@@ -85,7 +92,8 @@ flowchart TB
 
 | Container / module | Responsibility |
 |---|---|
-| `static/index.html` | All GUI: 4 apps (Mapper with 8 views, Security with 9 sub-tabs, Manager, Standards), sidebar, overlays, polling, mermaid rendering |
+| `static/index.html` | All GUI: 5 apps (Mapper with 8 views, Security with 9 sub-tabs, Manager, Standards, Design & Architecture), sidebar, overlays, polling, mermaid rendering |
+| `app/design_docs.py` | Fixed index over `design/`; serves a design document by id for the Design & Architecture tab |
 | `app/main.py` | FastAPI routes, request schemas, JSON serializers |
 | `app/agent.py` | Collection loop: plan → search → analyze → map → refine (background thread) |
 | `app/explainer.py` | Question answering: graph-first research → compose → ground → critique → diagram |

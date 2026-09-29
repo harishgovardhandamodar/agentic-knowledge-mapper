@@ -8,6 +8,12 @@ These are **design** documents: they explain *what the system is and how it
 behaves*, not how to run it (see [`../docs/operations.md`](../docs/operations.md))
 and not what each table holds (see [`../docs/data-model.md`](../docs/data-model.md)).
 
+**Read them in the app.** The *Design & Architecture* tab in the running mapper
+renders this set live, with a rail grouped in reading order, an outline, and a
+source toggle — `#design/privacy` is a link to any one of them. It reads the
+files over `GET /api/design/docs`, so what is on screen is what is in the
+repository; a screenshot of a diagram that has since changed would not be.
+
 | # | File | Diagram kind | What it answers |
 |---|---|---|---|
 | 01 | [01-system-context.md](01-system-context.md) | context, container, deployment, environment | What is in the box, what is outside it, what runs where |
@@ -52,7 +58,7 @@ flowchart LR
 
 1. **Context** — [01](01-system-context.md): the browser, this app, the LLM
    gateway, the mesh, the open web, and the standards dashboard.
-2. **What a person can do** — [07](ui-interaction.md): four top-level apps,
+2. **What a person can do** — [07](ui-interaction.md): five top-level apps,
    their sub-tabs, and the overlays that sit on top.
 3. **What happens when they do it** — [04](interaction.md) for the exact
    call order, [05](activity.md) for the decisions inside the agent, and
@@ -103,7 +109,7 @@ flowchart TB
 Diagrams are documentation, not configuration — but they are kept honest:
 
 - Every route in a sequence diagram exists in `app/main.py` or `app/ledger_api.py`
-  (93 paths as of this writing; `GET /openapi.json` lists them all).
+  (95 paths as of this writing; `GET /openapi.json` lists them all).
 - Every control in [controls.md](controls.md) names the file that enforces it, and
   the test that would fail if it stopped working.
 - Every table in [data-model.md](data-model.md) is created by `create_all()` in

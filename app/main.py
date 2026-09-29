@@ -26,6 +26,7 @@ from .agent import launch_run, launch_run_with_goal
 from . import security_agent
 from . import security as sec_engine
 from . import standards_matrix
+from . import design_docs
 from . import manager as manager_mod
 from .explainer import (launch_explanation, _extract_concepts, MODES,
                         DEPTH_PLAN, AUDIENCE_HINTS, _question_suggestions,
@@ -1449,6 +1450,28 @@ def standards_score_matrix(assessment_id: Optional[int] = None,
         raise HTTPException(404, "Assessment not found")
     except standards_matrix.StandardsUnavailable as e:
         raise HTTPException(503, e.detail)
+
+
+# ---------------------------------------------------------------- design set --
+# The Mermaid design documents under design/, made selectable by the Design &
+# Architecture tab. Read-only and content-static: no database, no LLM, and no
+# caller-supplied path -- the id selects from a fixed index (app/design_docs.py).
+
+@app.get("/api/design/docs")
+def design_docs_index():
+    """Every design document, in reading order, with kind and diagram count."""
+    return design_docs.list_docs()
+
+
+@app.get("/api/design/docs/{doc_id}")
+def design_doc(doc_id: str):
+    """One design document's Markdown, for the browser to render."""
+    try:
+        return design_docs.get_doc(doc_id)
+    except design_docs.UnknownDoc:
+        raise HTTPException(404, "Unknown design document")
+    except FileNotFoundError as e:
+        raise HTTPException(404, f"Design document not on disk: {e}")
 
 
 @app.post("/api/security/assessments/{assessment_id}/rescore")

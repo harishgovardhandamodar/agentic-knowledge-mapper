@@ -178,7 +178,8 @@ stateDiagram-v2
     recorded --> recorded : the event lands on the chain
     recorded --> dropped : the write fails
     dropped --> recorded : an operator investigates and the trail resumes
-    note right of dropped<br/>The chain write failing must not become<br/>a product 500. A tool that refuses to<br/>work when its log breaks is a tool<br/>people disable logging on.<br/>So the drop is recorded elsewhere:<br/>ledger_audit_drops — durable, countable,<br/>joinable to the run — and visible at<br/>GET /api/ledger/audit-drops.<br/>The gap is disclosed, not hidden.
+    note right of dropped
+        The chain write failing must not become<br/>a product 500. A tool that refuses to<br/>work when its log breaks is a tool<br/>people disable logging on.<br/>So the drop is recorded elsewhere:<br/>ledger_audit_drops — durable, countable,<br/>joinable to the run — and visible at<br/>GET /api/ledger/audit-drops.<br/>The gap is disclosed, not hidden.
     end note
 
 ```

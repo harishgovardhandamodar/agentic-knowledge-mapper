@@ -70,12 +70,13 @@ Details: [agent-loop](docs/agent-loop.md).
 Components, UML diagrams, and data flows: [architecture](docs/architecture.md)
 and [design/01-system-context.md](design/01-system-context.md).
 
-**Four apps in one page.** The app switcher opens *Mapper* (collect, map,
+**Five apps in one page.** The app switcher opens *Mapper* (collect, map,
 review, explain), *AI Security* (assess, score, control), *Agentic Manager*
-(one command → N investigations + a summary), and *AI Standards* (34
-frameworks × 10 pillars). Mapper has eight views; Security has nine
-sub-tabs; long jobs run through a persisted, lease-based job queue so a restart
-resumes rather than loses.
+(one command → N investigations + a summary), *AI Standards* (34
+frameworks × 10 pillars), and *Design & Architecture* (the nine Mermaid design
+documents, rendered live rather than screenshotted). Mapper has eight views;
+Security has nine sub-tabs; long jobs run through a persisted, lease-based job
+queue so a restart resumes rather than loses.
 
 ## GUI tour
 
@@ -361,7 +362,7 @@ an action are provable afterwards:
 
 ## API (selection)
 
-93 paths; `GET /openapi.json` lists them all.
+95 paths; `GET /openapi.json` lists them all.
 
 | Method | Path | Description |
 |---|---|---|
@@ -391,6 +392,7 @@ an action are provable afterwards:
 | POST | `/api/security/runs/{id}/approval` | Grant or deny a parked run (≠ the requester) |
 | GET | `/api/agents/cards`, `/.well-known/agents` | A2A agent registry (five cards) |
 | GET | `/api/standards/score-matrix?assessment_id=` | Relevance-ranked framework matrix for an assessment |
+| GET | `/api/design/docs`, `/api/design/docs/{id}` | The design set: index with diagram counts / one document as Markdown |
 | POST | `/api/manager/parse`, `/api/manager/run` | Understand a command (no side effects) / fan out |
 | GET | `/api/manager/runs`, `/api/manager/runs/{id}` | Run status list / one run |
 | POST | `/api/manager/runs/{id}/compile` | Synthesise the summary (409 while a child runs) |

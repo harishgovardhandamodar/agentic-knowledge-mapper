@@ -9,10 +9,11 @@ Related: [architecture](architecture.md) · [agent-loop](agent-loop.md) ·
 
 ## View map
 
-`switchApp()` selects one of **four apps**; `switchView()` selects one of the
+`switchApp()` selects one of **five apps**; `switchView()` selects one of the
 **eight Mapper views**. This is the distinction that trips people up: AI
-Security and Agentic Manager are sibling *apps*, not tabs inside the Mapper,
-and the Mapper's own view list does not include them.
+Security, Agentic Manager, AI Standards and Design & Architecture are sibling
+*apps*, not tabs inside the Mapper, and the Mapper's own view list does not
+include them.
 
 ```mermaid
 flowchart TB
@@ -21,6 +22,7 @@ flowchart TB
     APPS --> SEC["security — AI Security"]
     APPS --> MGR["manager — Agentic Manager"]
     APPS --> STD["standards — AI Standards<br/>(iframed service :5173)"]
+    APPS --> DSG["design — Design & Architecture<br/>design/ Markdown read live<br/>69 Mermaid diagrams"]
     AKM --> TABS
     subgraph TABS["Mapper views (switchView)"]
         G["graph<br/>Knowledge graph<br/>vis-network · cluster bar<br/>node overlay on click"]
@@ -101,6 +103,35 @@ buttons, not as a spinner — a blocked run is visibly blocked.
 - Synthesis artifacts render through a dependency-free markdown renderer in
   the detail overlay; other artifacts keep their plain-text view.
 
+## Design & Architecture app
+
+The fifth app reads `design/` over `GET /api/design/docs` and renders it in the
+page. The point is that the diagrams people read are the ones in the repo: a
+screenshot of a diagram that has since changed cannot be distinguished from a
+correct one, so the viewer renders the Markdown and hands the Mermaid to the
+same renderer the rest of the app uses.
+
+- **Rail** — the ten documents in reading order, grouped (Start here →
+  Structure → Behaviour → User-facing → Privacy & assurance). Each row carries
+  the question it answers and its diagram count, read from the file rather than
+  hard-coded.
+- **Document** — `designRender()` is a small block-level Markdown renderer
+  (headings, tables, lists, fences, blockquotes, hr) that emits
+  `<div class="diagram-wrap"><pre class="mermaid">` for Mermaid fences. It is
+  deliberately not a general-purpose parser: it covers what these files use.
+- **Outline** — h2/h3 anchors with a scroll spy, hidden in source view.
+- **Source toggle** — the same document as raw Markdown, for checking a
+  diagram against the text around it.
+- **Deep links** — the selected document is in the fragment (`#design/privacy`),
+  and a `hashchange` listener picks it up so a pasted link works in an open tab.
+  An id that is not in the index falls back to the first document.
+
+Relative links and images inside these documents point at files the API does
+not serve, so they render as a visible path reference (`.design-ref`) rather
+than an anchor that 404s. `app/design_docs.py` resolves a document only by
+looking its id up in a fixed index — a traversal attempt is a 404, exactly like
+an unknown id.
+
 ## Screens
 
 Captured from a real browser session against the live app; see the full index
@@ -120,5 +151,8 @@ in the [README](../README.md).
 | Findings single | [10](screenshots/10-findings-single.png) | Security audit chain | [23](screenshots/23-security-audit-chain.png) |
 | Findings compare | [11](screenshots/11-findings-compare.png) | Standards dashboard | [24](screenshots/24-standards-dashboard.png) |
 | Manager flow | [12](screenshots/12-manager-flow.png) | Manager nesting | [13](screenshots/13-manager-nest.png) |
+| Design & Architecture | [25](screenshots/25-design-architecture.png) | | |
+
+![Design & Architecture tab: document rail on the left, a rendered Mermaid diagram on the right](screenshots/25-design-architecture.png)
 
 ![Executive summary overlay with coverage counts and top threats](screenshots/17-executive-summary.png)
