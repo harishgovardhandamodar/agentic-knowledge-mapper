@@ -111,6 +111,12 @@ screenshot of a diagram that has since changed cannot be distinguished from a
 correct one, so the viewer renders the Markdown and hands the Mermaid to the
 same renderer the rest of the app uses.
 
+`mmRender()` runs every diagram through one app-wide queue, sequentially, never
+`Promise.all`. Mermaid measures label text in shared global state, so two
+`run()` calls in flight measure each other's labels: the losers come back too
+small and their text lands on neighbouring elements, differently on every load.
+If you are tempted to parallelise it for speed, re-read that sentence first.
+
 - **Rail** — the ten documents in reading order, grouped (Start here →
   Structure → Behaviour → User-facing → Privacy & assurance). Each row carries
   the question it answers and its diagram count, read from the file rather than

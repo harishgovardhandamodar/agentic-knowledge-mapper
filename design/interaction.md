@@ -14,7 +14,6 @@ understand about the whole system.
 
 ```mermaid
 sequenceDiagram
-    autonumber
     actor U as Browser
     participant API as FastAPI
     participant SESS as open_session dependency
@@ -41,7 +40,6 @@ sequenceDiagram
 
 ```mermaid
 sequenceDiagram
-    autonumber
     actor R as Researcher
     participant UI as GUI
     participant API as main.py
@@ -73,7 +71,7 @@ sequenceDiagram
         Q->>SRCH: fan-out (ThreadPool ≤8): rss | arxiv | web
         SRCH-->>Q: candidates, deduped by url + title
         opt more than 3× max_items
-            Q->>Q: cheap keyword pre-rank (title×2 + desc×1)
+            Q->>Q: cheap keyword pre-rank<br/>(title×2 + desc×1)
         end
         loop batches of 5
             Q->>LLM: analyze(relevance, keep, tags, sentiment, projection, relates_to)
@@ -97,7 +95,6 @@ sequenceDiagram
 
 ```mermaid
 sequenceDiagram
-    autonumber
     actor R as Researcher
     participant UI as GUI
     participant API as main.py
@@ -118,7 +115,7 @@ sequenceDiagram
     end
     EX->>DB: graph artifacts (Jaccard-ranked) + corpus cache hits
     alt the graph already answers it
-        EX->>EX: coverage full → web_skipped = true
+        EX->>EX: coverage full<br/>→ web_skipped = true
     else partial or missing
         EX->>SRCH: search + fetch ≤ max_pages
         EX->>DB: CorpusPage rows (unique per investigation+url)
@@ -126,7 +123,7 @@ sequenceDiagram
     EX->>LLM: compose (mode/depth/audience rules, section plan)
     LLM-->>EX: sections + claims + citations
     EX->>WG: audit_answer(question, answer, pages, brief, section_plan)
-    WG->>WG: audit → repair (≤2) → strip → drift gate
+    WG->>WG: audit → repair (≤2)<br/>→ strip → drift gate
     WG-->>EX: report — answer["sections"] may shrink, never grow
     EX->>GRD: verify_grounding(claims, sources)
     GRD-->>EX: surviving citations + grounding_violations count
@@ -136,7 +133,7 @@ sequenceDiagram
     end
     EX->>LLM: critique pass (adversarial claim review)
     LLM-->>EX: SUPPORTED / UNCERTAIN verdicts
-    EX->>EX: diagram: mermaid, validated or dropped
+    EX->>EX: diagram: mermaid,<br/>validated or dropped
     opt root + auto_save_explanations
         EX->>DB: save concepts + relationships to the graph
     end
@@ -150,7 +147,6 @@ sequenceDiagram
 
 ```mermaid
 sequenceDiagram
-    autonumber
     actor R as Researcher
     participant UI as Security tab
     participant API as main.py
@@ -216,7 +212,6 @@ sequenceDiagram
 
 ```mermaid
 sequenceDiagram
-    autonumber
     actor R as Researcher
     participant UI as Manager tab
     participant API as main.py
@@ -230,7 +225,7 @@ sequenceDiagram
     API->>MGR: parse_command
     MGR->>LLM: split into {domain, exposure, topics[], summary}
     alt model unavailable or plan invalid
-        MGR->>MGR: deterministic splitter (slashes, semicolons, lines, "especially X")
+        MGR->>MGR: deterministic splitter<br/>(slashes, semicolons, lines,<br/>"especially X")
     end
     MGR-->>UI: plan + which path served it (no side effects)
     R->>UI: uncheck a topic, set per-topic exposure, adjust launchers
@@ -268,7 +263,6 @@ sequenceDiagram
 
 ```mermaid
 sequenceDiagram
-    autonumber
     participant API as main.py
     participant JQ as jobqueue.py
     participant DB as SQLite
@@ -299,7 +293,6 @@ sequenceDiagram
 
 ```mermaid
 sequenceDiagram
-    autonumber
     actor A as Auditor / Researcher
     participant UI as Audit ledger tab
     participant API as ledger_api.py
@@ -332,7 +325,6 @@ sequenceDiagram
 
 ```mermaid
 sequenceDiagram
-    autonumber
     actor R as Researcher
     participant UI as GUI
     participant API as main.py
@@ -356,7 +348,6 @@ sequenceDiagram
 
 ```mermaid
 sequenceDiagram
-    autonumber
     participant UI as Security tab
     participant API as standards_matrix.py
     participant SD as standards dashboard :5173
@@ -364,12 +355,12 @@ sequenceDiagram
     participant BR as fox-services broker
     participant W as target page
     UI->>API: GET /api/standards/score-matrix?assessment_id=
-    API->>API: is a cached copy still fresh? (STANDARDS_CACHE_TTL_S)
+    API->>API: is a cached copy still fresh?<br/>(STANDARDS_CACHE_TTL_S)
     alt stale
         API->>SD: GET data.json over the compose network
         SD-->>API: 34 frameworks × 10 pillars
     end
-    API->>API: relevance = token overlap of the assessment's threats, controls,<br/>cited standards and exploit classes against each framework
+    API->>API: relevance = token overlap<br/>of the assessment's threats, controls,<br/>cited standards and exploit classes<br/>against each framework
     API-->>UI: ranked rows + matched tokens (no-store: it is per assessment)
     Note over API,SD: 404 unknown assessment · 503 unreachable dashboard, with the reason<br/>UI->>OS: fetch_url(url)<br/>OS->>BR: POST /api/openshell/exec (curl inside the managed sandbox)
     alt broker answers
@@ -388,7 +379,6 @@ sequenceDiagram
 
 ```mermaid
 sequenceDiagram
-    autonumber
     participant A as agent.py end-of-run, or the GUI button
     participant API as main.py
     participant CVE as cve.py
@@ -422,7 +412,6 @@ sequenceDiagram
 
 ```mermaid
 sequenceDiagram
-    autonumber
     participant S as scheduler (10-min tick)
     participant EX as explainer.py
     participant DR as drift.py
@@ -443,7 +432,6 @@ sequenceDiagram
 
 ```mermaid
 sequenceDiagram
-    autonumber
     participant C as llm.chat()
     participant P as primary base
     participant F as fallback base
@@ -463,7 +451,7 @@ sequenceDiagram
     end
     alt every path failed
         H-->>Caller: LLMError
-        Caller->>Caller: deterministic fallback<br/>(keyword pre-rank · template prose · split topics)
+        Caller->>Caller: deterministic fallback<br/>(keyword pre-rank ·<br/>template prose · split topics)
     end
     Note over C,Caller: the audit record names the model that ACTUALLY served the call,<br/>plus tokens, latency and the gateway proof id
 

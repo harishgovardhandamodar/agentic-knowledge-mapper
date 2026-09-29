@@ -2577,25 +2577,35 @@ function mmFixContrast(root) {
   return { checked, fixed };
 }
 
+/* Mermaid measures label text in shared global state, so two run() calls in
+   flight at once measure each other's labels: the losers come back too small,
+   their nodes are drawn too tight, and the text lands on its neighbours. The
+   symptom is diagrams that overlap differently on every load -- which is why
+   it looked like "a few diagrams" rather than all of them. Every render in the
+   app (this tab, the explainer article, the security pane) goes through this
+   one queue, so runs never interleave no matter who asked. Slower than
+   Promise.all by design; correctness first. */
+let mmQueue = Promise.resolve();
 function mmRender(nodes) {
   const list = [...nodes].filter(Boolean);
-  if (!list.length || !window.mermaid) return;
+  if (!list.length || !window.mermaid) return Promise.resolve();
   try {
     window.mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme: 'base', themeVariables: mmTheme() });
   } catch (e) { console.warn('mermaid init failed', e); }
-  return Promise.all(list.map(node => {
-    const src = node.dataset && node.dataset.src;
-    if (src && node.querySelector('svg')) node.textContent = src;
-    return window.mermaid.run({ nodes: [node], suppressErrors: true });
-  })).then(() => {
-    list.forEach(node => {
+  const job = mmQueue.then(async () => {
+    for (const node of list) {
+      const src = node.dataset && node.dataset.src;
+      if (src && node.querySelector('svg')) node.textContent = src;
+      await window.mermaid.run({ nodes: [node], suppressErrors: true });
       const svg = node.querySelector('svg');
       if (svg) {
         const r = mmFixContrast(svg);
         if (r.fixed) console.info(`mermaid: recoloured ${r.fixed}/${r.checked} labels for contrast`);
       }
-    });
+    }
   }).catch(e => console.warn('mermaid render failed', e));
+  mmQueue = job.catch(() => {});   // a failed job must not wedge the queue
+  return job;
 }
 
 function mmLoad(run) {
