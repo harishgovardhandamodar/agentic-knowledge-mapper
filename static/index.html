@@ -5374,10 +5374,11 @@ async function mgrRun() {
   const plan = { ...mgrPlan, topics: keep, exposure: document.getElementById('mgrExposure').value };
   const options = { research: document.getElementById('mgrOptResearch').checked, assessment: document.getElementById('mgrOptAssess').checked };
   if (!options.research && !options.assessment) { showNotif('Launch at least one run type', 'error'); return; }
+  const command = document.getElementById('mgrCommand').value.trim();
   try {
     const r = await fetch(`${API}/manager/run`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ plan, options }),
+      body: JSON.stringify({ plan, options, command }),
     });
     const d = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error((d && typeof d.detail === 'string') ? d.detail : `HTTP ${r.status}`);

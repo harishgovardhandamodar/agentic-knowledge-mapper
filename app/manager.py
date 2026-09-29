@@ -212,13 +212,14 @@ def _run_row(db, run) -> dict[str, Any]:
             "all_done": all_done, "compiled": compiled}
 
 
-def run_plan(db, plan: dict[str, Any], options: dict[str, Any] | None = None) -> dict[str, Any]:
+def run_plan(db, plan: dict[str, Any], options: dict[str, Any] | None = None,
+             command: str = "") -> dict[str, Any]:
     """Create investigations, launch research + assessments, link a summary."""
     from .models import ManagerRun
     plan = validate_plan(plan)
     options = {"research": True, "assessment": True, **(options or {})}
     plan["options"] = options
-    run = ManagerRun(command=plan.get("command") or "",
+    run = ManagerRun(command=command or plan.get("command") or "",
                      plan_json=json.dumps(plan), status="running")
     db.add(run)
     db.commit()

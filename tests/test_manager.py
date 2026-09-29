@@ -146,6 +146,16 @@ class TestRunPlan(unittest.TestCase):
         self.assertEqual(params["exposure"], "confidential_data")
         self.assertIn("manager run", la.call_args[1]["requested_by"])
 
+    def test_run_records_the_command(self):
+        db = _db()
+        try:
+            with mock.patch.object(mgr, "launch_run"), \
+                 mock.patch.object(mgr, "launch_security_assessment"):
+                row = mgr.run_plan(db, _plan(1), None, "Do the thing")
+            self.assertEqual(row["command"], "Do the thing")
+        finally:
+            db.close()
+
 
 class TestStatuses(unittest.TestCase):
     def _mk_run(self, n=1):
@@ -511,8 +521,11 @@ class TestManagerRoutes(unittest.TestCase):
     def test_run_lists_and_compiles(self):
         with mock.patch.object(mgr, "launch_run"), \
              mock.patch.object(mgr, "launch_security_assessment"):
-            r = self.client.post("/api/manager/run", json={"plan": _plan(1)})
+            r = self.client.post("/api/manager/run",
+                                 json={"plan": _plan(1),
+                                       "command": "Do the thing"})
         self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(r.json()["command"], "Do the thing")
         rid = r.json()["id"]
         r = self.client.get("/api/manager/runs")
         self.assertEqual(r.status_code, 200)

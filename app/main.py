@@ -1643,6 +1643,7 @@ class ManagerParseRequest(BaseModel):
 class ManagerRunRequest(BaseModel):
     plan: dict = {}
     options: dict = {}
+    command: str = ""
 
 
 @app.post("/api/manager/parse")
@@ -1662,7 +1663,7 @@ def manager_run(data: ManagerRunRequest, db: Session = Depends(get_db)):
     """Serve a confirmed plan: N investigations + launches + summary shell."""
     try:
         return manager_mod.run_plan(db, data.plan or {},
-                                    data.options or {})
+                                    data.options or {}, data.command or "")
     except ValueError as e:
         raise HTTPException(422, str(e))
 
