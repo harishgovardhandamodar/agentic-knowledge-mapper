@@ -26,6 +26,7 @@ from .agent import launch_run, launch_run_with_goal
 from . import security_agent
 from . import security as sec_engine
 from . import standards_matrix
+from . import manager as manager_mod
 from .explainer import (launch_explanation, _extract_concepts, MODES,
                         DEPTH_PLAN, AUDIENCE_HINTS, _question_suggestions,
                         _quiz_from_answer, _save_explanation_to_graph,
@@ -1633,6 +1634,69 @@ def get_security_assessment(assessment_id: int, db: Session = Depends(get_db)):
     if not rec:
         raise HTTPException(404, "Assessment not found")
     return _security_json(rec)
+
+
+class ManagerParseRequest(BaseModel):
+    command: str = ""
+
+
+class ManagerRunRequest(BaseModel):
+    plan: dict = {}
+    options: dict = {}
+
+
+@app.post("/api/manager/parse")
+def manager_parse(data: ManagerParseRequest):
+    """Understand a command: LLM plan first, heuristic splitter on failure.
+
+    No side effects. The returned plan is a preview for the Run step.
+    """
+    try:
+        return manager_mod.parse_command(data.command or "")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/manager/run")
+def manager_run(data: ManagerRunRequest, db: Session = Depends(get_db)):
+    """Serve a confirmed plan: N investigations + launches + summary shell."""
+    try:
+        return manager_mod.run_plan(db, data.plan or {},
+                                    data.options or {})
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+
+
+@app.get("/api/manager/runs")
+def manager_runs(limit: int = 20, db: Session = Depends(get_db)):
+    """Manager runs, newest first, with live child statuses derived on read."""
+    from .models import ManagerRun
+    recs = (db.query(ManagerRun).order_by(ManagerRun.id.desc())
+            .limit(max(1, min(limit, 100))).all())
+    return {"runs": [manager_mod._run_row(db, r) for r in recs]}
+
+
+@app.get("/api/manager/runs/{run_id}")
+def manager_run_detail(run_id: int, db: Session = Depends(get_db)):
+    from .models import ManagerRun
+    rec = db.query(ManagerRun).filter(ManagerRun.id == run_id).first()
+    if rec is None:
+        raise HTTPException(404, "Manager run not found")
+    return manager_mod._run_row(db, rec)
+
+
+@app.post("/api/manager/runs/{run_id}/compile")
+def manager_compile(run_id: int, db: Session = Depends(get_db)):
+    """Synthesize finished children into the summary investigation.
+
+    409 while anything still runs; idempotent once compiled.
+    """
+    try:
+        return manager_mod.compile_run(db, run_id)
+    except LookupError:
+        raise HTTPException(404, "Manager run not found")
+    except manager_mod.PendingChildren as e:
+        raise HTTPException(409, {"pending": e.pending})
 
 
 @app.get("/api/security/assessments/{assessment_id}/markdown")

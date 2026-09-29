@@ -43,6 +43,22 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 #securityPane.visible { display: flex; flex-direction: column; }
 #standardsPane { grid-column: 1 / -1; min-height: 0; overflow: auto; display: none; }
 #standardsPane.visible { display: flex; flex-direction: column; }
+#managerPane { grid-column: 1 / -1; min-height: 0; overflow: hidden; display: none; }
+#managerPane.visible { display: flex; flex-direction: column; }
+#mgrWrap { padding: 14px 20px; overflow-y: auto; flex: 1 1 auto; min-height: 0; }
+#mgrWrap .sec-card { max-width: 1100px; }
+.mgr-topic { display: flex; gap: 8px; align-items: flex-start; padding: 7px 4px; border-bottom: 1px solid var(--border); font-size: 12.5px; }
+.mgr-topic:last-child { border-bottom: none; }
+.mgr-topic input[type="checkbox"] { margin-top: 3px; }
+.mgr-topic .grow { flex: 1; min-width: 0; }
+.mgr-child { display: flex; gap: 10px; align-items: center; padding: 7px 4px; border-bottom: 1px solid var(--border); font-size: 12px; flex-wrap: wrap; }
+.mgr-child:last-child { border-bottom: none; }
+.mgr-child .grow { flex: 1; min-width: 180px; }
+.mgr-pill { display: inline-block; font-size: 10px; font-weight: 700; border-radius: 9px; padding: 1px 8px; white-space: nowrap; }
+.mgr-pill.run { background: var(--bg3); color: var(--text2); }
+.mgr-pill.ready { background: rgba(88,166,255,0.14); color: var(--accent); }
+.mgr-pill.done { background: rgba(63,185,80,0.16); color: #3fb950; }
+.mgr-cmd { font-size: 12px; color: var(--text2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #standardsFrame { flex: 1 1 auto; min-height: 0; min-height: min(70vh, 600px); width: 100%; border: none; background: var(--bg); display: block; }
 .sidebar { background: var(--bg2); border-right: 1px solid var(--border); padding: 16px; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; }
 .llm-dot { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text2); }
@@ -619,6 +635,10 @@ body.pane-sec-top-collapsed .sec-topbar-sub { display: none; }
       <span class="app-tab-sub">assess · score · control</span>
       <span class="app-tab-badge" id="secTabBadge" style="display:none;"></span>
     </button>
+    <button class="app-tab" data-app="manager" onclick="switchApp('manager')" role="tab">
+      <i class="fas fa-robot"></i> Agentic Manager
+      <span class="app-tab-sub">command · fan-out · summary</span>
+    </button>
     <button class="app-tab" data-app="standards" onclick="switchApp('standards')" role="tab">
       <i class="fas fa-scale-balanced"></i> AI Standards &amp; Regulations
       <span class="app-tab-sub">frameworks · coverage · advisor</span>
@@ -904,6 +924,35 @@ body.pane-sec-top-collapsed .sec-topbar-sub { display: none; }
           <div id="secStdFindBar" hidden></div>
           <div id="secStdBody"></div>
           <div id="secStdFoot" class="std-note" style="margin-top:8px;"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div id="managerPane">
+    <div class="sec-shell">
+      <div class="sec-topbar">
+        <div>
+          <h2><i class="fas fa-robot"></i> Agentic Manager</h2>
+          <div class="sec-topbar-sub">One command fans out to investigations — research and security assessment each — plus a summary.</div>
+        </div>
+        <div class="sec-topbar-right">
+          <button class="btn btn-ghost btn-sm" onclick="mgrLoadRuns()"><i class="fas fa-rotate"></i> Refresh</button>
+        </div>
+      </div>
+      <div id="mgrWrap">
+        <div class="sec-card">
+          <div class="form-group"><label for="mgrCommand">Command</label><textarea id="mgrCommand" style="min-height:64px;" placeholder="Run detailed security investigations on AI agents in finance domain, especially agent-initiated payments / trade agents / DeFi agents / crypto trading"></textarea></div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+            <button class="btn btn-primary" id="mgrParseBtn" onclick="mgrParse()"><i class="fas fa-wand-magic-sparkles"></i> Understand</button>
+            <button class="btn btn-ghost btn-sm" onclick="mgrFillExample()">Try the finance example</button>
+          </div>
+        </div>
+        <div class="sec-card" id="mgrPlanCard" hidden>
+          <div id="mgrPlanBody"></div>
+        </div>
+        <div class="sec-card">
+          <div style="font-size:12px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text2);font-weight:600;margin-bottom:8px;">Runs <span id="mgrRunsCount" class="sec-subtab-n"></span></div>
+          <div id="mgrRuns"><p style="color:var(--text2);font-size:12px;">No manager runs yet — understand a command above to start one.</p></div>
         </div>
       </div>
     </div>
@@ -2980,10 +3029,15 @@ function fillSchedule(sched) {
 function onSearch() { if (currentInv) loadArtifacts(); }
 
 let currentApp = 'akm';
+/* Agentic Manager tab state. Lives here (not beside the mgr* functions):
+ * switchApp can run during initial evaluation on a #manager deep link. */
+let mgrPlan = null;
+let mgrRunsTimer = null;
 
 const APP_TITLES = {
   akm: 'Agentic Knowledge Mapper',
   security: 'AI Security',
+  manager: 'Agentic Manager',
   standards: 'AI Standards & Regulations',
 };
 
@@ -3009,12 +3063,15 @@ window.addEventListener('resize', () => { sizeStandardsFrame(); });
 function switchApp(app) {
   if (!APP_TITLES[app]) app = 'akm';
   currentApp = app;
+  if (app !== 'manager' && mgrRunsTimer) { clearInterval(mgrRunsTimer); mgrRunsTimer = null; }
   document.querySelectorAll('.app-tab').forEach(t => t.classList.toggle('active', t.dataset.app === app));
   const akm = document.getElementById('akmPane');
   const sec = document.getElementById('securityPane');
+  const mgr = document.getElementById('managerPane');
   const std = document.getElementById('standardsPane');
   akm.classList.toggle('hidden', app !== 'akm');
   sec.classList.toggle('visible', app === 'security');
+  if (mgr) mgr.classList.toggle('visible', app === 'manager');
   if (std) std.classList.toggle('visible', app === 'standards');
   document.getElementById('searchInput').style.display = (app === 'akm') ? '' : 'none';
   const title = document.getElementById('appTitle');
@@ -3026,6 +3083,8 @@ function switchApp(app) {
     if (!secControlCatalog.length) loadSecurityControls();
     if (!secAssessmentId) secLoadLatestForInvestigation();
     if (secPaneTab === 'standards') secLoadStandards();
+  } else if (app === 'manager') {
+    mgrLoadRuns();
   } else if (app === 'standards') {
     const frame = document.getElementById('standardsFrame');
     if (frame && !frame.src) frame.src = standardsUrl();
@@ -3870,7 +3929,7 @@ function togglePane(name) {
 
 loadPaneState();
 
-if (['#security', '#standards'].includes(location.hash)) switchApp(location.hash.slice(1));
+if (['#security', '#manager', '#standards'].includes(location.hash)) switchApp(location.hash.slice(1));
 
 async function loadSecurityControls() {
   const box = document.getElementById('secControls');
@@ -5232,6 +5291,150 @@ function secStdRender() {
 
   const badge = document.getElementById('secStdCount');
   if (badge) { badge.hidden = false; badge.textContent = String(scoped ? relCount : total); }
+}
+
+/* Agentic Manager tab ======================================================
+ * One command fans out to N investigations plus a summary. Parse previews
+ * the plan (LLM, heuristic fallback); Run creates everything and launches
+ * research + security assessment per topic; Compile synthesizes finished
+ * children into the summary investigation on demand. Statuses are derived
+ * live on every read, so polling is cheap and restarts are harmless.
+ */
+function mgrFillExample() {
+  document.getElementById('mgrCommand').value = 'Run detailed security investigations on AI agents in finance domain, especially agent-initiated payments / trade agents / DeFi agents / crypto trading';
+}
+
+async function mgrParse() {
+  const cmd = document.getElementById('mgrCommand').value.trim();
+  if (!cmd) { showNotif('Type a command first', 'error'); return; }
+  const btn = document.getElementById('mgrParseBtn');
+  btn.disabled = true;
+  try {
+    const r = await fetch(`${API}/manager/parse`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ command: cmd }),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error((d && typeof d.detail === 'string') ? d.detail : `HTTP ${r.status}`);
+    mgrPlan = d;
+    mgrRenderPlan();
+  } catch (e) { showNotif(`Could not understand that command: ${e.message}`, 'error'); }
+  btn.disabled = false;
+}
+
+function mgrRenderPlan() {
+  const card = document.getElementById('mgrPlanCard');
+  const body = document.getElementById('mgrPlanBody');
+  if (!mgrPlan) { card.hidden = true; body.innerHTML = ''; return; }
+  card.hidden = false;
+  const exps = ['restricted_data', 'confidential_data', 'internal', 'public'];
+  body.innerHTML =
+    `<div style="font-size:12px;color:var(--text2);margin-bottom:8px;">Understood` +
+    `${mgrPlan.parsed_by === 'heuristic' ? ' (offline heuristic — the model was unreachable)' : ''}` +
+    `${mgrPlan.truncated ? ` — truncated to ${mgrPlan.topics.length} topics` : ''}` +
+    `${mgrPlan.domain ? ` · domain: <strong>${escHtml(mgrPlan.domain)}</strong>` : ''}</div>` +
+    mgrPlan.topics.map((t, i) =>
+      `<label class="mgr-topic"><input type="checkbox" data-mgr-topic="${i}" checked />` +
+      `<span class="grow"><strong>${escHtml(t.title)}</strong><br/><span style="color:var(--text2);">${escHtml(t.description || '')}</span></span></label>`
+    ).join('') +
+    `<div class="std-filters" style="margin-top:10px;">` +
+    `<select id="mgrExposure" aria-label="Exposure">${exps.map(e => `<option value="${e}"${e === mgrPlan.exposure ? ' selected' : ''}>${e.replace(/_/g, ' ')}</option>`).join('')}</select>` +
+    `<label style="font-size:12px;display:flex;gap:6px;align-items:center;"><input type="checkbox" id="mgrOptResearch" checked /> Research run</label>` +
+    `<label style="font-size:12px;display:flex;gap:6px;align-items:center;"><input type="checkbox" id="mgrOptAssess" checked /> Security assessment</label>` +
+    `<button class="btn btn-primary btn-sm" onclick="mgrRun()"><i class="fas fa-play"></i> Run ${mgrPlan.topics.length} investigations + summary</button></div>` +
+    `<div class="std-note">Summary: <strong>${escHtml((mgrPlan.summary || {}).title || '')}</strong></div>`;
+}
+
+async function mgrRun() {
+  if (!mgrPlan) return;
+  const keep = mgrPlan.topics.filter((t, i) => {
+    const box = document.querySelector(`[data-mgr-topic="${i}"]`);
+    return box && box.checked;
+  });
+  if (!keep.length) { showNotif('Keep at least one topic', 'error'); return; }
+  const plan = { ...mgrPlan, topics: keep, exposure: document.getElementById('mgrExposure').value };
+  const options = { research: document.getElementById('mgrOptResearch').checked, assessment: document.getElementById('mgrOptAssess').checked };
+  if (!options.research && !options.assessment) { showNotif('Launch at least one run type', 'error'); return; }
+  try {
+    const r = await fetch(`${API}/manager/run`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ plan, options }),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error((d && typeof d.detail === 'string') ? d.detail : `HTTP ${r.status}`);
+    showNotif(`Manager run #${d.id}: ${keep.length} investigations + summary`, 'success');
+    mgrPlan = null;
+    mgrRenderPlan();
+    mgrLoadRuns();
+  } catch (e) { showNotif(`Could not start the run: ${e.message}`, 'error'); }
+}
+
+function mgrStatusPill(run) {
+  if (run.compiled) return '<span class="mgr-pill done">Compiled</span>';
+  if (run.all_done) return '<span class="mgr-pill ready">Ready to compile</span>';
+  return '<span class="mgr-pill run">Running…</span>';
+}
+
+async function mgrLoadRuns() {
+  const box = document.getElementById('mgrRuns');
+  try {
+    const r = await fetch(`${API}/manager/runs?limit=20`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const d = await r.json();
+    mgrRenderRuns(d.runs || []);
+  } catch (e) {
+    box.innerHTML = `<p style="color:var(--text2);font-size:12px;">Could not load runs: ${escHtml(e.message)}</p>`;
+  }
+}
+
+function mgrRenderRuns(runs) {
+  const box = document.getElementById('mgrRuns');
+  document.getElementById('mgrRunsCount').textContent = runs.length ? String(runs.length) : '';
+  if (!runs.length) {
+    box.innerHTML = '<p style="color:var(--text2);font-size:12px;">No manager runs yet — understand a command above to start one.</p>';
+  } else {
+    box.innerHTML = runs.map(run => {
+      const kids = (run.children || []).map(c => {
+        const res = c.research || {};
+        const a = c.assessment;
+        const aTxt = a ? `#${a.id}${a.residual_pct != null ? ' ' + a.residual_pct + '/100' : ''}` : '—';
+        return `<div class="mgr-child"><span class="grow"><strong>${escHtml(c.title || '')}</strong><br/>` +
+          `<a href="#" onclick="mgrOpenInv(${c.investigation_id});return false;">Investigation #${c.investigation_id} (${escHtml(c.investigation_status || '?')})</a>` +
+          ` · research: ${res.runs || 0} run(s)${res.done ? ' done' : ''}` +
+          ` · assessment: ${escHtml(aTxt)}${c.assessment_done ? ' done' : ''}</span>` +
+          (c.done ? '<span class="mgr-pill done">done</span>' : '<span class="mgr-pill run">running</span>') + '</div>';
+      }).join('');
+      const canCompile = run.all_done && !run.compiled;
+      return `<div style="border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:10px;">` +
+        `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:6px;">` +
+        `<strong>Run #${run.id}</strong>${mgrStatusPill(run)}` +
+        `<span class="mgr-cmd">${escHtml(run.command || '')}</span></div>` +
+        kids +
+        `<div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;">` +
+        (run.summary_investigation_id ? `<button class="btn btn-ghost btn-sm" onclick="mgrOpenInv(${run.summary_investigation_id})"><i class="fas fa-book-open"></i> Summary #${run.summary_investigation_id}</button>` : '') +
+        `<button class="btn btn-primary btn-sm"${canCompile ? '' : ' disabled'} onclick="mgrCompile(${run.id})" title="${canCompile ? 'Synthesize finished children into the summary' : (run.compiled ? 'Already compiled' : 'Waiting for children to finish')}"><i class="fas fa-clipboard-check"></i> Compile summary</button></div></div>`;
+    }).join('');
+  }
+  const needPoll = runs.some(r => !r.all_done && !r.compiled);
+  if (needPoll && !mgrRunsTimer) mgrRunsTimer = setInterval(mgrLoadRuns, 5000);
+  if (!needPoll && mgrRunsTimer) { clearInterval(mgrRunsTimer); mgrRunsTimer = null; }
+}
+
+async function mgrCompile(id) {
+  try {
+    const r = await fetch(`${API}/manager/runs/${id}/compile`, { method: 'POST' });
+    const d = await r.json().catch(() => ({}));
+    if (r.status === 409) throw new Error('Still running: ' + (((d.detail || {}).pending) || []).join(', '));
+    if (!r.ok) throw new Error((d && typeof d.detail === 'string') ? d.detail : `HTTP ${r.status}`);
+    showNotif(`Summary compiled (artifact #${d.artifact_id})`, 'success');
+    mgrLoadRuns();
+  } catch (e) { showNotif(`Could not compile: ${e.message}`, 'error'); }
+}
+
+function mgrOpenInv(id) {
+  if (!id) return;
+  selectInvestigation(Number(id));
+  switchApp('akm');
 }
 
 async function loadSecurityById(id) {

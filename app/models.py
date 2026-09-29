@@ -239,6 +239,26 @@ class SecurityAssessment(Base):
     created_at = Column(DateTime, default=_now)
 
 
+class ManagerRun(Base):
+    """Agentic Manager fan-out: one command -> N investigations + a summary.
+
+    Children statuses are derived live from their own tables on every read;
+    this row only anchors the command, the validated plan, and the summary
+    investigation. ``status`` moves running -> compiled when the summary
+    compiles; readiness itself is derived, never written by a watcher.
+    """
+    __tablename__ = "manager_runs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    command = Column(Text, nullable=False, default="")
+    plan_json = Column(Text, nullable=False, default="{}")
+    status = Column(String(20), nullable=False, default="running")
+    summary_investigation_id = Column(Integer, ForeignKey("investigations.id", ondelete="SET NULL"),
+                                      nullable=True)
+    created_at = Column(DateTime, default=_now)
+    updated_at = Column(DateTime, default=_now, onupdate=_now)
+
+
 class QueryShapeYield(Base):
     """What one *shape* of search query has cost and returned, per investigation.
 

@@ -141,6 +141,15 @@ selectable standards side by side. See [docs/standards-coverage.md](docs/standar
 Live stage-colored event log, search plan, and run stats while the agent
 works.
 
+### Agentic Manager
+
+One command fans out to N investigations plus a summary: the Manager tab
+understands "run detailed security investigations on AI agents in finance
+domain, especially payments / trade / DeFi / crypto", creates one
+investigation per topic with research and security assessment launched on
+each, and compiles the finished children into a summary investigation on
+demand. See [docs/agentic-manager.md](docs/agentic-manager.md).
+
 GUI map and flows: [frontend](docs/frontend.md).
 
 ## Proofs
