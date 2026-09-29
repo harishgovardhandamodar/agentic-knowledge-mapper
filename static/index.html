@@ -77,6 +77,15 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .mgr-ev .mgr-dot.active { color: var(--accent); }
 .mgr-evbody { min-width: 0; }
 .mgr-evbody a { color: var(--accent); }
+.md-table { border-collapse: collapse; width: 100%; margin: 8px 0; font-size: 12px; }
+.md-table th, .md-table td { border: 1px solid var(--border); padding: 5px 9px; text-align: left; vertical-align: top; }
+.md-table thead th { background: var(--bg3); font-size: 11px; text-transform: uppercase; letter-spacing: 0.3px; }
+.mgr-md h3 { font-size: 13.5px; margin: 12px 0 6px; }
+.mgr-md h4 { font-size: 12.5px; margin: 10px 0 5px; }
+.mgr-md ul { margin: 6px 0; padding-left: 22px; font-size: 12.5px; }
+.mgr-md p { font-size: 12.5px; margin: 6px 0; }
+.mgr-md pre { background: var(--bg3); border-radius: 6px; padding: 8px 10px; overflow-x: auto; font-size: 11.5px; }
+.mgr-md code { background: var(--bg3); border-radius: 4px; padding: 0 5px; font-size: 11.5px; }
 #standardsFrame { flex: 1 1 auto; min-height: 0; min-height: min(70vh, 600px); width: 100%; border: none; background: var(--bg); display: block; }
 .sidebar { background: var(--bg2); border-right: 1px solid var(--border); padding: 16px; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; }
 .llm-dot { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text2); }
@@ -1519,7 +1528,9 @@ async function openDetailOverlay(id) {
         ${detail.source ? `<span style="display:inline-block;margin-left:8px;font-size:11px;color:var(--text2);">via ${detail.source}</span>` : ''}</div>`;
     }
     if (detail.content) {
-      html += `<div class="overlay-section"><h4><i class="fas fa-file-alt"></i> Full Summary</h4><p style="font-size:12px;white-space:pre-wrap;">${detail.content}</p></div>`;
+      const isSynthesis = (detail.tags || '').split(',').some(t => t.trim() === 'manager-synthesis');
+      html += `<div class="overlay-section"><h4><i class="fas fa-file-alt"></i> Full Summary</h4>` +
+        (isSynthesis ? renderMiniMarkdown(detail.content) : `<p style="font-size:12px;white-space:pre-wrap;">${detail.content}</p>`) + '</div>';
     }
     if (detail.tags) {
       html += `<div class="overlay-section"><h4><i class="fas fa-tags"></i> Tags</h4><div>${detail.tags.split(',').map(t => `<span class="tag">${t.trim()}</span>`).join('')}</div></div>`;
@@ -3052,6 +3063,8 @@ let currentApp = 'akm';
 let mgrPlan = null;
 let mgrRunsTimer = null;
 let mgrFlowOpen = [];
+let mgrSummaryCache = {};
+let mgrSummaryOpen = [];
 
 const APP_TITLES = {
   akm: 'Agentic Knowledge Mapper',
@@ -5432,15 +5445,21 @@ function mgrRenderRuns(runs) {
         kids +
         `<div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;">` +
         (run.summary_investigation_id ? `<button class="btn btn-ghost btn-sm" onclick="mgrOpenInv(${run.summary_investigation_id})"><i class="fas fa-book-open"></i> Summary #${run.summary_investigation_id}</button>` : '') +
+        (run.compiled && run.synthesis_artifact_id ? `<button class="btn btn-ghost btn-sm" data-mgr-sumbtn="${run.id}" onclick="mgrToggleSummary(${run.id}, ${run.synthesis_artifact_id})"><i class="fas fa-eye"></i> View summary</button>` : '') +
         `<button class="std-viewbtn${mgrFlowOpen.includes(run.id) ? ' on' : ''}" data-mgr-flowbtn="${run.id}" onclick="mgrToggleFlow(${run.id})">Flow</button>` +
         `<button class="btn btn-primary btn-sm"${canCompile ? '' : ' disabled'} onclick="mgrCompile(${run.id})" title="${canCompile ? 'Synthesize finished children into the summary' : (run.compiled ? 'Already compiled' : 'Waiting for children to finish')}"><i class="fas fa-clipboard-check"></i> Compile summary</button></div>` +
-      `<div id="mgrFlow-${run.id}"${mgrFlowOpen.includes(run.id) ? '' : ' hidden'}></div></div>`;
+      `<div id="mgrFlow-${run.id}"${mgrFlowOpen.includes(run.id) ? '' : ' hidden'}></div>` +
+      `<div id="mgrSummary-${run.id}" hidden></div></div>`;
     }).join('');
   }
   const needPoll = runs.some(r => !r.all_done && !r.compiled);
   if (needPoll && !mgrRunsTimer) mgrRunsTimer = setInterval(mgrLoadRuns, 5000);
   if (!needPoll && mgrRunsTimer) { clearInterval(mgrRunsTimer); mgrRunsTimer = null; }
   mgrFlowOpen.forEach(id => mgrRefreshFlow(id));
+  const byId = {};
+  runs.forEach(r => { byId[r.id] = r; });
+  mgrSummaryOpen = mgrSummaryOpen.filter(id => byId[id] && byId[id].synthesis_artifact_id);
+  mgrSummaryOpen.forEach(id => mgrShowSummary(id, byId[id].synthesis_artifact_id));
 }
 
 async function mgrCompile(id) {
@@ -5454,10 +5473,111 @@ async function mgrCompile(id) {
   } catch (e) { showNotif(`Could not compile: ${e.message}`, 'error'); }
 }
 
+/* Mini markdown renderer (no dependency): the synthesis we store uses a
+ * fixed subset -- ##/### headers, pipe tables, - lists, fenced blocks,
+ * **bold**, `code`, [links]. Everything is HTML-escaped first, so stored
+ * content can never inject markup. Used by the manager summary view and
+ * the artifact overlay for synthesis artifacts.
+ */
+function renderMiniMarkdown(src) {
+  const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const inline = s => {
+    let t = esc(s);
+    t = t.replace(/`([^`]+)`/g, '<code>$1</code>');
+    t = t.replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+    t = t.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    return t;
+  };
+  const cells = l => {
+    let parts = l.split('|');
+    if (parts.length && parts[0].trim() === '') parts = parts.slice(1);
+    if (parts.length && parts[parts.length - 1].trim() === '') parts = parts.slice(0, -1);
+    return parts.map(c => c.trim());
+  };
+  const isSep = l => /-/.test(l) && /^\s*\|?[\s:|-]+\|[\s:|-]*\|?\s*$/.test(l);
+  const lines = String(src || '').replace(/\r\n/g, '\n').split('\n');
+  let html = '', i = 0, list = [];
+  const flushList = () => {
+    if (list.length) {
+      html += '<ul>' + list.map(x => `<li>${inline(x)}</li>`).join('') + '</ul>';
+      list = [];
+    }
+  };
+  while (i < lines.length) {
+    const t = lines[i].trim();
+    if (!t) { flushList(); i++; continue; }
+    if (t.startsWith('```')) {
+      const buf = [];
+      i++;
+      while (i < lines.length && !lines[i].trim().startsWith('```')) { buf.push(lines[i]); i++; }
+      i++;
+      flushList();
+      html += `<pre>${esc(buf.join('\n'))}</pre>`;
+      continue;
+    }
+    if (t.startsWith('### ')) { flushList(); html += `<h4>${inline(t.slice(4))}</h4>`; i++; continue; }
+    if (t.startsWith('## ')) { flushList(); html += `<h3>${inline(t.slice(3))}</h3>`; i++; continue; }
+    if (t.startsWith('# ')) { flushList(); html += `<h3>${inline(t.slice(2))}</h3>`; i++; continue; }
+    if (/^[-*]\s+/.test(t)) { list.push(t.replace(/^[-*]\s+/, '')); i++; continue; }
+    if (t.includes('|') && i + 1 < lines.length && isSep(lines[i + 1])) {
+      const head = cells(t);
+      const rows = [];
+      let j = i + 2;
+      while (j < lines.length && lines[j].trim().startsWith('|')) { rows.push(cells(lines[j])); j++; }
+      flushList();
+      html += '<table class="md-table"><thead><tr>' +
+        head.map(c => `<th>${inline(c)}</th>`).join('') + '</tr></thead><tbody>' +
+        rows.map(r => '<tr>' + r.map(c => `<td>${inline(c)}</td>`).join('') + '</tr>').join('') +
+        '</tbody></table>';
+      i = j;
+      continue;
+    }
+    flushList();
+    html += `<p>${inline(t)}</p>`;
+    i++;
+  }
+  flushList();
+  return `<div class="mgr-md">${html}</div>`;
+}
+
 function mgrOpenInv(id) {
   if (!id) return;
   selectInvestigation(Number(id));
   switchApp('akm');
+}
+
+async function mgrToggleSummary(runId, artifactId) {
+  const panel = document.getElementById('mgrSummary-' + runId);
+  if (!panel) return;
+  const i = mgrSummaryOpen.indexOf(runId);
+  if (!panel.hidden) {
+    panel.hidden = true;
+    if (i >= 0) mgrSummaryOpen.splice(i, 1);
+    return;
+  }
+  if (i < 0) mgrSummaryOpen.push(runId);
+  mgrShowSummary(runId, artifactId);
+}
+
+async function mgrShowSummary(runId, artifactId) {
+  const panel = document.getElementById('mgrSummary-' + runId);
+  if (!panel) return;
+  panel.hidden = false;
+  if (mgrSummaryCache[artifactId]) {
+    panel.innerHTML = renderMiniMarkdown(mgrSummaryCache[artifactId]);
+    return;
+  }
+  panel.innerHTML = '<p style="color:var(--text2);font-size:12px;">Loading summary…</p>';
+  try {
+    const r = await fetch(`${API}/artifacts/${artifactId}`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const d = await r.json();
+    mgrSummaryCache[artifactId] = d.content || '';
+    const live = document.getElementById('mgrSummary-' + runId);
+    if (live) live.innerHTML = renderMiniMarkdown(mgrSummaryCache[artifactId]);
+  } catch (e) {
+    panel.innerHTML = `<p style="color:var(--text2);font-size:12px;">Could not load summary: ${escHtml(e.message)}</p>`;
+  }
 }
 
 function mgrRel(ms) {

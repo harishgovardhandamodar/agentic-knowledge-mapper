@@ -198,6 +198,7 @@ def _run_row(db, run) -> dict[str, Any]:
             "done": done,
         })
     compiled = False
+    synthesis_artifact_id = None
     summary_id = run.summary_investigation_id
     if summary_id:
         synth = (db.query(Artifact)
@@ -205,9 +206,11 @@ def _run_row(db, run) -> dict[str, Any]:
                          Artifact.tags.like(f"%{SYNTH_TAG}%"))
                  .order_by(Artifact.id.desc()).first())
         compiled = synth is not None
+        synthesis_artifact_id = synth.id if synth is not None else None
     return {"id": run.id, "command": run.command, "status": run.status,
             "created_at": run.created_at.isoformat() if run.created_at else None,
             "summary_investigation_id": summary_id,
+            "synthesis_artifact_id": synthesis_artifact_id,
             "topics": topics, "children": children,
             "all_done": all_done, "compiled": compiled}
 

@@ -29,7 +29,11 @@ investigation.
    terminal, an LLM synthesis of the finished assessments (truncated briefs)
    is stored as a `manager-synthesis` artifact on the summary
    investigation, which flips to ready. 409 while anything still runs;
-   idempotent afterwards.
+   idempotent afterwards. The run card's **View summary** toggle renders
+   the synthesis -- deterministic top-risk/overlap/lapse tables plus prose
+   -- through a dependency-free markdown renderer; the same rendering
+   applies to synthesis artifacts opened in the mapper's detail overlay,
+   where other artifacts keep their plain-text view.
 
 Implementation: `app/manager.py`, `ManagerRun` model (new table, created by
 `create_all`), routes in `app/main.py`. Pinned in `tests/test_manager.py`

@@ -287,6 +287,8 @@ class TestCompile(unittest.TestCase):
             summ = db.query(Investigation).filter(
                 Investigation.id == first["summary_investigation_id"]).first()
             self.assertEqual(summ.status, "ready")
+            row = mgr._run_row(db, run)
+            self.assertEqual(row["synthesis_artifact_id"], first["artifact_id"])
             with mock.patch.object(mgr.llm, "chat") as mc2:
                 second = mgr.compile_run(db, rid)
             self.assertTrue(second["existing"])
