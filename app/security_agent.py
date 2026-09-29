@@ -221,6 +221,7 @@ def run_security_assessment(run_id: int, params: dict):
             controls_json=json.dumps({
                 "active_controls": result.get("active_controls", []),
                 "control_plan": result.get("control_plan", {}),
+                "openshell": result.get("openshell", {}),
             }),
             scoring_json=json.dumps(result.get("scoring", {})),
             perspectives_json=json.dumps(result.get("perspectives", [])),

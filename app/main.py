@@ -1322,6 +1322,7 @@ def _security_json(rec: SecurityAssessment) -> dict:
         "delta": scoring.get("delta"),
         "active_controls": ctl.get("active_controls", []),
         "control_plan": ctl.get("control_plan", {}),
+        "openshell": ctl.get("openshell", {}),
         "scoring": scoring,
         "perspectives": perspectives,
         "artifact_count": next(
@@ -1459,6 +1460,7 @@ def rescore_security_assessment(assessment_id: int, data: SecurityRescoreRequest
         rec.controls_json = json.dumps({
             "active_controls": result["active_controls"],
             "control_plan": ctl.get("control_plan", {}),
+            "openshell": ctl.get("openshell", {}),
         })
         rec.scoring_json = json.dumps(result)
         rec.threats_json = json.dumps(result["threats"])

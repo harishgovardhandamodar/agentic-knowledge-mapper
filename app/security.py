@@ -21,44 +21,70 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Iterable, Optional
 
+from . import openshell as _osh
+
 # ---------------------------------------------------------------- fetching ---
 
 _FETCH_TIMEOUT = 8
 
 
 def fetch_page_summary(url: str) -> dict[str, str]:
-    """Best-effort fetch of a product/doc URL. Never raises; returns summary."""
-    if not url or not url.strip():
-        return {"url": url or "", "title": "", "excerpt": "", "status": "skipped"}
-    url = url.strip()
-    try:
-        import requests
+    """Best-effort fetch of a product/doc URL. Never raises; returns summary.
 
-        resp = requests.get(
-            url,
-            timeout=_FETCH_TIMEOUT,
-            headers={"User-Agent": "PostAGI-SecurityAgent/1.0"},
-        )
-        ctype = resp.headers.get("content-type", "")
-        body = resp.text or ""
-        title = ""
-        m = re.search(r"<title[^>]*>(.*?)</title>", body, re.I | re.S)
-        if m:
-            title = re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", "", m.group(1)))).strip()[:200]
-        # crude text extraction
-        text = re.sub(r"<script.*?</script>", " ", body, flags=re.I | re.S)
-        text = re.sub(r"<style.*?</style>", " ", text, flags=re.I | re.S)
-        text = re.sub(r"<[^>]+>", " ", text)
-        text = html.unescape(text)
-        text = re.sub(r"\s+", " ", text).strip()
-        return {
-            "url": url,
-            "title": title,
-            "excerpt": text[:1500],
-            "status": f"fetched ({resp.status_code}, {ctype})",
-        }
-    except Exception as exc:  # offline / blocked / bad URL -> still assess
-        return {"url": url, "title": "", "excerpt": "", "status": f"unreachable: {exc}"}
+    Tries the OpenShell sandbox first (agent tool calls stay kernel-confined;
+    see app/openshell.py) and falls back to direct fetch. Either way the
+    ``sandbox`` flag records which path served the page, so the assessment
+    reports protection instead of assuming it.
+    """
+    if not url or not url.strip():
+        return {"url": url or "", "title": "", "excerpt": "", "status": "skipped",
+                "sandbox": False}
+    url = url.strip()
+    body: str | None = None
+    ctype = ""
+    status = ""
+    sandbox = False
+    try:
+        res = _osh.fetch_url(url, timeout=_FETCH_TIMEOUT)
+        if res["ok"]:
+            body = res["body"]
+            ctype = res["ctype"]
+            status = f"sandboxed ({res['status_code']}, {ctype})"
+            sandbox = True
+    except Exception:
+        pass
+    if body is None:
+        try:
+            import requests
+
+            resp = requests.get(
+                url,
+                timeout=_FETCH_TIMEOUT,
+                headers={"User-Agent": "PostAGI-SecurityAgent/1.0"},
+            )
+            ctype = resp.headers.get("content-type", "")
+            body = resp.text or ""
+            status = f"fetched ({resp.status_code}, {ctype})"
+        except Exception as exc:  # offline / blocked / bad URL -> still assess
+            return {"url": url, "title": "", "excerpt": "",
+                    "status": f"unreachable: {exc}", "sandbox": False}
+    title = ""
+    m = re.search(r"<title[^>]*>(.*?)</title>", body, re.I | re.S)
+    if m:
+        title = re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", "", m.group(1)))).strip()[:200]
+    # crude text extraction
+    text = re.sub(r"<script.*?</script>", " ", body, flags=re.I | re.S)
+    text = re.sub(r"<style.*?</style>", " ", text, flags=re.I | re.S)
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = html.unescape(text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return {
+        "url": url,
+        "title": title,
+        "excerpt": text[:1500],
+        "status": status,
+        "sandbox": sandbox,
+    }
 
 
 # ------------------------------------------------------------------ catalog ---
@@ -368,6 +394,36 @@ _CONTROL_CATALOG: list[dict[str, Any]] = [
         "efficacy": 0.50,
         "standard": "ISO 27001 A.5.18",
         "threats": {"T04": 1.0, "T09": 0.3},
+    },
+    {
+        "id": "C13",
+        "name": "Agent tool calls run in an OpenShell sandbox",
+        "description": "Product/doc fetches and agent tool execution run inside an "
+                       "OpenShell sandbox: kernel-confined filesystem and syscalls, "
+                       "so injected content cannot reach host files or credentials.",
+        "efficacy": 0.70,
+        "standard": "OpenShell policy: filesystem/process",
+        "threats": {"T05": 0.8, "T06": 0.5, "T10": 0.4},
+    },
+    {
+        "id": "C14",
+        "name": "Declarative egress allowlist (OpenShell network policy)",
+        "description": "The sandbox proxy allows only approved hosts and methods; "
+                       "everything else is denied at L7. Exfiltration needs an "
+                       "approved endpoint, which is where the DLP controls sit.",
+        "efficacy": 0.75,
+        "standard": "OpenShell policy: network egress",
+        "threats": {"T06": 0.9, "T07": 0.8, "T01": 0.5, "T02": 0.5},
+    },
+    {
+        "id": "C15",
+        "name": "Credential brokering — agents never hold secrets",
+        "description": "OpenShell providers inject credentials only into requests "
+                       "bound for approved endpoints; the agent context never "
+                       "contains keys, so leaked context leaks nothing usable.",
+        "efficacy": 0.70,
+        "standard": "OpenShell providers",
+        "threats": {"T07": 0.7, "T06": 0.6},
     },
 ]
 
@@ -1036,6 +1092,9 @@ def build_assessment(
         "posture": posture,
     })
 
+    osh_block = _osh.assessment_openshell_block(
+        pages, product_name or "Target product", exposure,
+        scoring["active_controls"])
     markdown = render_markdown(
         product_name=product_name or "Target product",
         product_url=product_url or "",
@@ -1058,6 +1117,7 @@ def build_assessment(
         exec_evidence_refs=a2a.get("exec_evidence_refs", []),
         exec_paragraph=a2a.get("exec_paragraph", ""),
         a2a_task_id=a2a.get("task_id", ""),
+        openshell=osh_block,
     )
     return {
         "product_name": product_name or "Target product",
@@ -1088,8 +1148,50 @@ def build_assessment(
         "exec_paragraph": a2a.get("exec_paragraph", ""),
         "a2a_trace": a2a.get("a2a_trace", []),
         "a2a_task_id": a2a.get("task_id", ""),
+        "openshell": osh_block,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
+
+
+def openshell_posture_lines(active_controls: list[str], pages: list[dict],
+                            osh: dict) -> list[str]:
+    """Report §5c body: which OpenShell controls hold and how pages fetched."""
+    os_active = [c for c in (active_controls or [])
+                 if c in _osh.OPENSHELL_CONTROLS]
+    out = []
+    if os_active:
+        names = {c["id"]: c["name"] for c in control_catalog()}
+        out.append("OpenShell controls in place: " +
+                   ", ".join(f"**{cid}** ({names.get(cid, '')})"
+                             for cid in os_active) + ".")
+    else:
+        out.append("None of the OpenShell controls (C13 sandbox, C14 egress "
+                   "allowlist, C15 credential brokering) are active, so the "
+                   "residual score above assumes agent tool calls run unsandboxed.")
+    if (osh or {}).get("sandbox_used"):
+        out.append(f"Product/doc fetches in this run: {osh.get('sandbox_pages', 0)} "
+                   f"of {len(pages or [])} executed inside a managed sandbox.")
+    else:
+        out.append("Product/doc fetches in this run executed direct: the OpenShell "
+                   "broker or gateway was unreachable, and the assessment records "
+                   "that instead of assuming protection.")
+    out.append("The generated sandbox policy is attached in the appendix; apply it "
+               "with `openshell policy set` and prove widenings with "
+               "`openshell policy prove` before trusting the C13-C15 efficacy above.")
+    return out
+
+
+def openshell_policy_lines(osh: dict) -> list[str]:
+    """Appendix block with the generated sandbox policy, if any."""
+    if not (osh or {}).get("policy_yaml"):
+        return []
+    return ["",
+            "### OpenShell sandbox policy (generated, policy v" +
+            f"{osh.get('policy_version', '1')})",
+            "",
+            "```yaml",
+            osh["policy_yaml"].rstrip(),
+            "```"]
 
 
 def render_markdown(**ctx: Any) -> str:
@@ -1310,6 +1412,12 @@ def render_markdown(**ctx: Any) -> str:
         A(f"| {c['id']} | {c['name']} | {c['efficacy']:.0%} | {tids} | "
           f"{c['standard']} | {mark} |")
     A("")
+    A("## 5c. OpenShell protection posture")
+    A("")
+    for line in openshell_posture_lines(active, ctx.get("pages") or [],
+                                        ctx.get("openshell") or {}):
+        A(line)
+    A("")
     proposed = plan.get("proposed_controls") or []
     if proposed:
         A("**Recommended additions** (highest marginal risk reduction first):")
@@ -1400,6 +1508,8 @@ def render_markdown(**ctx: Any) -> str:
           "threat-intel → report-writer (protocol a2a/1.0; full hop trace stored with the assessment).")
     A("- Note: diagrams render as Mermaid in the dashboard; the PDF embeds the same "
       "figures as vector drawings (Figures 1-3).")
+    for line in openshell_policy_lines(ctx.get("openshell") or {}):
+        A(line)
     A("")
     return "\n".join(L)
 

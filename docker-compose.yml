@@ -12,6 +12,12 @@ services:
       - LLM_MODEL=${LLM_MODEL:-qwen3.8:27b}
       - LLM_FALLBACK_MODEL=${LLM_FALLBACK_MODEL:-qwen3.8:27b}
       - LLM_TIMEOUT_S=${LLM_TIMEOUT_S:-180}
+      # OpenShell protection: agent tool fetches run inside a managed sandbox
+      # via the fox-services broker; unreachable broker/gateway degrades to
+      # direct fetch and the assessment records which path served each page.
+      - OPENSHELL_ENABLED=${OPENSHELL_ENABLED:-1}
+      - OPENSHELL_BROKER_URL=${OPENSHELL_BROKER_URL:-http://host.docker.internal:8210}
+      - OPENSHELL_TIMEOUT_S=${OPENSHELL_TIMEOUT_S:-25}
     volumes:
       - akm_data:/app/data
     extra_hosts:

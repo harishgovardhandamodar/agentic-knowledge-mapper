@@ -111,8 +111,30 @@ plus executive-summary bullets and paragraph.
 
 Export: Markdown download, PDF (reportlab, tables + headings), browser print.
 
-## Standards coverage sub-tab
+## OpenShell protection (C13-C15)
 
+Threat pack v2.0.0 adds three OpenShell controls: **C13** agent tool calls
+run in an OpenShell sandbox (kernel-confined FS/syscalls), **C14**
+declarative egress allowlist enforced at L7, **C15** credential brokering so
+agents never hold secrets. They score like any other control (efficacy ×
+threat weights) and appear in §5b automatically; §5c reports which are
+active and how the run's pages were fetched.
+
+Product/doc fetches try the managed sandbox first via the fox-services
+broker (`OPENSHELL_BROKER_URL`, default `http://host.docker.internal:8210`;
+`OPENSHELL_ENABLED=0` forces direct). The broker or gateway being down is
+not an error: the fetch falls back to direct and each page records
+`sandbox: true/false`, so the report states the protection instead of
+assuming it. `app/openshell.py` owns the broker client, the deterministic
+policy generator (egress = exactly the hosts the assessment fetched;
+restricted/confidential tiers require human review to widen), and the
+posture block stored in `controls_json["openshell"]` (survives rescore;
+exposed as `openshell` in the assessment JSON).
+
+Pinned in `tests/test_openshell.py`; pack expectations rebased in
+`app/evalkit.py` (`all-controls` residual 24.3 → 24.2).
+
+## Standards coverage sub-tab
 Beside Assessment, the agent pane has a Standards coverage sub-tab: the AI
 Standards & Regulations taxonomy (frameworks × 10 control pillars, 0|1|2)
 served by `GET /api/standards/score-matrix` from the dashboard's `data.json`

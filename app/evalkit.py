@@ -65,7 +65,7 @@ def cases() -> list[dict[str, Any]]:
               note="with nothing in place, residual equals inherent"),
         _case("all-controls",
               active=every,
-              expect={"residual_pct": 24.3, "posture_contains": "LOW"},
+              expect={"residual_pct": 24.2, "posture_contains": "LOW"},
               note="full control set: the floor, not zero -- see residual_floor"),
         _case("best-single-control",
               active=["C02"],

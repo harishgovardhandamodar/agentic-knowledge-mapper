@@ -35,7 +35,7 @@ from . import security as sec
 #: intentionally. Bump the patch for a wording fix, minor for a re-weighting,
 #: major for adding or removing threats or controls.
 PACK_ID = "akm-threat-pack"
-PACK_VERSION = "1.0.0"
+PACK_VERSION = "2.0.0"
 
 #: The external references the catalog encodes. Recorded so an assessment can be
 #: read against the revision it was scored with, and so re-basing the catalog
