@@ -1490,6 +1490,169 @@ def _investigation_roadmap(db, inv_id: int) -> list:
     return items[:30]
 
 
+# Coverage bar for a gap: an artifact supports a gap when a third of the
+# gap's tokens show up in its title/tags/description. Deliberately looser
+# than the suggestion strip -- here a miss only misorders research, while
+# there it would display drift as a recommendation.
+GAP_SUPPORT_OVERLAP = 0.3
+
+
+def investigation_gaps(db, inv_id: int) -> dict:
+    """Open questions ranked by how little supports them, plus novel areas.
+
+    Coverage counts come from the investigation's own artifacts; a gap with
+    no supporting artifact is novel -- untouched ground, not a dead end.
+    Novel areas are tag tokens frequent in artifacts but absent from every
+    asked explanation question: directions the collection already hints at
+    that nobody has asked about yet.
+    """
+    roadmap = _investigation_roadmap(db, inv_id)
+    arts = db.query(Artifact).filter(
+        Artifact.investigation_id == inv_id).all()
+    art_toks = []
+    for a in arts:
+        art_toks.append(_tok(" ".join([a.title or "", a.tags or "",
+                                       a.description or ""])))
+    gaps = []
+    for it in roadmap:
+        gw = _tok(it["question"])
+        supporting = sum(1 for at in art_toks if _overlap(gw, at) >= GAP_SUPPORT_OVERLAP)
+        gaps.append({"question": it["question"], "kinds": it["kinds"],
+                     "exps": it["exps"], "supporting": supporting,
+                     "novel": supporting == 0})
+    gaps.sort(key=lambda g: (not g["novel"], g["supporting"],
+                             -len(g["exps"]), g["question"]))
+
+    asked = set()
+    for e in db.query(Explanation).filter(
+            Explanation.investigation_id == inv_id).all():
+        asked |= _tok(e.question or "")
+    tag_df: dict[str, int] = {}
+    for a in arts:
+        for t in set(_tok(a.tags or "")):
+            tag_df[t] = tag_df.get(t, 0) + 1
+    novel_areas = sorted(
+        ((t, c) for t, c in tag_df.items() if t not in asked),
+        key=lambda x: (-x[1], x[0]))[:6]
+    return {"gaps": gaps,
+            "novel_areas": [{"topic": t, "artifacts": c}
+                            for t, c in novel_areas]}
+
+
+def launch_gap_research(db, inv_id: int, top_n: int = 3,
+                        max_items: int = 12) -> dict:
+    """Fetch more research -- papers first -- on the least-covered gaps.
+
+    Builds a goal from the top uncovered gaps and launches a goal-directed
+    run. The planner routes paper-shaped queries to arXiv on its own; the
+    goal text steers it there explicitly. Returns the gaps it used plus the
+    run, or launched None when there is nothing open to research.
+    """
+    from .agent import launch_run_with_goal
+    ranked = investigation_gaps(db, inv_id)
+    gaps = ranked["gaps"][:max(1, min(top_n, 5))]
+    if not gaps:
+        return {"gaps": [], "novel_areas": ranked["novel_areas"],
+                "launched": None,
+                "message": "No open gaps -- run the agent first."}
+    lines = "\n".join(f"{i + 1}. {g['question']}" for i, g in enumerate(gaps))
+    goal = ("Find recent papers, preprints and surveys addressing these open "
+            f"gaps, preferring primary sources:\n{lines}")
+    run_id = launch_run_with_goal(inv_id, goal, max_items=max_items,
+                                  max_rounds=1, trigger="research_gaps")
+    return {"gaps": gaps, "novel_areas": ranked["novel_areas"],
+            "launched": {"run_id": run_id, "goal": goal},
+            "message": f"Research launched on {len(gaps)} open gaps."}
+
+
+SUMMARY_LLM_TIMEOUT_S = 45
+_SUMMARY_POOL = ThreadPoolExecutor(max_workers=2,
+                                   thread_name_prefix="inv-summary")
+
+
+def investigation_summary(db, inv_id: int) -> dict:
+    """Executive summary of an investigation: prose plus the artifacts and
+    findings behind it. The prose prefers the model and falls back to a
+    deterministic brief, so the overlay never comes back empty; the lists
+    are always deterministic."""
+    from .models import CveFinding
+    inv = db.query(Investigation).filter(Investigation.id == inv_id).first()
+    if inv is None:
+        raise LookupError("investigation not found")
+    arts = db.query(Artifact).filter(
+        Artifact.investigation_id == inv_id).all()
+    papers = [a for a in arts if a.artifact_type == "paper"]
+    top_artifacts = sorted(
+        arts, key=lambda a: ((a.review or "") == "accepted",
+                             a.relevance or 0, a.id or 0),
+        reverse=True)[:8]
+    asmt = db.query(SecurityAssessment).filter(
+        SecurityAssessment.investigation_id == inv_id).order_by(
+        SecurityAssessment.id.desc()).first()
+    threats: list[dict] = []
+    stored: list = []
+    if asmt is not None:
+        try:
+            stored = json.loads(asmt.threats_json or "[]") or []
+        except Exception:
+            stored = []
+        for t in sorted(stored,
+                        key=lambda x: -(x.get("residual_score") or 0))[:3]:
+            threats.append({"id": t.get("id"), "title": t.get("title"),
+                            "severity": t.get("residual_severity"),
+                            "residual": t.get("residual_score")})
+    exps = db.query(Explanation).filter(
+        Explanation.investigation_id == inv_id,
+        Explanation.status == "done").order_by(Explanation.id.desc()).limit(3).all()
+    cves = db.query(CveFinding).filter(
+        CveFinding.investigation_id == inv_id).count()
+    counts = {"artifacts": len(arts), "papers": len(papers), "cves": cves,
+              "threats": len(stored),
+              "explanations": db.query(Explanation).filter(
+                  Explanation.investigation_id == inv_id).count(),
+              "assessments": 1 if asmt is not None else 0}
+    facts = (f"{inv.title or 'Untitled'}: {counts['artifacts']} artifacts "
+             f"({counts['papers']} papers), "
+             f"{'residual ' + str(asmt.residual_pct) + '/100' if asmt is not None else 'no assessment yet'}"
+             f"{'; top threats: ' + ', '.join(t['id'] + ' ' + (t['title'] or '') for t in threats) if threats else ''}"
+             f"{'; recent answers: ' + ' | '.join((e.question or '')[:90] for e in exps) if exps else ''}.")
+    synthesis, source = facts, "deterministic"
+    try:
+        # Bounded: a hanging model must not stall the overlay past this.
+        # The pool is shared so a timed-out worker rejoins instead of
+        # leaking a thread per request.
+        fut = _SUMMARY_POOL.submit(
+            llm.chat,
+            [{"role": "system",
+              "content": ("You are an analyst writing a five-sentence executive "
+                          "summary of a research investigation. Reply with the "
+                          "paragraph only; ground every claim in the brief.")},
+             {"role": "user",
+              "content": ("Brief: " + facts +
+                          "\nDescription: " + (inv.description or "")[:500])}],
+            max_tokens=400, temperature=0.2)
+        text = fut.result(timeout=SUMMARY_LLM_TIMEOUT_S).strip()
+        if text:
+            synthesis, source = text, "llm"
+    except Exception:
+        pass
+    return {"investigation": {"id": inv.id, "title": inv.title,
+                              "status": inv.status},
+            "generated": datetime.now(timezone.utc).isoformat(),
+            "executive_summary": synthesis, "synthesis": source,
+            "counts": counts,
+            "top_artifacts": [{"id": a.id, "title": a.title,
+                               "artifact_type": a.artifact_type,
+                               "source": a.source, "url": a.url,
+                               "relevance": a.relevance,
+                               "review": a.review} for a in top_artifacts],
+            "top_findings": {
+                "threats": threats,
+                "explanations": [{"id": e.id, "question": e.question}
+                                 for e in exps]},
+            "novel_areas": investigation_gaps(db, inv_id)["novel_areas"][:4]}
+
+
 def _gate_new_concepts(db, inv_id: int, created: list) -> list:
     """Auto-classify freshly saved concepts as drift (or not).
 
@@ -1947,43 +2110,191 @@ def launch_explanation(exp_id: int, max_pages: int = MAX_PAGES, max_hops: int = 
     return t
 
 
+def _suggestion_intent(exp: Explanation) -> set:
+    """What 'on-theme' means for follow-ups: the question plus what the
+    answer actually delivered (summary, section headings and bodies,
+    key points). Suggestions are ranked against this, most plausible
+    first, instead of trusting model-generated gap text at face value."""
+    parts = [exp.question or ""]
+    try:
+        ans = json.loads(exp.answer or "{}")
+    except Exception:
+        ans = {}
+    if isinstance(ans, dict):
+        parts.append(ans.get("summary") or "")
+        for s in (ans.get("sections") or []):
+            if isinstance(s, dict):
+                parts.append(s.get("heading") or "")
+                parts.append((s.get("body") or "")[:2000])
+            else:
+                parts.append(str(s))
+        for k in (ans.get("key_points") or []):
+            parts.append(str(k))
+    return _tok(" ".join(parts))
+
+
+# Relevance bars for the suggestion strip. Trace items were generated from
+# the question context, so a low bar catches only true non-sequiturs.
+# Graph artifacts clear a higher bar AND at least half their matched terms
+# must be corpus-distinctive (document frequency at or under
+# min(5, max(2, 15% of the investigation's artifacts))): product-echo pages
+# match mostly ubiquitous terms, while specific content brings rare ones. A
+# lone rare junk token ("powered") cannot carry an item alone, and neither
+# can a near-duplicate of an already-kept title (overlap >= 0.85).
+SUGGEST_FLOOR_TRACE = 0.2
+SUGGEST_FLOOR_GRAPH = 0.45
+SUGGEST_SPEC_MASS = 0.5
+SUGGEST_NEAR_DUPE = 0.85
+SUGGEST_CAP = 8
+SUGGEST_FILL_MIN = 2
+SUGGEST_TRACE_RESERVE = 2
+
+
+def _spec_mass(matched: set, df: dict, thr: int) -> float:
+    """Fraction of the matched terms that are corpus-distinctive."""
+    if not matched:
+        return 0.0
+    return sum(1 for t in matched if df.get(t, 0) <= thr) / len(matched)
+
+def _tok_plus(s: str) -> set:
+    """_tok plus singular/plural siblings ("mitigations" <-> "mitigation").
+
+    Scoring-only: model gap text says "mitigation" where the answer wrote
+    "mitigations", and literal tokens would score that a miss. Guarded
+    (length, no -ss strip) so "news" never becomes "new". Novelty stays on
+    raw tokens -- echoes are detected literally.
+    """
+    out = set()
+    for t in _tok(s):
+        out.add(t)
+        if len(t) > 4 and not t.endswith("ss"):
+            if t.endswith("s"):
+                out.add(t[:-1])
+            else:
+                out.add(t + "s")
+    return out
+
+
+
 def _question_suggestions(exp: Explanation, db=None) -> list:
-    """Suggested next questions for an explanation: agent-generated gaps plus
-    closely related artifacts already in the graph."""
-    out, seen = [], set()
-    t = {}
+    """Suggested next questions for an explanation, ranked by intent overlap.
+
+    Candidates come from the run trace (follow-ups, missing topics, gaps)
+    and from graph artifacts near the question. Every candidate scores
+    overlap against the question+answer intent and sorts most-plausible
+    first; drifting items fall below the floor instead of filling the
+    strip. When the strip would run thin, answer section headings top it
+    back up as deepen prompts -- grounded in delivered content, never
+    invented.
+    """
+    intent = _suggestion_intent(exp)
+    plus = _tok_plus(" ".join(intent))
+
+    scored = []
+    order = 0
+    seen = set()
+    df = {}
+    n_arts = 0
+    if db is not None:
+        try:
+            titles = [(a.title or "", a.tags or "") for a in db.query(Artifact).filter(
+                Artifact.investigation_id == exp.investigation_id).all()]
+        except Exception:
+            titles = []
+        n_arts = len(titles)
+        for title, tags in titles:
+            for t in set(_tok(title + " " + tags)):
+                df[t] = df.get(t, 0) + 1
+    thr = min(5, max(2, int(0.15 * n_arts)))
+
+    def consider(text, kind, floor, need_distinct):
+        nonlocal order
+        text = str(text or "").strip()
+        if not text or len(text) <= 8:
+            return
+        tw = _tok(text)
+        if not tw:
+            return
+        key = " ".join(sorted(tw))
+        if key in seen:
+            return
+        score = _overlap(plus, tw)
+        if score < floor:
+            return
+        if need_distinct and _spec_mass(tw & plus, df, thr) < SUGGEST_SPEC_MASS:
+            return
+        seen.add(key)
+        order += 1
+        scored.append((score, order, text, kind))
+
     try:
         t = json.loads(exp.trace or "{}")
     except Exception:
-        pass
-
-    def add(text, kind):
-        text = str(text).strip()
-        if text and len(text) > 8 and text.lower() not in seen:
-            seen.add(text.lower())
-            out.append({"text": text, "kind": kind})
-
+        t = {}
     for fq in (t.get("followup_queries") or []):
-        add(fq, "gap")
+        consider(fq, "gap", SUGGEST_FLOOR_TRACE, False)
     last = (t.get("hop_plan") or [{}])[-1] if t.get("hop_plan") else {}
     for mt in (last.get("missing_topics") or []):
-        add(mt, "deepen")
+        consider(mt, "deepen", SUGGEST_FLOOR_TRACE, False)
     for gap in (t.get("gaps") or []):
-        add(gap, "open")
+        consider(gap, "open", SUGGEST_FLOOR_TRACE, False)
 
     if db is not None:
-        qw = _tok(exp.question)
-        scored = []
-        for a in db.query(Artifact).filter(Artifact.investigation_id == exp.investigation_id):
+        for a in db.query(Artifact).filter(
+                Artifact.investigation_id == exp.investigation_id):
             if a.artifact_type in ("essay",) and a.id != exp.id:
                 continue
-            score = _jaccard(qw, _tok(a.tags)) + 0.5 * _jaccard(qw, _tok(a.title))
-            scored.append((score, a))
-        for _, a in sorted(scored, key=lambda x: -x[0])[:4]:
-            if a.id != exp.id and a.title:
-                add(a.title, "graph")
+            if not a.title:
+                continue
+            consider(a.title, "graph", SUGGEST_FLOOR_GRAPH, True)
 
-    return out[:8]
+    graph = sorted(
+        [s for s in scored if s[3] == "graph"],
+        key=lambda x: (-x[0], x[1]),
+    )
+    kept_graph = []
+    kept_tokens = []
+    for s in graph:
+        tw = _tok(s[2])
+        if any(_overlap(tw, kt) >= SUGGEST_NEAR_DUPE for kt in kept_tokens):
+            continue
+        kept_tokens.append(tw)
+        kept_graph.append(s)
+    trace = sorted(
+        [s for s in scored if s[3] != "graph"],
+        key=lambda x: (-x[0], x[1]),
+    )[:SUGGEST_TRACE_RESERVE]
+    rest = sorted(
+        [s for s in scored
+         if s not in trace and s not in kept_graph and s[3] != "graph"],
+        key=lambda x: (-x[0], x[1]),
+    )
+    ranked = sorted(
+        trace
+        + kept_graph[: max(0, SUGGEST_CAP - len(trace))]
+        + rest[: max(0, SUGGEST_CAP - len(trace) - len(kept_graph))],
+        key=lambda x: (-x[0], x[1]),
+    )
+    out = [{"text": text, "kind": kind} for _, _, text, kind in ranked]
+
+    if len(out) < SUGGEST_FILL_MIN:
+        try:
+            ans = json.loads(exp.answer or "{}")
+        except Exception:
+            ans = {}
+        covered = _tok(" ".join(it["text"] for it in out))
+        if isinstance(ans, dict):
+            for sec in (ans.get("sections") or []):
+                heading = (sec.get("heading") if isinstance(sec, dict) else "") or ""
+                heading = " ".join(str(heading).split())[:80]
+                if len(heading) < 4 or _overlap(covered, _tok(heading)) >= 0.6:
+                    continue
+                text = f"Can you go deeper on {heading}?"
+                if text.lower() not in {it["text"].lower() for it in out}:
+                    out.append({"text": text, "kind": "deepen"})
+                if len(out) >= SUGGEST_FILL_MIN:
+                    break
+    return out[:SUGGEST_CAP]
 
 
 # Vocabulary that marks an artifact as carrying security, liability or

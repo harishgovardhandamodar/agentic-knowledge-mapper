@@ -1244,6 +1244,43 @@ def investigation_roadmap(inv_id: int, db: Session = Depends(get_db)):
     return {"items": _investigation_roadmap(db, inv_id)}
 
 
+class GapResearchRequest(BaseModel):
+    top_n: int = 3
+    max_items: int = 12
+
+
+@app.get("/api/investigations/{inv_id}/research-gaps")
+def investigation_gaps(inv_id: int, db: Session = Depends(get_db)):
+    """Open questions ranked by coverage, plus novel areas. No side effects."""
+    from .explainer import investigation_gaps as gaps_fn
+    inv = db.query(Investigation).filter(Investigation.id == inv_id).first()
+    if not inv:
+        raise HTTPException(404, "Investigation not found")
+    return gaps_fn(db, inv_id)
+
+
+@app.post("/api/investigations/{inv_id}/research-gaps/run")
+def investigation_gaps_run(inv_id: int, data: GapResearchRequest,
+                           db: Session = Depends(get_db)):
+    """Launch a paper-first collection run on the least-covered gaps."""
+    from .explainer import launch_gap_research
+    inv = db.query(Investigation).filter(Investigation.id == inv_id).first()
+    if not inv:
+        raise HTTPException(404, "Investigation not found")
+    return launch_gap_research(db, inv_id, top_n=data.top_n or 3,
+                               max_items=data.max_items or 12)
+
+
+@app.get("/api/investigations/{inv_id}/summary")
+def investigation_summary(inv_id: int, db: Session = Depends(get_db)):
+    """Executive summary with supporting artifacts and top findings."""
+    from .explainer import investigation_summary as summary_fn
+    try:
+        return summary_fn(db, inv_id)
+    except LookupError:
+        raise HTTPException(404, "Investigation not found")
+
+
 class PrefsRequest(BaseModel):
     preferred_domains: Optional[str] = None
     auto_save_explanations: Optional[int] = None

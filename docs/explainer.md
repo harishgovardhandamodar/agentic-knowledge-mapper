@@ -74,6 +74,23 @@ flowchart LR
 - Watched roots are re-answered daily by the scheduler; the new child carries
   `meta.watch_of` and a `drift` verdict vs. the original.
 
+## Suggestions, gaps, investigation summary
+
+- `GET …/explanations/{id}/suggestions` ("Next questions"): trace items and
+  graph artifacts ranked by overlap against the question+answer intent, most
+  plausible first. Trace items clear a low bar (0.2); graph artifacts need
+  0.45 plus corpus-distinctive mass (half their matched terms rare in the
+  investigation), near-dupes collapse, and thin strips refill from the
+  answer's own section headings. Never invented.
+- `GET …/investigations/{id}/research-gaps`: open questions ranked by
+  supporting-artifact coverage (novel first) plus tag-novel areas;
+  `POST …/research-gaps/run` launches a paper-first goal run on the
+  least-covered ones.
+- `GET …/investigations/{id}/summary`: executive summary (model prose with
+  a 45s bound, deterministic factual brief on failure), top artifacts by
+  relevance, top threats and recent explanations, novel areas. Shown in the
+  brief panel's Executive summary overlay.
+
 ## Answer JSON (stored in `Explanation.answer`)
 
 ```json
