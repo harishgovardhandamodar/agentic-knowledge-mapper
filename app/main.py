@@ -857,6 +857,10 @@ def get_artifact(artifact_id: int, db: Session = Depends(get_db)):
         .all()
     )
     result = _artifact_json(a)
+    # Full content is detail-only: the list endpoint reuses _artifact_json
+    # for many rows and stays light, but the overlay and the manager summary
+    # view both read detail.content -- omitting it stranded them empty.
+    result["content"] = a.content
     result["relationships"] = [
         {"id": r.Relationship.id, "direction": "outgoing",
          "target_id": r.Relationship.target_id, "target_title": r.Artifact.title,

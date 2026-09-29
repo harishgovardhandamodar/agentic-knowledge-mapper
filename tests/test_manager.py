@@ -217,6 +217,12 @@ class TestStatuses(unittest.TestCase):
 
 
 class TestCompile(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        from fastapi.testclient import TestClient
+        from app import main as main_mod
+        cls.client = TestClient(main_mod.app)
+
     def _ready_run(self):
         db = _db()
         try:
@@ -289,6 +295,13 @@ class TestCompile(unittest.TestCase):
             self.assertEqual(summ.status, "ready")
             row = mgr._run_row(db, run)
             self.assertEqual(row["synthesis_artifact_id"], first["artifact_id"])
+            # the detail endpoint must serve the content: both the View
+            # summary toggle and the overlay read detail.content
+            detail = self.client.get(
+                f"/api/artifacts/{first['artifact_id']}")
+            self.assertEqual(detail.status_code, 200, detail.text)
+            self.assertIn("## Top risks by topic",
+                          detail.json().get("content") or "")
             with mock.patch.object(mgr.llm, "chat") as mc2:
                 second = mgr.compile_run(db, rid)
             self.assertTrue(second["existing"])
