@@ -494,6 +494,74 @@ class TestSummaryTables(unittest.TestCase):
         self.assertIn("No High/Critical", md)
 
 
+class TestManagerLinks(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        from fastapi.testclient import TestClient
+        from app import main as main_mod
+        cls.client = TestClient(main_mod.app)
+
+    def test_links_shape(self):
+        db = _db()
+        try:
+            links = mgr.manager_links(db)
+        finally:
+            db.close()
+        self.assertIn("links", links)
+        self.assertIn("summaries", links)
+        for child, ref in links["links"].items():
+            self.assertIn("summary_id", ref)
+            self.assertIn("run_id", ref)
+
+    def test_topics_map_to_summary_in_order(self):
+        db = _db()
+        try:
+            with mock.patch.object(mgr, "launch_run"), \
+                 mock.patch.object(mgr, "launch_security_assessment"):
+                row = mgr.run_plan(db, _plan(2), None)
+            links = mgr.manager_links(db)
+        finally:
+            db.close()
+        kids = [c["investigation_id"] for c in row["children"]]
+        for kid in kids:
+            self.assertEqual(links["links"][str(kid)]["summary_id"],
+                             row["summary_investigation_id"])
+            self.assertEqual(links["links"][str(kid)]["run_id"], row["id"])
+        meta = links["summaries"][str(row["summary_investigation_id"])]
+        self.assertEqual(meta["topic_ids"], kids)
+        self.assertEqual(meta["run_id"], row["id"])
+
+    def test_latest_run_wins(self):
+        db = _db()
+        try:
+            with mock.patch.object(mgr, "launch_run"), \
+                 mock.patch.object(mgr, "launch_security_assessment"):
+                first = mgr.run_plan(db, _plan(1), None)
+                second = mgr.run_plan(db, _plan(1), None)
+            # re-point the second run at the first run's child: the sidebar
+            # must nest it under the newest summary
+            kid = first["children"][0]["investigation_id"]
+            run2 = db.query(ManagerRun).filter(
+                ManagerRun.id == second["id"]).first()
+            plan2 = json.loads(run2.plan_json)
+            plan2["topics"][0]["investigation_id"] = kid
+            run2.plan_json = json.dumps(plan2)
+            db.commit()
+            links = mgr.manager_links(db)
+        finally:
+            db.close()
+        self.assertEqual(links["links"][str(kid)]["run_id"], second["id"])
+        self.assertEqual(links["links"][str(kid)]["summary_id"],
+                         second["summary_investigation_id"])
+
+    def test_links_route_shape(self):
+        r = self.client.get("/api/manager/links")
+        self.assertEqual(r.status_code, 200, r.text)
+        body = r.json()
+        self.assertIn("links", body)
+        self.assertIn("summaries", body)
+
+
 class TestManagerRoutes(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

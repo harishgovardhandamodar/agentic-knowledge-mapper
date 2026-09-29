@@ -105,6 +105,11 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .inv-hide-btn { margin-left: auto; background: none; border: none; color: var(--text2); cursor: pointer; font-size: 11px; padding: 1px 4px; border-radius: 4px; opacity: 0; }
 .inv-item:hover .inv-hide-btn, .inv-item.is-hidden .inv-hide-btn { opacity: 1; }
 .inv-hide-btn:hover { color: var(--text); background: var(--bg3); }
+.inv-child { margin-left: 18px; border-left: 2px solid var(--accent); border-radius: 0 7px 7px 0; }
+.inv-nav-btn { background: none; border: none; color: var(--text2); cursor: pointer; font-size: 10px; padding: 2px 7px 2px 0; flex-shrink: 0; }
+.inv-nav-btn:hover { color: var(--accent); }
+.mgr-nav-badge { font-size: 9.5px; font-weight: 700; color: var(--accent); background: rgba(88,166,255,0.14); border-radius: 8px; padding: 1px 7px; margin-left: 6px; white-space: nowrap; }
+.inv-summary { border-color: var(--border); }
 .status-pill { display: inline-block; padding: 1px 8px; border-radius: 9px; font-size: 10px; font-weight: 600; }
 .drift-pill { display: inline-block; padding: 1px 8px; border-radius: 9px; font-size: 10px; font-weight: 600; background: rgba(130,80,223,0.18); color: #bc8cff; border: 1px dashed #8250df; white-space: nowrap; }
 .st-draft { background: var(--bg3); color: var(--text2); }
@@ -1149,14 +1154,21 @@ async function loadInvestigations() {
   const data = await res.json();
   investigations = data.items || [];
   if (typeof renderSecInvestigationOptions === 'function') renderSecInvestigationOptions();
-  const list = document.getElementById('invList');
+  try {
+    const r = await fetch(`${API}/manager/links`);
+    if (r.ok) mgrNavLinks = await r.json();
+  } catch (e) { mgrNavLinks = { links: {}, summaries: {} }; }
+  renderInvList();
+  if (currentInv && !investigations.find(i => i.id === currentInv)) currentInv = null;
+  if (!currentInv && investigations.length) await selectInvestigation(investigations[0].id);
   if (!investigations.length) {
-    list.innerHTML = showHiddenInvs
-      ? '<div class="empty-state"><i class="fas fa-folder-open"></i><br/>No investigations yet.<br/>Create one to start collecting.</div>'
-      : '<div class="empty-state"><i class="fas fa-folder-open"></i><br/>No investigations yet.<br/>Create one to start collecting.<br/><span style="font-size:11px">Hidden ones stay out of this list until “Show hidden” is on.</span></div>';
-  } else {
-    list.innerHTML = investigations.map(i => `
-      <div class="inv-item ${currentInv === i.id ? 'active' : ''} ${i.hidden ? 'is-hidden' : ''}" onclick="selectInvestigation(${i.id})">
+    document.getElementById('briefPanel').style.display = 'none';
+  }
+}
+
+function invItemHtml(i, nested) {
+  return `
+      <div class="inv-item${nested ? ' inv-child' : ''} ${currentInv === i.id ? 'active' : ''} ${i.hidden ? 'is-hidden' : ''}" onclick="selectInvestigation(${i.id})">
         <div class="t">${i.hidden ? '<i class="fas fa-eye-slash" title="hidden"></i> ' : ''}${escHtml(i.title)}
           <button class="inv-hide-btn" title="${i.hidden ? 'Unhide' : 'Hide'}" onclick="event.stopPropagation();toggleInvestigationHidden(${i.id}, ${!i.hidden})">
             <i class="fas ${i.hidden ? 'fa-eye' : 'fa-eye-slash'}"></i></button></div>
@@ -1164,13 +1176,56 @@ async function loadInvestigations() {
           <span><i class="fas fa-database"></i> ${i.artifacts}</span>
           <span><i class="fas fa-share-nodes"></i> ${i.relationships}</span>
           <span><i class="fas fa-robot"></i> ${i.runs}</span></div>
-      </div>`).join('');
-  }
-  if (currentInv && !investigations.find(i => i.id === currentInv)) currentInv = null;
-  if (!currentInv && investigations.length) await selectInvestigation(investigations[0].id);
+      </div>`;
+}
+
+function mgrToggleNav(id) {
+  mgrNavOpen[id] = !(mgrNavOpen[id] !== false);
+  renderInvList();
+}
+
+function renderInvList() {
+  const list = document.getElementById('invList');
+  const empty = showHiddenInvs
+    ? '<div class="empty-state"><i class="fas fa-folder-open"></i><br/>No investigations yet.<br/>Create one to start collecting.</div>'
+    : '<div class="empty-state"><i class="fas fa-folder-open"></i><br/>No investigations yet.<br/>Create one to start collecting.<br/><span style="font-size:11px">Hidden ones stay out of this list until “Show hidden” is on.</span></div>';
   if (!investigations.length) {
-    document.getElementById('briefPanel').style.display = 'none';
+    list.innerHTML = empty;
+    return;
   }
+  const links = (mgrNavLinks && mgrNavLinks.links) || {};
+  const summaries = (mgrNavLinks && mgrNavLinks.summaries) || {};
+  const childIds = new Set(Object.keys(links).map(Number));
+  const summaryIds = new Set(Object.keys(summaries).map(Number));
+  const byId = {};
+  investigations.forEach(i => { byId[i.id] = i; });
+  let html = '';
+  investigations.forEach(i => {
+    if (childIds.has(i.id)) return;
+    if (summaryIds.has(i.id) && !i.hidden) {
+      const meta = summaries[i.id] || {};
+      const kids = (meta.topic_ids || []).map(id => byId[id])
+        .filter(x => x && (showHiddenInvs || !x.hidden));
+      const open = mgrNavOpen[i.id] !== false;
+      html += `
+      <div class="inv-item inv-summary ${currentInv === i.id ? 'active' : ''}">
+        <div class="t"><button class="inv-nav-btn" title="${open ? 'Collapse topics' : 'Expand topics'}" onclick="event.stopPropagation();mgrToggleNav(${i.id})">` +
+          `<i class="fas fa-chevron-${open ? 'down' : 'right'}"></i></button>` +
+          `<span onclick="selectInvestigation(${i.id})" style="cursor:pointer;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escHtml(i.title)}</span>` +
+          `<span class="mgr-nav-badge" title="Summary of manager run #${meta.run_id || '?'}">${kids.length} topics</span>` +
+          `<button class="inv-hide-btn" title="${i.hidden ? 'Unhide' : 'Hide'}" onclick="event.stopPropagation();toggleInvestigationHidden(${i.id}, ${!i.hidden})">` +
+            `<i class="fas ${i.hidden ? 'fa-eye' : 'fa-eye-slash'}"></i></button></div>
+        <div class="m" onclick="selectInvestigation(${i.id})"><span class="status-pill st-${i.status}">${i.status}</span>
+          <span><i class="fas fa-database"></i> ${i.artifacts}</span>
+          <span><i class="fas fa-share-nodes"></i> ${i.relationships}</span>
+          <span><i class="fas fa-robot"></i> ${i.runs}</span></div>
+      </div>`;
+      if (open) html += kids.map(k => invItemHtml(k, true)).join('');
+    } else {
+      html += invItemHtml(i, false);
+    }
+  });
+  list.innerHTML = html || empty;
 }
 
 async function toggleInvestigationHidden(id, hide) {
@@ -3065,6 +3120,11 @@ let mgrRunsTimer = null;
 let mgrFlowOpen = [];
 let mgrSummaryCache = {};
 let mgrSummaryOpen = [];
+/* AKM sidebar nest: child investigation -> summary mapping, and which
+ * summary rows are expanded. Fetched with the list; a failure leaves the
+ * flat list today's code renders. */
+let mgrNavLinks = { links: {}, summaries: {} };
+let mgrNavOpen = {};
 
 const APP_TITLES = {
   akm: 'Agentic Knowledge Mapper',

@@ -39,6 +39,16 @@ Implementation: `app/manager.py`, `ManagerRun` model (new table, created by
 `create_all`), routes in `app/main.py`. Pinned in `tests/test_manager.py`
 (launchers and model mocked).
 
+## Nested sidebar
+
+In the mapper tab, each summary investigation holds its topics as nested,
+collapsible rows (chevron on the summary row; expanded by default), served
+by `GET /api/manager/links`. Children keep their status pills and counts;
+clicking any row selects it as usual. If the links call fails, the list
+renders flat exactly as before.
+
+![Summaries holding their topics in the mapper sidebar](screenshots/13-manager-nest.png)
+
 ## Execution flow
 
 Each run card has a **Flow** toggle: a six-step strip (Command → Plan →

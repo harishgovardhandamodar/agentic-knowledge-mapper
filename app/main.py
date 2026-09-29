@@ -1714,6 +1714,12 @@ def manager_timeline(run_id: int, db: Session = Depends(get_db)):
         raise HTTPException(404, "Manager run not found")
 
 
+@app.get("/api/manager/links")
+def manager_links(db: Session = Depends(get_db)):
+    """Child investigation -> summary mapping for the AKM sidebar nest."""
+    return manager_mod.manager_links(db)
+
+
 @app.get("/api/security/assessments/{assessment_id}/markdown")
 def get_security_markdown(assessment_id: int, db: Session = Depends(get_db)):
     from fastapi.responses import PlainTextResponse

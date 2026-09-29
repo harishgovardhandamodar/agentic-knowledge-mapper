@@ -361,6 +361,33 @@ class PendingChildren(Exception):
         self.pending = pending
 
 
+def manager_links(db) -> dict[str, Any]:
+    """Child investigation -> summary mapping for the AKM sidebar.
+
+    Latest run wins when an investigation appears in several plans.
+    Pure reads; the sidebar degrades to a flat list when this fails.
+    """
+    from .models import ManagerRun
+    links: dict[str, Any] = {}
+    summaries: dict[str, Any] = {}
+    for run in db.query(ManagerRun).order_by(ManagerRun.id).all():
+        try:
+            plan = json.loads(run.plan_json or "{}")
+        except Exception:
+            continue
+        topics = plan.get("topics") or []
+        topic_ids = [t.get("investigation_id") for t in topics
+                     if isinstance(t, dict) and t.get("investigation_id")]
+        sid = run.summary_investigation_id
+        if sid:
+            summaries[str(sid)] = {"run_id": run.id,
+                                   "command": run.command or "",
+                                   "topic_ids": topic_ids}
+        for iid in topic_ids:
+            links[str(iid)] = {"summary_id": sid, "run_id": run.id}
+    return {"links": links, "summaries": summaries}
+
+
 TOP_RISKS_PER_TOPIC = 5
 LAPSE_COVERAGE_PCT = 50.0
 
