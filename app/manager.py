@@ -288,6 +288,7 @@ def compile_run(db, run_id: int) -> dict[str, Any]:
         return {"artifact_id": synth.id, "summary_investigation_id": summary_id,
                 "markdown": synth.content, "existing": True}
     briefs = []
+    topics_risks: list[tuple[str, list[dict[str, Any]]]] = []
     for c in row["children"]:
         inv = db.query(Investigation).filter(
             Investigation.id == c["investigation_id"]).first()
@@ -295,10 +296,18 @@ def compile_run(db, run_id: int) -> dict[str, Any]:
                .filter(SecurityAssessment.investigation_id == c["investigation_id"])
                .order_by(SecurityAssessment.id.desc()).first())
         md = ""
-        if rec is not None and rec.markdown:
-            md = rec.markdown[:COMPILE_TRUNC]
+        threats: list[Any] = []
+        if rec is not None:
+            if rec.markdown:
+                md = rec.markdown[:COMPILE_TRUNC]
+            try:
+                threats = json.loads(rec.threats_json or "[]")
+            except Exception:
+                threats = []
         arts = (db.query(Artifact)
                 .filter(Artifact.investigation_id == c["investigation_id"]).count())
+        risks = topic_top_risks(threats)
+        topics_risks.append((c["title"], risks))
         briefs.append(
             f"## {c['title']}\n"
             f"Residual {getattr(rec, 'residual_pct', None)} "
@@ -309,20 +318,26 @@ def compile_run(db, run_id: int) -> dict[str, Any]:
         plan = json.loads(run.plan_json or "{}")
     except Exception:
         plan = {}
+    overlaps = find_overlaps(topics_risks)
+    lapses = find_lapses(topics_risks)
+    tables = render_summary_tables(topics_risks, overlaps, lapses)
     text = llm.chat(
         [{"role": "system",
-          "content": ("You synthesize completed security investigations into one "
-                      "executive summary. Reply markdown: overall verdict, "
-                      "per-topic findings, cross-cutting risks, and next steps. "
-                      "Ground every claim in the briefs; invent nothing.")},
+          "content": ("You are given fact tables (top risks, overlaps, lapses) "
+                      "plus assessment briefs. Do NOT repeat the tables. Reply "
+                      "markdown with: overall verdict in two sentences, "
+                      "cross-cutting patterns across topics, what the evidence "
+                      "does not cover, and concrete next steps. Ground every "
+                      "claim in the briefs; invent nothing.")},
          {"role": "user",
-          "content": f"Command: {run.command}\n\n" + "\n\n".join(briefs)}],
+          "content": f"Command: {run.command}\n\n{tables}\n\n" + "\n\n".join(briefs)}],
         max_tokens=3000, temperature=0.2)
+    markdown = tables + "\n## Synthesis\n\n" + (text or "").strip() + "\n"
     art = Artifact(investigation_id=summary_id,
                    title=f"Manager synthesis (run #{run.id})",
                    artifact_type="research",
                    description=f"Synthesis of {len(briefs)} investigations.",
-                   content=text, source="agentic-manager",
+                   content=markdown, source="agentic-manager",
                    tags=SYNTH_TAG)
     db.add(art)
     summ = db.query(Investigation).filter(
@@ -333,13 +348,108 @@ def compile_run(db, run_id: int) -> dict[str, Any]:
     db.commit()
     db.refresh(art)
     return {"artifact_id": art.id, "summary_investigation_id": summary_id,
-            "markdown": text, "existing": False}
+            "markdown": markdown, "existing": False}
 
 
 class PendingChildren(Exception):
     def __init__(self, pending: list[str]):
         super().__init__("children still running")
         self.pending = pending
+
+
+TOP_RISKS_PER_TOPIC = 5
+LAPSE_COVERAGE_PCT = 50.0
+
+
+def topic_top_risks(threats: list[Any], n: int = TOP_RISKS_PER_TOPIC) -> list[dict[str, Any]]:
+    """Worst-first threat rows, trimmed to the fields the summary needs."""
+    rows = [t for t in (threats or []) if isinstance(t, dict) and t.get("id")]
+    rows.sort(key=lambda t: -(t.get("residual_score") or 0)
+              if isinstance(t.get("residual_score"), (int, float)) else -1)
+    return [{"id": t.get("id"), "title": t.get("title", ""),
+             "residual_severity": t.get("residual_severity"),
+             "residual_score": t.get("residual_score"),
+             "coverage": t.get("coverage"),
+             "controls": t.get("controls") or []} for t in rows[:n]]
+
+
+def find_overlaps(topics_risks: list[tuple[str, list[dict[str, Any]]]]) -> list[dict[str, Any]]:
+    """Threat ids striking in 2+ topics: the common risks. Sorted by reach,
+    then worst residual."""
+    by_id: dict[str, dict[str, Any]] = {}
+    for topic, risks in topics_risks:
+        for r in risks:
+            cell = by_id.setdefault(r["id"], {"id": r["id"], "title": r["title"],
+                                              "topics": [], "residuals": []})
+            cell["topics"].append(topic)
+            if isinstance(r.get("residual_score"), (int, float)):
+                cell["residuals"].append(r["residual_score"])
+    out = [c for c in by_id.values() if len(c["topics"]) >= 2]
+    for c in out:
+        c["max_residual"] = max(c["residuals"]) if c["residuals"] else None
+    out.sort(key=lambda c: (-len(c["topics"]),
+                            -(c["max_residual"] or 0)))
+    return out
+
+
+def find_lapses(topics_risks: list[tuple[str, list[dict[str, Any]]]]) -> list[dict[str, Any]]:
+    """High/Critical residuals with less than half coverage: the lapses."""
+    out = []
+    for topic, risks in topics_risks:
+        for r in risks:
+            cov = r.get("coverage")
+            cov = float(cov) if isinstance(cov, (int, float)) else 100.0
+            if r.get("residual_severity") in ("Critical", "High") \
+                    and cov < LAPSE_COVERAGE_PCT:
+                out.append({"topic": topic, **r})
+    out.sort(key=lambda r: (-(r.get("residual_score") or 0)))
+    return out
+
+
+def render_summary_tables(topics_risks: list[tuple[str, list[dict[str, Any]]]],
+                          overlaps: list[dict[str, Any]],
+                          lapses: list[dict[str, Any]]) -> str:
+    """Deterministic fact sections: present even when the model is terse."""
+    L = ["## Top risks by topic", ""]
+    for topic, risks in topics_risks:
+        L.append(f"### {topic}")
+        L.append("")
+        L.append("| Threat | Severity | Residual | Coverage | Controls |")
+        L.append("|---|---|---|---|---|")
+        for r in risks:
+            cov = r.get("coverage")
+            cov_s = f"{cov:g}%" if isinstance(cov, (int, float)) else "–"
+            res = r.get("residual_score")
+            res_s = f"{res:g}" if isinstance(res, (int, float)) else "–"
+            ctls = ", ".join(r.get("controls") or []) or "–"
+            L.append(f"| {r['id']} {r['title']} | {r.get('residual_severity') or '–'} "
+                     f"| {res_s} | {cov_s} | {ctls} |")
+        L.append("")
+    L += ["## Overlaps — common risks", ""]
+    if overlaps:
+        L.append("| Threat | Topics | Worst residual |")
+        L.append("|---|---|---|")
+        for o in overlaps:
+            mr = f"{o['max_residual']:g}" if isinstance(o.get("max_residual"), (int, float)) else "–"
+            L.append(f"| {o['id']} {o['title']} | {len(o['topics'])}: "
+                     f"{', '.join(o['topics'])} | {mr} |")
+    else:
+        L.append("No threat id strikes in more than one topic.")
+    L += ["", "## Lapses", ""]
+    if lapses:
+        L.append("| Topic | Threat | Severity | Residual | Coverage |")
+        L.append("|---|---|---|---|---|")
+        for r in lapses:
+            res = r.get("residual_score")
+            res_s = f"{res:g}" if isinstance(res, (int, float)) else "–"
+            cov = r.get("coverage")
+            cov_s = f"{cov:g}%" if isinstance(cov, (int, float)) else "–"
+            L.append(f"| {r['topic']} | {r['id']} {r['title']} | "
+                     f"{r.get('residual_severity') or '–'} | {res_s} | {cov_s} |")
+    else:
+        L.append("No High/Critical residual under half coverage.")
+    L.append("")
+    return "\n".join(L)
 
 
 # Stage -> subagent role, per runner kind. Unknown stages fall through to

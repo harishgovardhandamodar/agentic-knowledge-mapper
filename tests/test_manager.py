@@ -222,7 +222,11 @@ class TestCompile(unittest.TestCase):
             db.add(SecurityAssessment(
                 investigation_id=inv_id, product_name="T",
                 exposure="confidential_data", overall_pct=10.0,
-                residual_pct=8.0, markdown="# topic report"))
+                residual_pct=8.0, markdown="# topic report",
+                threats_json=json.dumps([
+                    {"id": "T05", "title": "Prompt injection",
+                     "residual_severity": "High", "residual_score": 12.0,
+                     "coverage": 20.0, "controls": ["C02"]}])))
             db.commit()
             return row["id"]
         finally:
@@ -256,7 +260,13 @@ class TestCompile(unittest.TestCase):
                                    return_value="# synthesis") as mc:
                 first = mgr.compile_run(db, rid)
             self.assertFalse(first["existing"])
-            self.assertEqual(first["markdown"], "# synthesis")
+            self.assertEqual(first["markdown"].split("## Synthesis")[-1].strip(),
+                             "# synthesis")
+            # facts survive a terse model: tables precede the synthesis
+            head, _, _ = first["markdown"].partition("## Synthesis")
+            for needle in ("## Top risks by topic", "T05",
+                           "## Overlaps", "## Lapses"):
+                self.assertIn(needle, head)
             mc.assert_called_once()
             art = db.query(Artifact).filter(
                 Artifact.id == first["artifact_id"]).first()
@@ -408,6 +418,55 @@ class TestTimeline(unittest.TestCase):
                 mgr.run_timeline(db, 999999)
         finally:
             db.close()
+
+
+class TestSummaryTables(unittest.TestCase):
+    R1 = {"id": "T05", "title": "Injection", "residual_severity": "High",
+          "residual_score": 12.0, "coverage": 20.0, "controls": ["C02"]}
+    R2 = {"id": "T01", "title": "Paste", "residual_severity": "Medium",
+          "residual_score": 9.0, "coverage": 80.0, "controls": []}
+    R3 = {"id": "T02", "title": "Leak", "residual_severity": "Critical",
+          "residual_score": 20.0, "coverage": 0.0, "controls": []}
+
+    def test_top_risks_order_and_cap(self):
+        out = mgr.topic_top_risks([self.R2, self.R1, self.R3,
+                                   {"no": "id"}, {"id": "T09"}], n=2)
+        self.assertEqual([r["id"] for r in out], ["T02", "T05"])
+        self.assertEqual(out[0]["controls"], [])
+
+    def test_overlaps_need_two_topics(self):
+        ov = mgr.find_overlaps([("A", [self.R1, self.R2]),
+                                ("B", [self.R1, self.R3])])
+        self.assertEqual([o["id"] for o in ov], ["T05"])
+        self.assertEqual(ov[0]["topics"], ["A", "B"])
+        self.assertEqual(ov[0]["max_residual"], 12.0)
+        self.assertEqual(mgr.find_overlaps([("A", [self.R1])]), [])
+
+    def test_lapse_rule_boundaries(self):
+        lapses = mgr.find_lapses([
+            ("A", [self.R1, self.R2, self.R3,
+                   dict(self.R1, coverage=50.0)])])
+        self.assertEqual([(r["topic"], r["id"]) for r in lapses],
+                         [("A", "T02"), ("A", "T05")])
+        # exactly at the threshold is not a lapse; Medium never is
+        self.assertEqual(mgr.find_lapses(
+            [("A", [dict(self.R2, residual_severity="High", coverage=50.0),
+                    dict(self.R2, coverage=10.0)])]), [])
+
+    def test_tables_render_facts(self):
+        md = mgr.render_summary_tables(
+            [("A", [self.R1])],
+            [{"id": "T05", "title": "Injection", "topics": ["A", "B"],
+              "max_residual": 12.0}],
+            [{"topic": "A", **self.R3}])
+        for needle in ("## Top risks by topic", "T05 Injection",
+                       "## Overlaps", "A, B", "## Lapses", "T02 Leak"):
+            self.assertIn(needle, md)
+
+    def test_tables_empty_states(self):
+        md = mgr.render_summary_tables([("A", [])], [], [])
+        self.assertIn("No threat id strikes", md)
+        self.assertIn("No High/Critical", md)
 
 
 class TestManagerRoutes(unittest.TestCase):
