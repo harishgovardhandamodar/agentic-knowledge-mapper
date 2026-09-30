@@ -23,7 +23,7 @@ from . import llm
 from .agent import launch_run
 from .models import (AgentEvent, AgentRun, Artifact, Investigation,
                      SecurityAssessment)
-from .security import EXPOSURE_META
+from .security import EXPOSURE_META, profile_model_subject
 from .security_agent import launch_security_assessment
 
 MAX_TOPICS = 6
@@ -385,15 +385,35 @@ def run_plan(db, plan: dict[str, Any], options: dict[str, Any] | None = None,
         if options.get("research"):
             launch_run(inv.id, trigger=f"manager:{run.id}")
         if options.get("assessment"):
-            launch_security_assessment(
-                inv.id,
-                {"product_name": subject[:120],
-                 "use_case": use_case,
-                 "exposure": (t.get("exposure") or plan["exposure"]),
-                 "declared_controls": [],
-                 "doc_urls": [],
-                 "focus": t.get("focus", [])},
-                requested_by=f"manager run {run.id}")
+            # A model subject gets THREE assessments, not one: is the model
+            # sound, what could someone build with it, and which of the claims
+            # those two imply is actually true. Different agents, different
+            # weights, a different number of questions -- averaging them would
+            # bury all three. launch_security_assessment is called once per
+            # mode; the per-investigation busy lock only stops a duplicate of
+            # the same job, and the three keys differ, so all queue.
+            #
+            # Order matters for the third: it reads the STORED rows of the
+            # first two, and the job queue claims in (next_attempt_at, id)
+            # order, so queuing it last is what puts it after them. If an
+            # earlier flow is waiting out a retry backoff the third can still
+            # start first -- it then reads whatever rows exist and reports an
+            # explicit gap claim rather than an empty register.
+            _prof = profile_model_subject(subject[:120], use_case,
+                                          t.get("focus", []))
+            _modes = (["target", "adversarial", "hypothesis"]
+                      if _prof["is_model_query"] else [""])
+            for _mode in _modes:
+                launch_security_assessment(
+                    inv.id,
+                    {"product_name": subject[:120],
+                     "use_case": use_case,
+                     "exposure": (t.get("exposure") or plan["exposure"]),
+                     "declared_controls": [],
+                     "doc_urls": [],
+                     "focus": t.get("focus", []),
+                     "assessment_mode": _mode},
+                    requested_by=f"manager run {run.id}")
     summary = plan.get("summary") or {}
     names = ", ".join(f"#{t.get('investigation_id')} {t['title']}"
                       for t in plan["topics"])

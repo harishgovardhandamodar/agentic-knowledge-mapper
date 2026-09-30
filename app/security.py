@@ -17,6 +17,7 @@ assessment with:
 from __future__ import annotations
 
 import html
+import json
 import re
 from datetime import datetime, timezone
 from typing import Any, Iterable, Optional
@@ -501,6 +502,347 @@ def score_model_assessment(dimensions: dict[str, float]) -> dict[str, Any]:
         "posture": ("MODEL RISK — internals-weighted aggregate; residual equals "
                     "inherent: v1 maps no declared controls onto model dimensions"),
     }
+
+
+def mermaid_misuse_chain(product: str, profile: dict[str, Any]) -> str:
+    """Attack-chain diagram for the misuse flow: an attacker uses the model's
+    capability, not the model as a target. Boxes are the chain stages the
+    scenario walks; the shaded box is the model's contribution to it."""
+    p = (product or "Model").replace('"', "'")[:32]
+    fam = ("/".join(profile.get("families", [])) or
+           profile.get("model_class") or "model").replace('"', "'")[:28]
+    iface = ("chat UI" if profile.get("interface") == "conversational"
+             else "API / batch" if profile.get("interface") == "non_conversational"
+             else "serving surface")
+    return (
+        "flowchart LR\n"
+        '    A["attacker<br/>intent"] --> R["recon:<br/>probe outputs"]\n'
+        f'    R -->|{iface}| M["{fam}<br/>{p}"]\n'
+        '    M --> E["exploit:<br/>reconstruct · invert · launder"]\n'
+        '    E --> O["objective:<br/>data, decision or reach"]\n'
+        '    style M fill:#a371f7,stroke:#333,color:#fff\n'
+    )
+
+
+# Adversarial-misuse dimensions: the weightage of the second model flow.
+# Flow 1 asks "is this model sound?"; this asks "what can someone BUILD with
+# it?". The two answer different questions, so they are scored separately and
+# never averaged: a perfectly safe model in the wrong hands is still a
+# capability. Weighting follows attacker value, not attacker novelty --
+# capability_abuse dominates because it is what makes a model a weapon rather
+# than a leak, and abuse_persistence is weighted because a scenario that does
+# not survive a restart is an inconvenience, not an incident.
+ADVERSARIAL_DIMENSIONS: tuple[tuple[str, float, str], ...] = (
+    ("capability_abuse", 0.30,
+     "using the model's predictive/generative power for someone else's goal"),
+    ("data_recon", 0.25,
+     "reconstructing, inferring or confirming data the model holds"),
+    ("evasion", 0.20,
+     "laundering content, identities or decisions past a control"),
+    ("manipulation", 0.15,
+     "poisoning, backdooring or otherwise steering the model's behaviour"),
+    ("abuse_persistence", 0.10,
+     "whether the abuse survives restart, detection and response"),
+)
+ADVERSARIAL_SCORING_METHOD = "model-misuse-v1"
+
+
+def score_model_adversarial(dimensions: dict[str, float]) -> dict[str, Any]:
+    """Weighted misuse aggregate. Same contract shape as the model scorer so
+    storage and UI need no new columns, but a different method string and a
+    different meaning: this number is attacker capability, not defect risk.
+
+    ``dimensions`` maps dimension id -> 0..100 (higher = more usable by an
+    attacker). A dimension nobody examined takes the documented baseline
+    rather than zero -- unexamined is not harmless. No residual: an unused
+    capability is available to whoever reaches it, and pretending a
+    post-mitigation number exists would be fiction.
+    """
+    rows = []
+    total = 0.0
+    for dim_id, weight, _desc in ADVERSARIAL_DIMENSIONS:
+        try:
+            score = max(0.0, min(100.0, float(dimensions.get(dim_id, 20.0))))
+        except (TypeError, ValueError):
+            score = 20.0
+        contrib = round(score * weight, 2)
+        total += contrib
+        rows.append({"id": dim_id, "weight": weight, "score": round(score, 1),
+                     "contribution": contrib})
+    overall = round(total, 1)
+    return {
+        "method": ADVERSARIAL_SCORING_METHOD,
+        "assessment_path": "model_adversarial",
+        "dimensions": rows,
+        "weights": {d[0]: d[1] for d in ADVERSARIAL_DIMENSIONS},
+        "inherent_pct": overall,
+        "overall_pct": overall,
+        "residual_pct": overall,
+        "delta": 0.0,
+        "active_controls": [],
+        "posture": ("MISUSE POTENTIAL — attacker-capability aggregate; no "
+                    "residual: an unreached capability is unavailable only to "
+                    "the people who have not reached it yet"),
+    }
+
+
+# ---------------------------------------------- hypothesis synthesis ----
+#
+# The third flow reads the two assessments above and asks a different question
+# of their output: not "how bad is it" and not "what could it be used for", but
+# "which of these statements is actually true, and what would settle it".
+#
+# A hypothesis here is a CLAIM with a confidence and a disconfirming test, not
+# a finding. The two earlier flows emit findings that are true by construction
+# (a model that trains on personal data does memorise rows). This flow is
+# allowed to be uncertain, and says so: every claim carries the evidence that
+# raised it, the evidence that argues against it, and the observation that
+# would flip it. A hypothesis set with no contradicting evidence is a sign the
+# verifier is not working, not a sign the system is clean.
+#
+# Scored separately again. Three numbers in one report invites averaging them
+# into one meaningless digit, so this one is a *confidence* aggregate, not a
+# risk aggregate, and the method string says so.
+HYPOTHESIS_DIMENSIONS: tuple[tuple[str, float, str], ...] = (
+    ("evidence_support", 0.40,
+     "how much of the collected research actually backs the claim"),
+    ("cross_flow_corroboration", 0.25,
+     "whether the internals and misuse flows independently reached it"),
+    ("testability", 0.20,
+     "whether a concrete observation would confirm or refute it"),
+    ("impact_if_true", 0.15,
+     "what is at stake if the claim holds"),
+)
+HYPOTHESIS_SCORING_METHOD = "hypothesis-synthesis-v1"
+
+
+def score_hypotheses(dimensions: dict[str, float]) -> dict[str, Any]:
+    """Weighted confidence aggregate over drafted hypotheses.
+
+    Deliberately NOT a risk score. Higher means "we are more confident in what
+    we are claiming", not "the system is worse" -- so the field it is written
+    into is ``confidence_pct`` and the report calls it a confidence aggregate.
+    Reusing ``overall_pct`` here would let a UI read a well-evidenced set of
+    hypotheses as a high risk score, which inverts the meaning.
+
+    Unmeasured dimensions take the documented neutral baseline: an
+    under-examined claim is not thereby a well-supported one.
+    """
+    rows = []
+    total = 0.0
+    for dim_id, weight, _desc in HYPOTHESIS_DIMENSIONS:
+        try:
+            score = max(0.0, min(100.0, float(dimensions.get(dim_id, 40.0))))
+        except (TypeError, ValueError):
+            score = 40.0
+        contrib = round(score * weight, 2)
+        total += contrib
+        rows.append({"id": dim_id, "weight": weight, "score": round(score, 1),
+                     "contribution": contrib})
+    aggregate = round(total, 1)
+    return {
+        "method": HYPOTHESIS_SCORING_METHOD,
+        "assessment_path": "model_hypothesis",
+        "score_meaning": ("confidence in the drafted claims, not risk; higher "
+                          "is better-evidenced, not more dangerous"),
+        "dimensions": rows,
+        "weights": {d[0]: d[1] for d in HYPOTHESIS_DIMENSIONS},
+        "inherent_pct": aggregate,
+        "confidence_pct": aggregate,
+        "overall_pct": aggregate,
+        "residual_pct": aggregate,
+        "delta": 0.0,
+        "active_controls": [],
+        "posture": (f"CONFIDENCE AGGREGATE {aggregate:g}/100 — this is how "
+                    "firmly the claims below are held, not a risk level"),
+    }
+
+
+def mermaid_hypothesis_map(hypotheses: list[dict[str, Any]]) -> str:
+    """Evidence map for the hypothesis flow: claim nodes fed by the two flows.
+
+    Deliberately not a flowchart of steps. The point of this flow is that a
+    claim's support is inspectable, so the diagram shows where each claim's
+    evidence came from -- internals findings on one side, misuse scenarios on
+    the other -- and a claim that only one flow reached reads differently from
+    one both reached, without having to read a single sentence.
+    """
+    if not hypotheses:
+        return ("flowchart LR\n"
+                '    N["no hypotheses drafted:<br/>the two prior flows produced '
+                'nothing to test"]\n')
+    lines = ["flowchart LR"]
+    lines.append('    I["model-internals<br/>flow 1"]:::src')
+    lines.append('    A["model-misuse<br/>flow 2"]:::src')
+    lines.append('    H["hypothesis flow<br/>claims + falsifiers"]:::out')
+    lines.append("    classDef src fill:#1f6f6b,stroke:#333,color:#fff")
+    lines.append("    classDef out fill:#3a2f63,stroke:#333,color:#fff")
+    lines.append("    classDef corroborated fill:#7d5ba6,stroke:#333,color:#fff")
+    lines.append("    classDef single fill:#4a4458,stroke:#333,color:#fff")
+    for i, h in enumerate(hypotheses[:8]):
+        hid = f"H{i + 1:02d}"
+        label = str(h.get("claim", ""))[:44].replace('"', "'")
+        both = bool(h.get("supported_by_target")) and bool(h.get("supported_by_adversarial"))
+        style = "corroborated" if both else "single"
+        lines.append(f'    {hid}["{label}"]:::{style}')
+        if h.get("supported_by_target"):
+            lines.append(f'    I --> {hid}')
+        if h.get("supported_by_adversarial"):
+            lines.append(f'    A --> {hid}')
+        lines.append(f'    {hid} --> H')
+    return "\n".join(lines) + "\n"
+
+
+def mermaid_hypothesis_chain(h: dict[str, Any]) -> str:
+    """Per-claim chain: premise -> mechanism -> consequence, plus what refutes it.
+
+    A claim without its refutation is an assertion. The dashed node is what
+    makes this diagram worth drawing: it is the observation that would collapse
+    the claim, and it is the reason the hypothesis is allowed to exist.
+    """
+    def _q(s: Any, n: int = 30) -> str:
+        return str(s or "").replace('"', "'")[:n]
+
+    claim = _q(h.get("claim"), 34)
+    premise = _q(h.get("premise"), 28)
+    mechanism = _q(h.get("mechanism"), 28)
+    consequence = _q(h.get("consequence"), 28)
+    refuter = _q(h.get("falsifier"), 34)
+    return (
+        "flowchart TD\n"
+        f'    P["premise:<br/>{premise}"] --> M["mechanism:<br/>{mechanism}"]\n'
+        f'    M --> C["claim:<br/>{claim}"]\n'
+        f'    C --> K["if true:<br/>{consequence}"]\n'
+        f'    C -.->|refuted by| F["{refuter}"]\n'
+        "    style C fill:#7d5ba6,stroke:#333,color:#fff\n"
+        "    style F fill:#8a3b3b,stroke:#333,color:#fff,stroke-dasharray:4 3\n"
+    )
+
+
+# Intent terms that ask the second question ("what can be done WITH this
+# model?") rather than the first ("is this model sound?"). Read from the
+# command and the use case, not the subject: the same model is the target in
+# one sentence and the tool in the next.
+_MISUSE_INTENT_TERMS = frozenset(
+    ("misuse", "misuse cases", "abuse", "adversarial", "attack", "attacks",
+     "attacker", "threat scenarios", "offensive", "red team", "redteam",
+     "weaponiz", "exploit", "exploitable", "how could someone", "how can someone",
+     "attack surface of using", "used against", "used to attack",
+     "adversarial scenarios", "scenarios engineered", "engineered against"))
+_MISUSE_INTENT_EXCLUSIONS = (
+    # Explicit denials ("without", "not", "rather than") name the very concept
+    # they exclude, so they are stripped before matching; a defensive frame is
+    # NOT stripped, because it does not deny the attack -- it changes which
+    # answer is wanted. That decision is made after matching, below.
+    re.compile(r"\bwithout\b|\bnot\b|\brather than\b|\binstead of\b"),
+)
+# A defensive frame ("how do we defend against X", "what controls stop X") is
+# still a question about attacks, but the answer wanted is protection, not an
+# attacker's playbook.
+_MISUSE_DEFENSIVE_TERMS = re.compile(
+    # "defen[sc]" alone misses plain "defend" -- the -se/-ce spellings are
+    # nouns, "defend" is the verb people actually type.
+    r"\bdefen[sc]?\w*|\bprotect\w*|\bmitigat\w*|\bhardening\b|"
+    r"\bprevent\w*|\bblock\w*|\bstop\b|\bdetect\w*|\bremediat\w*")
+# An explicit ask for the attack itself overrides the defensive frame: a team
+# asking how to defend and simultaneously asking what the attack looks like
+# wants both, and the second is the one this flow answers.
+_MISUSE_OFFENSIVE_ASK = re.compile(
+    r"\bwhat (?:adversarial|attack|threat|abuse)\w*|"
+    r"\b(?:what|how) (?:could|can|might|would) (?:an? )?"
+    r"(?:attacker|adversary|someone|one|they)\b|"
+    r"\bscenarios? (?:engineered|against)\b|\bengineer\w*|"
+    r"\bused (?:against|to attack)\b|\bbe weaponiz\w*")
+# A subject that is not a model has no misuse flow: asking how to attack a
+# payment gateway is the catalog's job, and the model scenario catalogue would
+# mis-frame it.
+_MISUSE_SUBJECT_REQUIRED = True
+
+
+def profile_misuse_intent(product: str, use_case: str = "",
+                          focus: list[str] | None = None,
+                          subject_profile: dict[str, Any] | None = None,
+                          ) -> dict[str, Any]:
+    """Read whether the user is asking the second question about a model.
+
+    Returns ``is_misuse_query`` plus the signals behind it, so the UI can show
+    the user why a second assessment was (or was not) offered. Two conditions
+    must hold: the subject profiles as a model, and the wording asks what can
+    be done WITH it. Subject alone never triggers the flow -- "assess
+    TabPFN" is flow 1, "what could an attacker build with TabPFN" is flow 2.
+    """
+    prof = subject_profile or profile_model_subject(product, use_case, focus)
+    blob = f"{use_case or ''}\n{' '.join(focus or [])}".lower()
+    clean = blob
+    for p in _MISUSE_INTENT_EXCLUSIONS:
+        clean = p.sub(" ", clean)
+    hit = _hit(clean, *_MISUSE_INTENT_TERMS)
+    # Defensive framing suppresses the flow only when the request does not also
+    # ask for the attack explicitly. "How do we defend against adversarial
+    # use" wants mitigations -- that is flow 1's job. "What adversarial
+    # scenarios could an attacker engineer, and how do we defend against them"
+    # wants the second half answered here.
+    defensive = bool(_MISUSE_DEFENSIVE_TERMS.search(clean))
+    offensive_ask = bool(_MISUSE_OFFENSIVE_ASK.search(clean))
+    is_misuse = bool(hit and prof.get("is_model_query")
+                     and (offensive_ask or not defensive))
+    if is_misuse:
+        reason = "wording asks what can be engineered with the model"
+    elif not prof.get("is_model_query"):
+        reason = "subject is not a model; misuse flow does not apply"
+    elif not hit:
+        reason = "wording asks for a security assessment of the model itself"
+    else:
+        reason = ("defensive framing: asks how to protect the model, which is "
+                  "the target path's question")
+    return {
+        "is_misuse_query": is_misuse,
+        "subject_is_model": bool(prof.get("is_model_query")),
+        "intent_hit": bool(hit),
+        "defensive_frame": defensive,
+        "offensive_ask": offensive_ask,
+        "signals": sorted(f for f in _MISUSE_INTENT_TERMS if _hit(clean, f)),
+        "reason": reason,
+    }
+
+
+def resolve_model_mode(product: str, use_case: str = "",
+                       focus: list[str] | None = None,
+                       requested: str = "",
+                       subject_profile: dict[str, Any] | None = None
+                       ) -> str:
+    """Decide which of the three model questions a run is answering.
+
+    ``target`` asks whether the model is sound; ``adversarial`` asks what
+    someone could build with it; ``hypothesis`` synthesises the two stored
+    answers into falsifiable claims. An explicit mode always wins, including
+    ``hypothesis`` -- it is never something the wording is allowed to choose,
+    because the flow to run is a property of what the caller asked for, not of
+    how the request was phrased.
+
+    Otherwise the wording decides between the two model questions, and a
+    request that merely says "assess this model" gets the internals path.
+
+    A subject that is not a model at all resolves to ``""`` -- the catalog
+    path, which has no mode. Returning ``target`` for it would file a
+    Stripe API review under the model-internals question, and the busy check
+    (which compares resolved modes) would then let a catalog run and a model
+    run of the same investigation occupy each other's slot.
+
+    The route, the busy check and the engine all call this, so "which
+    assessment is this?" is answered by one function instead of three
+    slightly different ones -- otherwise an auto-mode request could slip past
+    the lock held by the explicit run it actually resolves to.
+    """
+    if requested in ("target", "adversarial", "hypothesis"):
+        return requested
+    profile = subject_profile or profile_model_subject(product, use_case,
+                                                      focus or [])
+    if not profile.get("is_model_query"):
+        return ""
+    return "adversarial" if profile_misuse_intent(
+        product, use_case, focus or [], subject_profile=profile
+    )["is_misuse_query"] else "target"
 
 
 def mermaid_model_flow(product: str, profile: dict[str, Any]) -> str:
@@ -1243,9 +1585,9 @@ def build_assessment(
     focus: Optional[list[str]] = None,
     db: Any = None,
     investigation_id: Any = None,
-    declared_controls: Optional[list[str]] = None,
-    control_plan_override: Optional[dict[str, Any]] = None,
-) -> dict[str, Any]:
+                    declared_controls: Optional[list[str]] = None,
+                    control_plan_override: Optional[dict[str, Any]] = None,
+                    assessment_mode: str = "") -> dict[str, Any]:
     exposure = (exposure or "confidential_data").strip()
     if exposure not in EXPOSURE_META:
         exposure = "confidential_data"
@@ -1284,11 +1626,36 @@ def build_assessment(
     focus = focus or ["accidental_copy", "misclassification"]
     model_profile = profile_model_subject(product_name or "", use_case or "",
                                           focus)
+    if assessment_mode == "hypothesis":
+        # The third flow reads the first two, so it is checked before the
+        # model branch below: it synthesises a model subject's two assessments,
+        # and a non-model subject has no rows for it to read. Runs regardless
+        # of is_model_query so a caller that knows it has stored rows is not
+        # refused on a classifier's say-so.
+        return _build_hypothesis_assessment(
+            product_name=product_name or "Target model",
+            product_url=product_url or "",
+            exposure=exposure, meta=meta, use_case=use_case or "",
+            workflow_text=workflow_text or "", focus=focus, db=db,
+            investigation_id=investigation_id,
+            declared_controls=declared_controls or [],
+            profile=model_profile)
     if model_profile["is_model_query"]:
-        # Separate A2A path: the subject is a model, so catalog threats
-        # written around a writing assistant would mis-frame it. The model
-        # workflow scores internals by dimension weight and maps no
-        # AI-standards frameworks; same result contract, different content.
+        # Two separate assessments for a model subject, never one averaged
+        # number. Mode "target" asks is the model sound; mode "adversarial"
+        # asks what someone could build with it.
+        assessment_mode = resolve_model_mode(
+            product_name or "", use_case or "", focus, assessment_mode,
+            subject_profile=model_profile)
+        if assessment_mode == "adversarial":
+            return _build_adversarial_assessment(
+                product_name=product_name or "Target model",
+                product_url=product_url or "",
+                exposure=exposure, meta=meta, weight=weight,
+                use_case=use_case or "", workflow_text=workflow_text or "",
+                focus=focus, db=db, investigation_id=investigation_id,
+                declared_controls=declared_controls or [],
+                profile=model_profile)
         return _build_model_assessment(
             product_name=product_name or "Target model",
             product_url=product_url or "",
@@ -1525,6 +1892,512 @@ def _build_model_assessment(product_name: str, product_url: str,
         "openshell": [],
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
+
+
+def render_adversarial_markdown(product_name: str, product_url: str,
+                                exposure_label: str, exposure_blurb: str,
+                                use_case: str, profile: dict[str, Any],
+                                scoring: dict[str, Any],
+                                capabilities: list[dict], scenarios: list[dict],
+                                unexploitable: list[str], perspectives: list[dict],
+                                diagrams: dict[str, str], evidence: list[dict],
+                                queries_run: list[str], misuse_sections: str,
+                                exec_paragraph: str, a2a_task_id: str) -> str:
+    """Report markdown for the adversarial-misuse assessment.
+
+    Same skeleton as the model report so the two read as siblings, but the
+    framing is inverted on purpose and stated up front: here the model is the
+    tool in someone else's operation, so the headline is attacker capability
+    and every scenario carries prerequisites. A reader who skips the caveat
+    would otherwise misread a defensive document as an offensive one.
+    """
+    L: list[str] = []
+    A = L.append
+    A(f"# AI Security Assessment — {product_name} (adversarial misuse)")
+    A("")
+    A(f"_Exposure tier:_ **{exposure_label}** · _Path:_ model-misuse "
+      f"({scoring.get('method', '')})")
+    if product_url:
+        A(f"_Product link:_ {product_url}")
+    A("")
+    A("---")
+    A("")
+    A("## Executive summary")
+    A("")
+    A(f"> **Misuse potential: {scoring.get('overall_pct', 0):g}/100 — "
+      f"{scoring.get('posture', '')}**")
+    A(">")
+    A("> This assessment treats the model as an attacker's **tool**, not as a "
+      "vulnerable target. The companion model-internals assessment answers the "
+      "other question — is this model sound? — and carries its own score; the "
+      "two are never averaged, because a well-built model can still be the "
+      "most useful thing in someone else's operation.")
+    A(">")
+    A("> No AI-standards mapping applies on this path: frameworks score controls "
+      "a product has, and the question here is what an absent attacker could do.")
+    if exec_paragraph:
+        A("")
+        A(f"{exec_paragraph}")
+    A("")
+    A("## Subject profile")
+    A("")
+    A(f"_{profile.get('summary') or 'Unclassified model: misuse treated conservatively.'}_")
+    A("")
+    if profile.get("families"):
+        A(f"Family: {', '.join(profile['families'])}.")
+    if profile.get("architectures"):
+        A(f"Architecture: {', '.join(profile['architectures'])}.")
+    if profile.get("data"):
+        A(f"Processes {', '.join(profile['data'])}.")
+    A("")
+    A("## Weightage: how the number is built")
+    A("")
+    A("Weights here follow attacker value, not attacker novelty: a scenario "
+      "scores by how reachable it is and what it yields, and a dimension with "
+      "no derived scenario takes the documented baseline rather than zero — "
+      "unexamined is not harmless.")
+    A("")
+    A("| Dimension | Weight | Score | Contributes |")
+    A("|---|---|---|---|")
+    for d in scoring.get("dimensions", []):
+        A(f"| {d['id']} | {d['weight']:.0%} | {d['score']:.0f} | {d['contribution']:.1f} |")
+    A("")
+    if misuse_sections:
+        A(misuse_sections)
+        A("")
+    if unexploitable:
+        A("## Ruled out by profile")
+        A("")
+        A("Abuse routes this model does not have, from the evidence in the brief:")
+        A("")
+        for x in unexploitable:
+            A(f"- {x}.")
+        A("")
+    if use_case:
+        A(f"Stated use case: {use_case}")
+        A("")
+    A("---")
+    A("")
+    A("_Defensive use only. Scenarios are stated as prerequisites and detection "
+      "signals so the owning team can close them; no step here is an instruction "
+      "to run one._")
+    return "\n".join(L)
+
+
+def _build_adversarial_assessment(product_name: str, product_url: str,
+                                  exposure: str, meta: dict[str, Any],
+                                  weight: float, use_case: str,
+                                  workflow_text: str, focus: list[str],
+                                  db: Any, investigation_id: Any,
+                                  declared_controls: list[str],
+                                  profile: dict[str, Any]) -> dict[str, Any]:
+    """Adversarial-misuse assessment: the second model flow, same result contract.
+
+    Runs agents.run_model_adversarial_a2a_workflow (profiler → adversary →
+    scout → collector → dimension scoring → misuse-reporter) and assembles the
+    same keys build_assessment returns, so persistence, the report UI and the
+    manager compile path work unchanged. What differs is that the stored
+    ``threats`` are engineered scenarios with prerequisites rather than
+    defects, and the headline number is attacker capability. Never merged with
+    the internals path: the two are stored as two rows so both answers survive.
+    """
+    from .agents import run_model_adversarial_a2a_workflow
+    a2a = run_model_adversarial_a2a_workflow(
+        product_name=product_name,
+        use_case=use_case,
+        focus=focus,
+        db=db,
+        investigation_id=investigation_id,
+        exposure_label=meta["label"],
+        exposure=exposure,
+    )
+    scoring = a2a.get("scoring") or {}
+    scenarios = a2a.get("adversarial_scenarios", []) or []
+    capabilities = a2a.get("adversarial_capabilities", []) or []
+    overall_pct = scoring.get("overall_pct", 0)
+    posture = scoring.get("posture", "")
+    control_plan = {"declared_controls": declared_controls or [],
+                    "proposed_controls": [],
+                    "confidence": 0.5,
+                    "source": ("misuse path: the control catalogue describes "
+                               "product controls, not attacker capabilities")}
+
+    def _metric(k: str, v: Any, tone: str = "neutral") -> dict[str, Any]:
+        return {"k": k, "v": v, "tone": tone}
+
+    def _bullet(text: str, tone: str = "neutral") -> dict[str, str]:
+        return {"text": text, "tone": tone}
+
+    top = sorted(scenarios, key=lambda s: -(s.get("inherent_score", 0)))
+    top_cap = max(capabilities,
+                  key=lambda c: c.get("strength", 0), default={})
+    perspectives = [{
+        "key": "adversarial", "label": "Adversarial misuse", "icon": "fa-crosshairs",
+        "headline": (f"{product_name}: misuse potential "
+                     f"{overall_pct:g}/100 across "
+                     f"{len(scoring.get('dimensions', []))} weighted dimensions"),
+        "metrics": [
+            _metric("Misuse potential", f"{overall_pct:g}",
+                    "high" if overall_pct >= 60 else "medium"),
+            _metric("Scenarios", len(scenarios)),
+            _metric("Strongest capability",
+                    top_cap.get("capability", "—")),
+            _metric("Not exploitable", len(a2a.get("adversarial_unexploitable", []))),
+        ],
+        "bullets": [
+            _bullet(f"Sharpest chains: " + "; ".join(
+                f"{s['id']} {s['title'].split(' (from ')[0]}" for s in top[:3]) + "."
+                if top else "No scenarios derived from the brief."),
+            _bullet("No residual: a capability is unavailable only to the "
+                    "people who have not reached it yet. Exposure tier, not "
+                    "control efficacy, is what moves this number."),
+        ],
+        "focus": ["Capabilities", "Attack chains", "Prerequisites"],
+    }]
+    diagrams = {
+        "dataflow": mermaid_misuse_chain(product_name, profile),
+        "threat_paths": "",
+        "workflow": "",
+    }
+    inv_artifacts = _load_investigation_artifacts(db, investigation_id)
+    markdown = render_adversarial_markdown(
+        product_name=product_name, product_url=product_url,
+        exposure_label=meta["label"], exposure_blurb=meta["blurb"],
+        use_case=use_case, profile=profile, scoring=scoring,
+        capabilities=capabilities, scenarios=scenarios,
+        unexploitable=a2a.get("adversarial_unexploitable", []),
+        perspectives=perspectives, diagrams=diagrams,
+        evidence=a2a.get("evidence", []),
+        queries_run=a2a.get("queries_run", []),
+        misuse_sections=a2a.get("misuse_sections", ""),
+        exec_paragraph=a2a.get("exec_paragraph", ""),
+        a2a_task_id=a2a.get("task_id", ""))
+    return {
+        "product_name": product_name,
+        "product_url": product_url,
+        "exposure": exposure,
+        "exposure_label": meta["label"],
+        "overall_pct": overall_pct,
+        "inherent_pct": scoring.get("inherent_pct", overall_pct),
+        "residual_pct": scoring.get("residual_pct", overall_pct),
+        "delta": scoring.get("delta", 0.0),
+        "confidence": 0.5,
+        "posture": posture,
+        "threats": scenarios,
+        "scoring": scoring,
+        "perspectives": perspectives,
+        "control_plan": control_plan,
+        "active_controls": declared_controls or [],
+        "evidence_confidence": {},
+        "diagrams": diagrams,
+        "pages": [],
+        "fetched_count": 0,
+        "markdown": markdown,
+        "evidence": a2a.get("evidence", []),
+        "queries_run": a2a.get("queries_run", []),
+        "artifact_count": len(inv_artifacts),
+        "scope": a2a.get("scope", ""),
+        "known_exploits": [],
+        "exec_paragraph": a2a.get("exec_paragraph", ""),
+        "a2a_trace": a2a.get("a2a_trace", []),
+        "a2a_task_id": a2a.get("task_id", ""),
+        "openshell": [],
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def render_hypothesis_markdown(product_name: str, product_url: str,
+                               exposure_label: str, exposure_blurb: str,
+                               use_case: str, profile: dict[str, Any],
+                               scoring: dict[str, Any],
+                               hypotheses: list[dict[str, Any]],
+                               sources: dict[str, Any],
+                               perspectives: list[dict[str, Any]],
+                               diagrams: dict[str, str],
+                               evidence: list[dict[str, Any]],
+                               queries_run: list[str],
+                               hypothesis_sections: str,
+                               exec_paragraph: str,
+                               a2a_task_id: str) -> str:
+    """Report markdown for the hypothesis-synthesis assessment.
+
+    Opens by stating what the number is NOT, because a third score sitting
+    under two risk scores is exactly the setup where a reader assumes it is
+    the same kind of number. Then the claims, each with its falsifier.
+    """
+    L: list[str] = []
+    A = L.append
+    A(f"# AI Security Assessment — {product_name} (hypotheses)")
+    A("")
+    A(f"_Exposure tier:_ **{exposure_label}** · _Path:_ hypothesis-synthesis "
+      f"({scoring.get('method', '')})")
+    if product_url:
+        A(f"_Product link:_ {product_url}")
+    A("")
+    A("---")
+    A("")
+    A("## What this document is")
+    A("")
+    A("The other two assessments for this model answered two fixed questions: "
+      "is it sound, and what could someone build with it. This one takes their "
+      "output and asks a different question: **which of these statements is "
+      "actually true, and what would settle it.**")
+    A("")
+    A(f"> **Confidence aggregate: {scoring.get('confidence_pct', 0):g}/100**")
+    A(">")
+    A("> This is **not a risk score**, and it does not rank against the other "
+      "two. Higher means the claims below are better evidenced, not that the "
+      "system is more dangerous. A confident hypothesis is one you can act on; "
+      "a shaky one is one you should test before you spend anything on it.")
+    A("")
+    A("> Every claim carries the observation that would **refute** it. A claim "
+      "printed without a refutation is an assertion, and this flow is not "
+      "allowed to produce one.")
+    if sources:
+        A("")
+        A("### Read from")
+        A("")
+        for label, ids in sources.items():
+            A(f"- **{label}** ({len(ids)} row(s)): {', '.join(ids) or 'none'}")
+    if exec_paragraph:
+        A("")
+        A(f"{exec_paragraph}")
+    A("")
+    A("## Subject profile")
+    A("")
+    A(f"_{profile.get('summary') or 'Unclassified model.'}_")
+    A("")
+    A("## Confidence weightage: how the number is built")
+    A("")
+    A("| Dimension | Weight | Score | Contributes |")
+    A("|---|---|---|---|")
+    for d in scoring.get("dimensions", []):
+        A(f"| {d['id']} | {d['weight']:.0%} | {d['score']:.0f} | {d['contribution']:.1f} |")
+    A("")
+    A("The mean is taken across the claim set rather than its best member: a set "
+      "is only as good as the claims in it, and one well-evidenced claim must "
+      "not vouch for nine vague ones.")
+    A("")
+    if hypothesis_sections:
+        A(hypothesis_sections)
+        A("")
+    if hypotheses:
+        A("## Open questions, in the order worth answering them")
+        A("")
+        A("| Claim | Confidence | Stakes if true | Settle it by |")
+        A("|---|---|---|---|")
+        for h in sorted(hypotheses, key=lambda x: -float(x.get("confidence", 0))):
+            A(f"| {h['id']} | {h.get('confidence', 0):g}/100 | "
+              f"{h.get('impact', 0):g}/5 | {h.get('falsifier', 'unstated')} |")
+        A("")
+    A("## Evidence map")
+    A("")
+    A("Where each claim's support came from. A claim sitting on one side only "
+      "was reached by a single question; one with lines from both was reached "
+      "twice, independently.")
+    A("")
+    A("```mermaid")
+    A(mermaid_hypothesis_map(hypotheses).rstrip())
+    A("```")
+    A("")
+    A("## Method and limits")
+    A("")
+    A("- A hypothesis is **untested**. Confidence describes the evidence behind "
+      "it, not a measured likelihood.")
+    A("- The confidence aggregate scores the **claims**, not the system. It is "
+      "not comparable to the internals or misuse scores and must not be "
+      "averaged with them.")
+    A("- Claims are derived from the two stored assessments. Anything those "
+      "flows did not surface cannot appear here, however relevant it may be.")
+    A("- No AI-standards mapping applies, consistent with the other model paths.")
+    if queries_run:
+        A("")
+        A(f"_In-app research: {len(queries_run)} quer"
+          f"{'y' if len(queries_run) == 1 else 'ies'} · scope {scoring.get('scope') or 'all'}_")
+    A("")
+    A("---")
+    A("")
+    A(f"_Generated by the hypothesis-synthesis agent chain · A2A task {a2a_task_id}_")
+    return "\n".join(L) + "\n"
+
+
+def _build_hypothesis_assessment(product_name: str, product_url: str,
+                                 exposure: str, meta: dict[str, Any],
+                                 use_case: str, workflow_text: str,
+                                 focus: list[str], db: Any,
+                                 investigation_id: Any,
+                                 declared_controls: list[str],
+                                 profile: dict[str, Any]) -> dict[str, Any]:
+    """Hypothesis-synthesis assessment: the third flow, same result contract.
+
+    Loads the stored internals and misuse rows for this investigation and hands
+    them to agents.run_hypothesis_a2a_workflow, which drafts falsifiable claims
+    and verifies them. Returns the same top-level keys as build_assessment so
+    storage and the report UI need no new columns.
+
+    Reads the two prior rows rather than re-running their agents: a claim
+    derived from a fresh internals run would not be a claim about the
+    assessment the user actually read, and would silently disagree with the
+    stored numbers whenever the two flows ran against different revisions.
+    """
+    from .agents import run_hypothesis_a2a_workflow
+
+    target_rows, adversarial_rows = _load_prior_model_rows(db, investigation_id)
+    a2a = run_hypothesis_a2a_workflow(
+        product_name=product_name,
+        use_case=use_case,
+        focus=focus,
+        db=db,
+        investigation_id=investigation_id,
+        target_rows=target_rows,
+        adversarial_rows=adversarial_rows,
+    )
+    scoring = a2a.get("scoring") or score_hypotheses({})
+    verified = a2a.get("hypothesis_verified") or []
+    hypotheses = a2a.get("hypotheses") or []
+    confidence_pct = scoring.get("confidence_pct", 0)
+
+    def _metric(k: str, v: Any, tone: str = "neutral") -> dict[str, Any]:
+        return {"k": k, "v": v, "tone": tone}
+
+    def _bullet(text: str, tone: str = "neutral") -> dict[str, str]:
+        return {"text": text, "tone": tone}
+
+    corroborated = [h for h in verified if h.get("cross_flow")]
+    untestable = [h for h in verified
+                  if not str(h.get("falsifier", "")).strip()]
+    top = sorted(verified, key=lambda h: -float(h.get("confidence", 0)))
+    perspectives = [{
+        "key": "hypothesis", "label": "Hypotheses", "icon": "fa-flask",
+        "headline": (f"{product_name}: {len(verified)} claim(s) at "
+                     f"{confidence_pct:g}/100 mean confidence"),
+        "metrics": [
+            _metric("Mean confidence", f"{confidence_pct:g}"),
+            _metric("Claims", len(verified)),
+            _metric("Corroborated by both flows", len(corroborated),
+                    "high" if corroborated else "medium"),
+            _metric("Not yet refutable", len(untestable),
+                    "high" if untestable else "neutral"),
+        ],
+        "bullets": [
+            _bullet("Best-evidenced: " + (f"{top[0]['id']} {top[0]['claim']}"
+                                          if top else "no claims drafted.")),
+            _bullet("A claim with no falsifier cannot be tested and should "
+                    "not be funded until someone names the observation that "
+                    "would settle it."),
+            _bullet("Confidence here is about the claims, not the system. It "
+                    "does not rank against the internals or misuse scores."),
+        ],
+        "focus": ["Claims", "Confidence", "Falsifiers", "Open questions"],
+    }]
+    diagrams = {
+        "dataflow": mermaid_hypothesis_map(verified),
+        "threat_paths": "",
+        "workflow": "",
+    }
+    sources = {
+        "Model internals (flow 1)": [str(r.get("id")) for r in target_rows],
+        "Adversarial misuse (flow 2)": [str(r.get("id")) for r in adversarial_rows],
+    }
+    inv_artifacts = _load_investigation_artifacts(db, investigation_id)
+    markdown = render_hypothesis_markdown(
+        product_name=product_name, product_url=product_url,
+        exposure_label=meta["label"], exposure_blurb=meta["blurb"],
+        use_case=use_case, profile=profile, scoring=scoring,
+        hypotheses=verified, sources=sources, perspectives=perspectives,
+        diagrams=diagrams, evidence=a2a.get("evidence", []),
+        queries_run=a2a.get("queries_run", []),
+        hypothesis_sections=a2a.get("hypothesis_sections", ""),
+        exec_paragraph=a2a.get("exec_paragraph", ""),
+        a2a_task_id=a2a.get("task_id", ""))
+    return {
+        "product_name": product_name,
+        "product_url": product_url,
+        "exposure": exposure,
+        "exposure_label": meta["label"],
+        # overall_pct is the confidence aggregate here. The UI reads
+        # scoring.score_meaning to avoid rendering it as a risk band, and the
+        # method string is hypothesis-synthesis-v1 so no consumer can mistake
+        # it for either of the other two.
+        "overall_pct": confidence_pct,
+        "inherent_pct": confidence_pct,
+        "residual_pct": confidence_pct,
+        "delta": 0.0,
+        "confidence": round(
+            (sum(float(h.get("confidence", 0)) for h in verified) / len(verified)
+             if verified else 0.0) / 100.0, 2),
+        "posture": scoring.get("posture", ""),
+        "threats": verified,
+        "scoring": scoring,
+        "perspectives": perspectives,
+        "control_plan": {"declared_controls": declared_controls or [],
+                         "proposed_controls": [],
+                         "confidence": 0.5,
+                         "source": ("hypothesis path: claims are testable "
+                                    "statements, not catalog controls")},
+        "active_controls": declared_controls or [],
+        "evidence_confidence": {},
+        "diagrams": diagrams,
+        "pages": [],
+        "fetched_count": 0,
+        "markdown": markdown,
+        "evidence": a2a.get("evidence", []),
+        "queries_run": a2a.get("queries_run", []),
+        "artifact_count": len(inv_artifacts),
+        "scope": a2a.get("scope", ""),
+        "known_exploits": [],
+        "exec_paragraph": a2a.get("exec_paragraph", ""),
+        "a2a_trace": a2a.get("a2a_trace", []),
+        "a2a_task_id": a2a.get("task_id", ""),
+        "openshell": [],
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _load_prior_model_rows(db: Any, investigation_id: Any,
+                           ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """The stored internals findings and misuse scenarios for this investigation.
+
+    Returns them as the same row dicts the flows produced, so the drafters see
+    ``dimension``/``title``/``rationale`` exactly as the reports print them.
+    Most recent row per path wins: a re-run supersedes its predecessor, and
+    synthesising across one new and one stale row would claim corroboration
+    between two different revisions of the same assessment.
+    """
+    out: list[list[dict[str, Any]]] = [[], []]
+    if db is None or investigation_id in (None, ""):
+        return out[0], out[1]
+    try:
+        from .models import SecurityAssessment
+
+        recs = (db.query(SecurityAssessment)
+                .filter(SecurityAssessment.investigation_id == int(investigation_id))
+                .order_by(SecurityAssessment.id.desc()).all())
+    except (ValueError, TypeError):
+        return out[0], out[1]
+    seen = {"model": False, "model_adversarial": False}
+    for r in recs:
+        # json.JSONDecodeError only: a broad except here once turned a missing
+        # import into a silent "this investigation has no prior assessments",
+        # and the report cheerfully explained a gap that did not exist.
+        try:
+            path = (json.loads(r.scoring_json or "{}") or {}).get("assessment_path")
+        except (json.JSONDecodeError, AttributeError, TypeError):
+            path = None
+        if path not in ("model", "model_adversarial") or seen.get(path):
+            continue
+        try:
+            rows = json.loads(r.threats_json or "[]")
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if not isinstance(rows, list):
+            continue
+        bucket = 0 if path == "model" else 1
+        out[bucket] = [x for x in rows if isinstance(x, dict)]
+        seen[path] = True
+        if all(seen.values()):
+            break
+    return out[0], out[1]
 
 
 def render_model_markdown(product_name: str, product_url: str,

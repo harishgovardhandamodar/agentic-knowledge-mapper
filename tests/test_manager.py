@@ -701,11 +701,36 @@ class TestManagerIntent(unittest.TestCase):
                  mock.patch.object(mgr, "launch_security_assessment") as la:
                 mgr.run_plan(db, plan, {"research": False, "assessment": True},
                              TABULAR_CMD)
+            # A model subject gets three assessments -- soundness, misuse, and
+            # the hypothesis synthesis over the two -- because the questions
+            # have different agents, weights and meanings. One averaged row
+            # would bury all three answers. The order matters: the third
+            # reads the stored rows of the first two, and the job queue claims
+            # in id order, so it must be queued last.
+            self.assertEqual(la.call_count, 3)
+            modes = [c[0][1]["assessment_mode"] for c in la.call_args_list]
+            self.assertEqual(modes, ["target", "adversarial", "hypothesis"])
+            for call in la.call_args_list:
+                params = call[0][1]
+                self.assertEqual(params["product_name"], "Tabular Foundation Models")
+                self.assertIn("Explicitly out of scope", params["use_case"])
+                self.assertIn("performance", params["use_case"])
+        finally:
+            db.close()
+
+    def test_run_plan_catalog_topic_launches_one_assessment(self):
+        db = SessionLocal()
+        try:
+            plan = mgr.split_command("run security assessments on Stripe "
+                                     "payment flows")
+            with mock.patch.object(mgr, "launch_run"), \
+                 mock.patch.object(mgr, "launch_security_assessment") as la:
+                mgr.run_plan(db, plan, {"research": False, "assessment": True},
+                             "run security assessments on Stripe payment flows")
+            # Not a model: the misuse question does not apply, so it must not
+            # be launched dressed up as if it did.
             self.assertEqual(la.call_count, 1)
-            params = la.call_args[0][1]
-            self.assertEqual(params["product_name"], "Tabular Foundation Models")
-            self.assertIn("Explicitly out of scope", params["use_case"])
-            self.assertIn("performance", params["use_case"])
+            self.assertEqual(la.call_args[0][1]["assessment_mode"], "")
         finally:
             db.close()
 

@@ -125,6 +125,73 @@ AGENT_CARDS: list[dict[str, Any]] = [
         "skills": ["write_model_report"],
         "endpoint": "/api/agents/invoke",
     },
+    {
+        "name": "model-adversary",
+        "protocol": PROTOCOL,
+        "description": (
+            "Turns a model profile into the capabilities an attacker would "
+            "use: what the model lets someone build, infer, or launder. "
+            "Deterministic capability rules when the model is unreachable."
+        ),
+        "skills": ["derive_capabilities"],
+        "endpoint": "/api/agents/invoke",
+    },
+    {
+        "name": "misuse-scout",
+        "protocol": PROTOCOL,
+        "description": (
+            "Engineers adversarial scenarios from the derived capabilities: "
+            "attack chains, prerequisites, and what each one would achieve."
+        ),
+        "skills": ["engineer_scenarios"],
+        "endpoint": "/api/agents/invoke",
+    },
+    {
+        "name": "misuse-reporter",
+        "protocol": PROTOCOL,
+        "description": (
+            "Drafts the misuse report: ranked scenarios, abuse-chain "
+            "diagram, and a grounded executive paragraph."
+        ),
+        "skills": ["write_misuse_report"],
+        "endpoint": "/api/agents/invoke",
+    },
+    # --- flow 3: hypothesis synthesis. Reads the other two flows' output and
+    # turns it into falsifiable claims rather than another score.
+    {
+        "name": "hypothesis-analyst",
+        "protocol": PROTOCOL,
+        "description": (
+            "Reads the internals findings and misuse scenarios and drafts "
+            "falsifiable claims from them: premise, mechanism, consequence, "
+            "and the observation that would refute each one. Deterministic "
+            "cross-flow rules when no model is reachable."
+        ),
+        "skills": ["draft_hypotheses"],
+        "endpoint": "/api/agents/invoke",
+    },
+    {
+        "name": "hypothesis-verifier",
+        "protocol": PROTOCOL,
+        "description": (
+            "Challenges each drafted claim: which evidence supports it, which "
+            "argues against it, and how well-specified its refutation test is. "
+            "A claim with no counter-evidence is flagged, not rewarded."
+        ),
+        "skills": ["verify_hypotheses"],
+        "endpoint": "/api/agents/invoke",
+    },
+    {
+        "name": "hypothesis-reporter",
+        "protocol": PROTOCOL,
+        "description": (
+            "Drafts the hypothesis report: claims with confidence and "
+            "falsifiers, an evidence map, per-claim chain diagrams, and the "
+            "observations that would settle the open questions."
+        ),
+        "skills": ["write_hypothesis_report"],
+        "endpoint": "/api/agents/invoke",
+    },
 ]
 
 
@@ -1581,13 +1648,1537 @@ def _model_dimension_inputs(profile: dict[str, Any],
     return out
 
 
+def _misuse_scenario(sid: str, title: str, dimension: str, goal: str,
+                     chain: list[str], prerequisites: list[str],
+                     achieves: str, feasibility: int, impact: int,
+                     rationale: str, detections: list[str],
+                     mitigations: list[str]) -> dict[str, Any]:
+    """One engineered adversarial scenario, scored for attacker value.
+
+    ``feasibility`` is how reachable the chain is (1 = needs a novel exploit
+    and privileged access, 5 = works with plain query access); ``impact`` is
+    what the attacker gets. Their product is the scenario's weight, because a
+    devastating chain nobody can reach ranks below a modest one they can run
+    today. Deliberately not a "likelihood" -- nothing here describes the
+    model failing on its own.
+    """
+    from .security import _severity
+    feasibility = max(1, min(5, int(feasibility)))
+    impact = max(1, min(5, int(impact)))
+    score = float(feasibility * impact)
+    return {
+        "id": sid, "title": title, "dimension": dimension,
+        "stride": "abuse", "owasp": "LLM/ML misuse",
+        "attacker_goal": goal, "chain": list(chain),
+        "prerequisites": list(prerequisites), "achieves": achieves,
+        "feasibility": float(feasibility), "impact": float(impact),
+        "likelihood": float(feasibility), "inherent_score": score,
+        "residual_score": score, "residual_severity": _severity(score),
+        "coverage": 0.0, "controls": [], "applicable": True,
+        "applicability": 1.0, "rationale": rationale,
+        "detections": list(detections), "mitigations": list(mitigations),
+    }
+
+
+# Deterministic capability derivation: what the profile says an attacker can
+# DO with this model. Families map to the abuse each one's native capability
+# affords, so "Tabular foundation models" yields a scoring oracle, a
+# membership oracle and a schema oracle without naming a product. Every
+# capability is traceable to a profile signal; nothing is asserted about a
+# model whose profile says nothing.
+def _model_capability_fallback(profile: dict[str, Any]) -> tuple[list[dict], list[str]]:
+    caps: list[dict[str, Any]] = []
+    unexploitable: list[str] = []
+    data = " ".join(profile.get("data", []))
+    families = [f.lower() for f in profile.get("families", [])]
+    cls = profile.get("model_class", "unknown")
+    tabular = "tabular" in data
+    generative = cls == "generative" or "diffusion" in profile.get("architectures", [])
+    conversational = profile.get("interface") == "conversational"
+    pretrained = cls in ("foundation", "pretrained", "pretrained encoder",
+                         "pretrained encoder-decoder", "large generative")
+
+    if tabular:
+        caps.append({"id": "C01", "capability": "batch scoring oracle",
+                     "dimension": "capability_abuse", "strength": 4,
+                     "basis": "tabular scoring interface accepts arbitrary row batches",
+                     "gives": "attacker-chosen inputs scored at scale"})
+        caps.append({"id": "C02", "capability": "membership oracle",
+                     "dimension": "data_recon", "strength": 4,
+                     "basis": "predictions on candidate rows reveal training membership",
+                     "gives": "confirmation that a specific record was in training"})
+        caps.append({"id": "C03", "capability": "schema and distribution oracle",
+                     "dimension": "data_recon", "strength": 3,
+                     "basis": "output distributions expose column semantics and ranges",
+                     "gives": "reconstruction of the training schema and class balance"})
+        caps.append({"id": "C04", "capability": "downstream decision manipulation",
+                     "dimension": "capability_abuse", "strength": 4,
+                     "basis": "tabular predictions gate credit, fraud and clinical decisions",
+                     "gives": "targeted inputs engineered to flip a real decision"})
+        caps.append({"id": "C05", "capability": "adversarial row synthesis",
+                     "dimension": "manipulation", "strength": 4,
+                     "basis": "searchable input space lets an attacker hill-climb rows",
+                     "gives": "rows that evade a screening classifier while keeping the label"})
+        caps.append({"id": "C06", "capability": "model extraction by distillation",
+                     "dimension": "capability_abuse", "strength": 3,
+                     "basis": "deterministic outputs support query-based surrogate training",
+                     "gives": "a functional copy that inherits the IP but not the controls"})
+    if generative:
+        caps.append({"id": "C07", "capability": "unbounded synthetic content",
+                     "dimension": "capability_abuse", "strength": 5,
+                     "basis": "generative class produces content at scale",
+                     "gives": "synthetic identities, documents or media at volume"})
+        caps.append({"id": "C08", "capability": "identity and narrative laundering",
+                     "dimension": "evasion", "strength": 4,
+                     "basis": "generated text passes authorship and plausibility checks",
+                     "gives": "content that survives review while carrying the attacker's framing"})
+    if conversational:
+        caps.append({"id": "C09", "capability": "instruction-hijacked output",
+                     "dimension": "evasion", "strength": 5,
+                     "basis": "chat interface accepts adversarial instructions as input",
+                     "gives": "model output steered away from its operator's intent"})
+        caps.append({"id": "C10", "capability": "cross-tenant context bleed",
+                     "dimension": "data_recon", "strength": 3,
+                     "basis": "shared model serves many sessions",
+                     "gives": "one user's data surfacing in another's session"})
+    elif profile.get("interface") != "unknown":
+        # No chat surface, so the conversational attack surface is absent --
+        # stated from the profile rather than left for a reader to infer.
+        unexploitable.append(
+            "conversational prompt injection via the UI (no chat surface)")
+    if pretrained:
+        caps.append({"id": "C11", "capability": "inherited upstream capability",
+                     "dimension": "capability_abuse", "strength": 3,
+                     "basis": "pretrained class carries capabilities trained elsewhere",
+                     "gives": "capability the deploying org never evaluated"})
+    if profile.get("personal_data"):
+        caps.append({"id": "C12", "capability": "attribute inference",
+                     "dimension": "data_recon", "strength": 4,
+                     "basis": "personal data present: predictions correlate with withheld traits",
+                     "gives": "sensitive attributes inferred for people who withheld them"})
+    else:
+        unexploitable.append(
+            "personal-attribute inference (no personal-data signal in profile)")
+    if "tabular" in data:
+        # Quasi-identifier re-identification is a structured-data phenomenon:
+        # a handful of columns plus an external dataset is the whole attack, and
+        # it needs the row/column structure an image or audio model lacks.
+        caps.append({"id": "C13", "capability": "record deanonymization",
+                     "dimension": "evasion", "strength": 4,
+                     "basis": "quasi-identifiers in tabular data survive 'anonymization'",
+                     "gives": "re-identifying supposedly anonymized records"})
+    if "audio" in data:
+        caps.append({"id": "C15", "capability": "voice synthesis and speaker ID",
+                     "dimension": "capability_abuse", "strength": 4,
+                     "basis": "audio-in, audio-out model reproduces a voice",
+                     "gives": "cloned voice for fraud, or a named speaker from a recording"})
+    if "images" in data:
+        caps.append({"id": "C16", "capability": "synthetic identity imagery",
+                     "dimension": "evasion", "strength": 4,
+                     "basis": "image models produce photorealistic faces on demand",
+                     "gives": "faces and documents that pass a human check"})
+    if profile.get("trains_on_data"):
+        caps.append({"id": "C14", "capability": "clean-label poisoning entry",
+                     "dimension": "manipulation", "strength": 3,
+                     "basis": "training data reachable wherever the pipeline ingests it",
+                     "gives": "backdoored behaviour that looks like ordinary training error"})
+    if not caps:
+        caps.append({"id": "C00", "capability": "no capability derivable from brief",
+                     "dimension": "capability_abuse", "strength": 1,
+                     "basis": "profile carries no family, class, data or interface signal",
+                     "gives": "nothing asserted; supply architecture and interface detail"})
+    return caps, unexploitable
+
+
+def model_adversary_handle(env: dict[str, Any], db: Any = None) -> dict[str, Any]:
+    """Intent ``derive_capabilities``: what could someone build with this?
+
+    Reads the profile the model-profiler already produced and names the
+    capabilities an attacker would actually reach for, each tied to the
+    profile signal that justifies it. LLM first, deterministic profile rules on
+    failure -- a down gateway must not silently produce zero capabilities,
+    because zero would read as "this model is useless to an attacker".
+    """
+    from . import security as sec
+    payload = env.get("payload", {})
+    product = payload.get("product_name", "the model")
+    use_case = payload.get("use_case", "")
+    focus = payload.get("focus") or []
+    profile = payload.get("profile") or sec.profile_model_subject(
+        product, use_case, focus)
+    caps, unexploitable = _model_capability_fallback(profile)
+    source = "deterministic capability rules (no LLM)"
+    try:
+        from . import llm as _llm
+        sys_p = (
+            "You are an adversary-in-residence modelling what an attacker can "
+            "BUILD WITH a machine-learning model -- not how to break it. The "
+            "model is the tool, not the target. "
+            f"Profile: {profile['summary'] or 'unclassified model'}. "
+            "Reply with STRICT JSON only: {\"capabilities\": [{\"id\": \"C##\", "
+            "\"capability\": str (what the attacker does), "
+            "\"dimension\": one of capability_abuse | data_recon | evasion | "
+            "manipulation | abuse_persistence, \"strength\": 1-5, "
+            "\"basis\": str (the model property that makes it possible), "
+            "\"gives\": str (what the attacker walks away with)}]}. "
+            "Only cite properties the profile states. If the profile is thin, "
+            "return fewer capabilities, not invented ones."
+        )
+        user_p = (f"Model: {product}\nUse: {use_case}\n"
+                  f"Profile: {profile['summary'] or 'unclassified'}\n"
+                  f"Family: {', '.join(profile['families']) or 'unknown'}\n"
+                  f"Class: {profile['model_class']}\n"
+                  f"Architecture: {', '.join(profile['architectures']) or 'unknown'}\n"
+                  f"Data: {', '.join(profile['data']) or 'unknown'}\n"
+                  f"Interface: {profile['interface']}\n"
+                  f"Focus: {', '.join(focus) or 'none stated'}")
+        raw = _llm.chat([{"role": "system", "content": sys_p},
+                         {"role": "user", "content": user_p}],
+                        temperature=0.1, max_tokens=1200).strip()
+        m = re.search(r"\{.*\}", raw, re.S)
+        if not m:
+            raise ValueError("model did not return a capabilities object")
+        data = json.loads(m.group(0))
+        valid = {d[0] for d in sec.ADVERSARIAL_DIMENSIONS}
+        llm_caps = []
+        for i, c in enumerate(data.get("capabilities") or [], 1):
+            if not isinstance(c, dict) or not c.get("capability"):
+                continue
+            dim = str(c.get("dimension") or "capability_abuse")
+            if dim not in valid:
+                dim = "capability_abuse"
+            llm_caps.append({
+                "id": str(c.get("id") or f"C{i:02d}"),
+                "capability": str(c["capability"])[:140], "dimension": dim,
+                "strength": max(1, min(5, int(c.get("strength", 3)))),
+                "basis": str(c.get("basis") or "LLM-proposed")[:240],
+                "gives": str(c.get("gives") or "unstated")[:240]})
+        if llm_caps:
+            caps = llm_caps
+            source = "model-adversary via LLM gateway"
+    except Exception as exc:
+        source = f"deterministic capability rules (LLM unavailable: {exc})"
+    return reply_envelope(
+        env, "model-adversary", "capabilities_derived",
+        {"capabilities": caps, "unexploitable": unexploitable,
+         "profile": profile, "source": source},
+        note=(f"{len(caps)} attacker capabilities, "
+              f"{len(unexploitable)} ruled out ({source})"),
+    )
+
+
+# Deterministic scenario engineering: each capability becomes an attack chain
+# with prerequisites and an outcome. Written per capability id so the
+# fallback answer is specific to the model family rather than a template.
+_MISUSE_SCENARIO_RULES: dict[str, tuple[dict[str, Any], ...]] = {
+    "C01": (
+        {"title": "Churn injection through the scoring API",
+         "goal": "shift a production model's decisions on a target population",
+         "chain": ["enumerate the reachable endpoint and its rate limits",
+                   "generate candidate row batches matching the expected schema",
+                   "score them and keep rows that flip the target decision",
+                   "submit the surviving rows in volume"],
+         "prerequisites": ["an inference endpoint that accepts arbitrary rows",
+                           "knowledge of the input schema and the decision to flip"],
+         "achieves": "targeted decision flips on real applicants or accounts",
+         "feasibility": 4, "impact": 5,
+         "rationale": "a scoring API is a free oracle; batch throughput turns one query into thousands",
+         "detections": ["per-entity score volume spikes", "impossible input distributions"],
+         "mitigations": ["per-entity rate limits", "schema and value-range validation at the edge",
+                         "drift alarms on decision distribution"]},
+    ),
+    "C02": (
+        {"title": "Training-membership confirmation as a privacy oracle",
+         "goal": "confirm whether a specific person's record was used in training",
+         "chain": ["choose candidate records from a known population",
+                   "score them and neighbouring perturbations",
+                   "compare confidence or loss across the perturbations",
+                   "keep records whose scores separate from the population"],
+         "prerequisites": ["query access to the model's outputs",
+                           "candidate records whose membership matters"],
+         "achieves": "a membership test anyone can run at scale, on real people",
+         "feasibility": 4, "impact": 4,
+         "rationale": "membership is a property of the output distribution, not of any secret",
+         "detections": ["high-volume repeated scoring of near-duplicate rows"],
+         "mitigations": ["round or clip outputs", "k-anonymity gates on near-duplicate queries",
+                         "membership-inference testing before release"]},
+        {"title": "Differential privacy accounting to find under-protected records",
+         "goal": "isolate the individuals whose data was least protected during training",
+         "chain": ["query the model on a candidate population",
+                   "measure per-record score deviation from the population mean",
+                   "rank records by deviation",
+                   "treat the extremes as the least-protected records"],
+         "prerequisites": ["query access", "a population to rank"],
+         "achieves": "an ordering of people's privacy exposure",
+         "feasibility": 3, "impact": 4,
+         "rationale": "where the noise budget was thin, the output says so",
+         "detections": ["repeating query patterns over small populations"],
+         "mitigations": ["uniform per-subject noise floors", "query-set size limits"]},
+    ),
+    "C03": (
+        {"title": "Training schema and distribution reconstruction",
+         "goal": "rebuild the training schema, ranges and class balance",
+         "chain": ["submit single-feature sweeps with all other fields neutral",
+                   "read the score response per feature",
+                   "infer feature semantics, ranges and monotone relationships",
+                   "repeat until the response surface is mapped"],
+         "prerequisites": ["query access to a model trained on the target data"],
+         "achieves": "a working map of a dataset the attacker never saw",
+         "feasibility": 5, "impact": 3,
+         "rationale": "outputs encode what the model learned; one sweep at a time is enough",
+         "detections": ["systematic single-feature sweeps from one source"],
+         "mitigations": ["return predictions without confidence where unused",
+                         "coarsen outputs to buckets", "per-session query budgets"]},
+    ),
+    "C04": (
+        {"title": "Adversarial row synthesis to defeat downstream screening",
+         "goal": "keep a record's true label while making it pass a risk classifier",
+         "chain": ["obtain the screening model's gradients or query feedback",
+                   "hill-climb input features against the screening decision",
+                   "verify the crafted row keeps the real-world outcome",
+                   "repeat across the record population"],
+         "prerequisites": ["query access to the screening model",
+                           "an objective that survives the crafted inputs"],
+         "achieves": "records that defeat automated screening while staying effective",
+         "feasibility": 4, "impact": 5,
+         "rationale": "screening models are optimisation targets, not walls",
+         "detections": ["inputs with adversarial feature interaction signatures",
+                        "low naturalness for high-score records"],
+         "mitigations": ["input sanitization and plausibility constraints",
+                         "ensemble screening with a non-differentiable check",
+                         "manual review of high-value overrides"]},
+    ),
+    "C05": (
+        {"title": "Silent contamination of a future training set",
+         "goal": "plant records that shape the next training round",
+         "chain": ["identify where unlabeled records enter the pipeline",
+                   "craft records that are individually plausible",
+                   "wait for them to be labeled by a model or a weak reviewer",
+                   "watch the behaviour change in the next version"],
+         "prerequisites": ["a path to influence ingestion", "a labeling step that is not human-only"],
+         "achieves": "attacker-chosen behaviour inside a model nobody re-reviewed",
+         "feasibility": 2, "impact": 5,
+         "rationale": "poisoning needs a supply-chain position, not a query",
+         "detections": ["label-distribution drift on ingested records",
+                        "canary behaviour checks per model version"],
+         "mitigations": ["human-only labeling for sensitive fields",
+                         "ingestion provenance and dedup", "per-version behaviour diffs"]},
+    ),
+    "C06": (
+        {"title": "Query-based model extraction",
+         "goal": "rebuild a functional copy of a proprietary model",
+         "chain": ["sample a query set over the input space",
+                   "query the target and record label or score pairs",
+                   "train a surrogate on the pairs",
+                   "transfer the surrogate's capability to the attacker's product"],
+         "prerequisites": ["high query volume", "a representative query distribution"],
+         "achieves": "a competing model that inherits the target's capability",
+         "feasibility": 4, "impact": 4,
+         "rationale": "extraction needs volume, not access to weights",
+         "detections": ["query distributions far from production traffic",
+                        "sudden label-distribution diversity"],
+         "mitigations": ["query budgets per account", "watermark outputs", "canary queries"]},
+    ),
+    "C07": (
+        {"title": "Volume content abuse with no human in the loop",
+         "goal": "produce material at a scale no review process can absorb",
+         "chain": ["drive the model with templated but varied prompts",
+                   "batch the generations",
+                   "filter output with the same class of model",
+                   "publish at volume"],
+         "prerequisites": ["generation access", "any downstream channel"],
+         "achieves": "spam, fraud listings or propaganda past human review",
+         "feasibility": 5, "impact": 4,
+         "rationale": "generation cost is the only real limit, and it keeps falling",
+         "detections": ["burst generation patterns", "near-duplicate output clusters"],
+         "mitigations": ["provenance marking on generated content",
+                         "rate limits per account", "detonation limits downstream"]},
+    ),
+    "C08": (
+        {"title": "Laundered identity and fabricated provenance",
+         "goal": "have a model vouch for something the attacker wrote",
+         "chain": ["generate a plausible technical artifact or reference",
+                   "reference it as independent third-party validation",
+                   "lean on downstream actors who trust the surface"],
+         "prerequisites": ["generation access", "a process that trusts generated text"],
+         "achieves": "attack framing that arrives pre-validated by a machine",
+         "feasibility": 4, "impact": 3,
+         "rationale": "the laundering works wherever nobody checks whether the source is the model",
+         "detections": ["citations with no resolvable provenance"],
+         "mitigations": ["require retrievable sources", "mark generated content"]},
+    ),
+    "C09": (
+        {"title": "Operator-instruction hijack at the chat surface",
+         "goal": "make a deployed assistant act against its operator's policy",
+         "chain": ["frame the request as a system or developer message",
+                   "carry the payload inside retrieved or quoted content",
+                   "let the model answer the injected instruction",
+                   "act on the output inside the operator's own trust boundary"],
+         "prerequisites": ["a chat surface", "untrusted content reaching the context"],
+         "achieves": "policy bypass performed by the operator's own assistant",
+         "feasibility": 4, "impact": 5,
+         "rationale": "the model cannot tell its operator from an attacker who quotes one",
+         "detections": ["instruction-shaped inputs in user content",
+                        "policy refusals followed by compliant output"],
+         "mitigations": ["privilege separation for tool calls", "output-side policy checks",
+                         "treat retrieved text as untrusted data, never as instructions"]},
+    ),
+    "C10": (
+        {"title": "Cross-session data bleed on a shared model",
+         "goal": "read another user's data through shared serving state",
+         "chain": ["probe for state that survives a session boundary",
+                   "seed the context with a canary",
+                   "read the canary back in a later session"],
+         "prerequisites": ["multi-tenant serving", "a stateful context path"],
+         "achieves": "one tenant's data served to another",
+         "feasibility": 2, "impact": 5,
+         "rationale": "shared weights plus sloppy session state is the whole bug class",
+         "detections": ["canary leakage tests per release"],
+         "mitigations": ["hard session isolation", "no cross-session caches on shared weights",
+                         "adversarial canary suite in CI"]},
+    ),
+    "C11": (
+        {"title": "Undeclared upstream capability",
+         "goal": "use behaviour the deploying organisation never evaluated",
+         "chain": ["probe the deployed model for upstream-known capabilities",
+                   "compare against the local evaluation record",
+                   "exploit the difference"],
+         "prerequisites": ["query access", "a gap between upstream evals and local ones"],
+         "achieves": "capability discovered in production",
+         "feasibility": 3, "impact": 3,
+         "rationale": "inherited weights bring inherited behaviour",
+         "detections": ["capability probes from unusual clients"],
+         "mitigations": ["evaluate the deployed artefact, not the upstream card",
+                         "pin weights by hash", "re-eval on every version bump"]},
+    ),
+    "C12": (
+        {"title": "Infer withheld attributes from model outputs",
+         "goal": "learn a sensitive trait about someone who never disclosed it",
+         "chain": ["assemble features known to correlate with the target trait",
+                   "score the subject",
+                   "read the trait from the score shape"],
+         "prerequisites": ["personal data in training or serving", "query access"],
+         "achieves": "a protected attribute for a person who withheld it",
+         "feasibility": 4, "impact": 5,
+         "rationale": "predictions leak the training distribution, not just the label",
+         "detections": ["attribute-inference evaluation before release"],
+         "mitigations": ["suppress attribute-correlated outputs", "train on minimized features",
+                         "document residual inference risk"]},
+    ),
+    "C13": (
+        {"title": "Re-identification of 'anonymized' records",
+         "goal": "attach names to records believed anonymous",
+         "chain": ["predict each quasi-identifier from the released model",
+                   "match predictions against external data",
+                   "join on the surviving quasi-identifiers"],
+         "prerequisites": ["a release that kept quasi-identifiers", "an external dataset to join"],
+         "achieves": "named individuals from data published as anonymous",
+         "feasibility": 4, "impact": 5,
+         "rationale": "anonymization that keeps the model's strongest features is not anonymization",
+         "detections": ["k-anonymity and uniqueness checks before release"],
+         "mitigations": ["l-diversity before release", "suppress rare-combination outputs",
+                         "drop quasi-identifiers that predict identity"]},
+    ),
+    "C14": (
+        {"title": "Clean-label backdoor via the training pipeline",
+         "goal": "install triggerable behaviour in a model trained on attacker records",
+         "chain": ["craft records that look clean but carry a trigger pattern",
+                   "get them labeled by an automated step",
+                   "train the next version on the poisoned set",
+                   "activate the trigger on demand"],
+         "prerequisites": ["ingestion influence", "automated labeling"],
+         "achieves": "a backdoor that passes every review gate",
+         "feasibility": 2, "impact": 5,
+         "rationale": "the trigger is invisible until used",
+         "detections": ["trigger-hunting per version", "label-flip analysis on ingested data"],
+         "mitigations": ["human verification for sensitive labeling",
+                         "trigger-hunting suite in CI", "signed datasets"]},
+    ),
+    "C15": (
+        {"title": "Voice clone for account takeover",
+         "goal": "authenticate as a customer using their voice",
+         "chain": ["obtain a short sample of the target's voice",
+                   "synthesize matching speech for the expected phrase",
+                   "place the call into a channel that trusts voice as proof",
+                   "let the clone satisfy the check"],
+         "prerequisites": ["a voice sample in any public recording",
+                           "a voice-based authentication step"],
+         "achieves": "account takeover without ever touching the victim's device",
+         "feasibility": 3, "impact": 5,
+         "rationale": "voice is treated as strong evidence, and synthesis no longer needs a lot of audio",
+         "detections": ["synthesis artifacts in the audio channel",
+                        "liveness checks absent on accepted calls"],
+         "mitigations": ["liveness challenges in the call path",
+                         "callback to a number on file", "out-of-band confirmation"]},
+        {"title": "Speaker identification against an audio corpus",
+         "goal": "name the speaker in recorded material",
+         "chain": ["segment the recording into speakers",
+                   "embed each segment",
+                   "match embeddings against a reference set",
+                   "attach names to the recording"],
+         "prerequisites": ["a recording with speech", "a reference voice sample"],
+         "achieves": "identification of people in audio the operator assumed was anonymous",
+         "feasibility": 3, "impact": 4,
+         "rationale": "speaker ID is a solved task the moment the model is reachable",
+         "detections": ["embedding queries over long audio"],
+         "mitigations": ["strip speaker embeddings from public audio",
+                         "log and review embedding-API access"]},
+    ),
+    "C16": (
+        {"title": "Fabricated identity documents and faces",
+         "goal": "produce a convincing identity artefact",
+         "chain": ["prompt an image model for a document or face",
+                   "iterate until it passes visual inspection",
+                   "submit it to a process that checks appearance only"],
+         "prerequisites": ["image generation access", "a process without strong document verification"],
+         "achieves": "a synthetic identity that defeats a human reviewer",
+         "feasibility": 4, "impact": 5,
+         "rationale": "appearance checks were never a security boundary",
+         "detections": ["document re-upload and forgery detection",
+                        "metadata inconsistency checks"],
+         "mitigations": ["cryptographically verifiable credentials",
+                         "database verification of the claimed identity",
+                         "liveness capture rather than uploaded images"]},
+    ),
+    "C00": (
+        {"title": "Misuse surface undetermined from the brief",
+         "goal": "n/a",
+         "chain": ["supply the model's family, interface and data types",
+                   "re-run the misuse assessment"],
+         "prerequisites": ["a fuller brief"],
+         "achieves": "nothing asserted",
+         "feasibility": 1, "impact": 1,
+         "rationale": "profile carried no capability signal; a confident scenario would be fiction",
+         "detections": ["n/a"],
+         "mitigations": ["document architecture, interface and training data sources"]},
+    ),
+}
+
+
+def misuse_scout_handle(env: dict[str, Any], db: Any = None) -> dict[str, Any]:
+    """Intent ``engineer_scenarios``: capabilities turned into attack chains.
+
+    Each scenario is only as strong as its capability: the profile decides
+    which chains exist, and this agent supplies the chain, the prerequisites
+    and the outcome. Never invents a capability the adversary did not derive.
+    """
+    from . import security as sec
+    payload = env.get("payload", {})
+    product = payload.get("product_name", "the model")
+    use_case = payload.get("use_case", "")
+    focus = payload.get("focus") or []
+    profile = payload.get("profile") or sec.profile_model_subject(
+        product, use_case, focus)
+    caps = payload.get("capabilities") or []
+    scenarios: list[dict[str, Any]] = []
+    n = 0
+    for cap in caps:
+        rules = _MISUSE_SCENARIO_RULES.get(str(cap.get("id", "")), ())
+        for rule in rules:
+            n += 1
+            scenarios.append(_misuse_scenario(
+                f"A{n:02d}",
+                f"{rule['title']} (from {cap.get('capability', 'capability')})",
+                str(cap.get("dimension") or "capability_abuse"),
+                rule["goal"], rule["chain"], rule["prerequisites"],
+                rule["achieves"], rule["feasibility"], rule["impact"],
+                f"{rule['rationale']}; capability basis: {cap.get('basis', 'unstated')}",
+                rule["detections"], rule["mitigations"]))
+    source = "deterministic scenario catalogue (no LLM)"
+    try:
+        from . import llm as _llm
+        cap_txt = "\n".join(
+            f"- {c.get('id')}: {c.get('capability')} (dim {c.get('dimension')}, "
+            f"strength {c.get('strength')}) — {c.get('basis')}"
+            for c in caps) or "- none derived"
+        sys_p = (
+            "You are a red-team planner. Turn the ATTACKER CAPABILITIES below "
+            "into concrete adversarial scenarios against a machine-learning "
+            "model. The model is the tool, not the target: every scenario must "
+            "read as 'someone builds X with this model', never 'the model is "
+            "broken'. Never invent a capability that is not listed. "
+            "Reply with STRICT JSON only: {\"scenarios\": [{\"title\": str, "
+            "\"dimension\": one of capability_abuse | data_recon | evasion | "
+            "manipulation | abuse_persistence, \"attacker_goal\": str, "
+            "\"chain\": [str] (ordered steps), \"prerequisites\": [str], "
+            "\"achieves\": str, \"feasibility\": 1-5 (how reachable), "
+            "\"impact\": 1-5, \"rationale\": str, \"detections\": [str], "
+            "\"mitigations\": [str]}]}."
+        )
+        user_p = (f"Model: {product}\nUse: {use_case}\n"
+                  f"Profile: {profile.get('summary') or 'unclassified'}\n"
+                  f"Interface: {profile['interface']}\n"
+                  f"Data: {', '.join(profile.get('data') or []) or 'unknown'}\n"
+                  f"Focus: {', '.join(focus) or 'none stated'}\n"
+                  f"Attacker capabilities:\n{cap_txt}")
+        raw = _llm.chat([{"role": "system", "content": sys_p},
+                         {"role": "user", "content": user_p}],
+                        temperature=0.15, max_tokens=1600).strip()
+        m = re.search(r"\{.*\}", raw, re.S)
+        if not m:
+            raise ValueError("model did not return a scenarios object")
+        data = json.loads(m.group(0))
+        valid = {d[0] for d in sec.ADVERSARIAL_DIMENSIONS}
+        llm_sc = []
+        for i, s in enumerate(data.get("scenarios") or [], 1):
+            if not isinstance(s, dict) or not s.get("title"):
+                continue
+            dim = str(s.get("dimension") or "capability_abuse")
+            if dim not in valid:
+                dim = "capability_abuse"
+            llm_sc.append(_misuse_scenario(
+                f"A{i:02d}", str(s["title"])[:160], dim,
+                str(s.get("attacker_goal") or "unstated")[:200],
+                [str(x)[:200] for x in (s.get("chain") or [])][:6],
+                [str(x)[:200] for x in (s.get("prerequisites") or [])][:5],
+                str(s.get("achieves") or "unstated")[:240],
+                s.get("feasibility", 3), s.get("impact", 3),
+                str(s.get("rationale") or "LLM-proposed scenario")[:300],
+                [str(x)[:160] for x in (s.get("detections") or [])][:4],
+                [str(x)[:160] for x in (s.get("mitigations") or [])][:4]))
+        if llm_sc:
+            scenarios = llm_sc
+            source = "misuse-scout via LLM gateway"
+    except Exception as exc:
+        source = f"deterministic scenario catalogue (LLM unavailable: {exc})"
+    scenarios.sort(key=lambda s: -s["inherent_score"])
+    return reply_envelope(
+        env, "misuse-scout", "scenarios_engineered",
+        {"scenarios": scenarios, "source": source},
+        note=(f"{len(scenarios)} adversarial scenarios "
+              f"(top {scenarios[0]['inherent_score']:g}/25)" if scenarios
+              else "0 scenarios") + f" ({source})",
+    )
+
+
+def misuse_reporter_handle(env: dict[str, Any], db: Any = None) -> dict[str, Any]:
+    """Intent ``write_misuse_report``: ranked scenarios + abuse chain.
+
+    Same grounding discipline as the other reporters: the executive paragraph
+    must cite only artifact ids that exist, or the deterministic fallback
+    ships instead of confident fiction.
+    """
+    payload = env.get("payload", {})
+    product = payload.get("product_name", "the model")
+    exposure_label = payload.get("exposure_label", "")
+    profile = payload.get("profile", {}) or {}
+    capabilities = payload.get("capabilities", []) or []
+    scenarios = payload.get("scenarios", []) or []
+    evidence = payload.get("evidence", []) or []
+    scoring = payload.get("scoring", {}) or {}
+    lines: list[str] = []
+    A = lines.append
+    A(f"## What this model is, as a tool — {product}")
+    A("")
+    A(f"_{profile.get('summary') or 'Unclassified model: misuse treated conservatively.'}_")
+    A("")
+    A("This assessment asks the second question. The first one — *is this "
+      "model sound?* — is a separate assessment with its own score; the "
+      "number below is not that number. A model can be perfectly well built "
+      "and still be the most valuable tool in someone else's operation.")
+    A("")
+    A("### Attacker capabilities")
+    A("")
+    for c in capabilities:
+        A(f"- **{c.get('id')} {c.get('capability')}** (strength "
+          f"{c.get('strength')}/5) — {c.get('gives', 'unstated')}. "
+          f"_Basis:_ {c.get('basis', 'unstated')}.")
+    if not capabilities:
+        A("- none derivable from the brief.")
+    A("")
+    A("## Misuse potential (weighted dimensions)")
+    A("")
+    for d in scoring.get("dimensions", []):
+        A(f"- **{d['id']}** ({d['weight']:.0%} weight): **{d['score']:.0f}/100**.")
+    A("")
+    A("## Engineered adversarial scenarios")
+    A("")
+    for s in scenarios:
+        A(f"### {s['id']} — {s['title']}")
+        A("")
+        A(f"_Goal:_ {s['attacker_goal']} · _Achieves:_ {s['achieves']} "
+          f"· _Reachability_ {s['feasibility']:g}/5, _impact_ {s['impact']:g}/5 "
+          f"(severity {s['residual_severity']}).")
+        A("")
+        A("Chain:")
+        for i, step in enumerate(s["chain"], 1):
+            A(f"{i}. {step}")
+        if s["prerequisites"]:
+            A("")
+            A(f"_Prerequisites:_ {'; '.join(s['prerequisites'])}.")
+        if s["detections"]:
+            A("")
+            A(f"_Would show up as:_ {'; '.join(s['detections'])}.")
+        if s["mitigations"]:
+            A("")
+            A(f"_What actually helps:_ {'; '.join(s['mitigations'])}.")
+        A("")
+    if not scenarios:
+        A("No adversarial scenarios derived from the brief.")
+        A("")
+    exec_paragraph = ""
+    try:
+        from . import llm as _llm
+        ev_txt = "\n".join(
+            f"- #{e['artifact_id']} {e['title']} (rel {e.get('relevance')})"
+            for e in sorted(evidence, key=lambda e: -e.get("relevance", 0))[:6]) or "- none"
+        sys = ("You are a red-team lead writing one executive paragraph on what "
+               "an attacker could BUILD WITH a machine-learning model. The model "
+               "is the tool, not the target. Be concrete, cite evidence by "
+               "artifact #id, and say what would have to be true for the worst "
+               "scenario to work. Reply with the paragraph only.")
+        user = (f"Model: {product} ({profile.get('summary') or 'unclassified'})\n"
+                f"Exposure tier: {exposure_label}\n"
+                f"Misuse potential: {scoring.get('overall_pct', 0):g}/100 "
+                f"({scoring.get('method', 'model-misuse-v1')})\n"
+                f"Top scenarios: "
+                + ("; ".join(f"{s['id']} {s['title']} ({s['inherent_score']:g}/25)"
+                             for s in scenarios[:3]) or "none") + "\n"
+                f"In-app evidence:\n{ev_txt}\n\n"
+                "Write 3-4 sentences: what the model is useful to an attacker, "
+                "the sharpest chain, and the one prerequisite that would break it.")
+        text = _llm.chat([{"role": "system", "content": sys},
+                          {"role": "user", "content": user}],
+                         temperature=0.2, max_tokens=512).strip()
+        check = grounding.verify_citation_ids(
+            text, [e.get("artifact_id") for e in evidence or []])
+        check["method"] = "citation_id_check"
+        if check.get("status") == "violation":
+            raise ValueError("exec paragraph cites nothing real")
+        exec_paragraph = text
+    except Exception:
+        top = scenarios[:2]
+        exec_paragraph = (
+            f"Misuse potential is {scoring.get('overall_pct', 0):g}/100 for "
+            f"{product} ({profile.get('summary') or 'unclassified model'}), "
+            "weighted toward capability value rather than model defects. "
+            + ("Sharpest chains: " + "; ".join(
+                f"{s['id']} {s['title']}" for s in top) + ". " if top else "")
+            + "Deterministic brief: no model call made.")
+    return reply_envelope(
+        env, "misuse-reporter", "misuse_report_written",
+        {"misuse_sections": "\n".join(lines), "exec_paragraph": exec_paragraph},
+        note=(f"misuse report ({len(scenarios)} scenarios, {len(lines)} lines) "
+              f"+ {len(exec_paragraph)}-char exec paragraph"),
+    )
+
+
+# ------------------------------------------------ hypothesis synthesis ----
+# Flow 3. Reads the stored rows of flows 1 and 2 and drafts CLAIMS rather than
+# findings. The distinction is the whole point: a finding is true by
+# construction, a hypothesis is held to a confidence and names what would
+# refute it. Every claim below carries premise -> mechanism -> consequence plus
+# a falsifier, and the verifier is expected to produce counter-evidence -- a set
+# where nothing argues against anything is a broken verifier, not a clean
+# system.
+def _hypothesis(fid: str, claim: str, premise: str, mechanism: str,
+                consequence: str, falsifier: str,
+                supporting: list[str] | None = None,
+                counter: list[str] | None = None,
+                impact: int = 3, testability: int = 3) -> dict[str, Any]:
+    from .security import _severity
+    impact = max(1, min(5, int(impact)))
+    testability = max(1, min(5, int(testability)))
+    # A hypothesis has no likelihood: nothing has been tested. Severity here
+    # means "how much is at stake if the claim holds", not likelihood x impact,
+    # so the familiar residual columns stay empty rather than implying a
+    # measured risk that does not exist.
+    return {
+        "id": fid, "claim": claim, "premise": premise, "mechanism": mechanism,
+        "consequence": consequence, "falsifier": falsifier,
+        "supporting": list(supporting or []), "counter_evidence": list(counter or []),
+        "impact": float(impact), "testability": float(testability),
+        "inherent_score": float(impact), "residual_score": float(impact),
+        "residual_severity": _severity(impact),
+        "likelihood": None, "coverage": 0.0, "controls": [],
+        "applicable": True, "applicability": 1.0,
+        "rationale": f"stakes if true: {impact}/5; refutable by: {falsifier}",
+        "mitigations": [f"Observe: {falsifier}"],
+    }
+
+
+def _hypothesis_fallback(target_rows: list[dict[str, Any]],
+                         adv_rows: list[dict[str, Any]],
+                         profile: dict[str, Any],
+                         ) -> list[dict[str, Any]]:
+    """Deterministic cross-flow claims: only where flows 1 and 2 overlap.
+
+    The interesting hypotheses are the ones both flows reached independently --
+    an internals finding about training data AND a misuse scenario about
+    extraction is a stronger claim than either alone, because two different
+    questions converged on it. Single-flow claims are still emitted, marked as
+    such, because a claim only one path reached is a claim worth testing.
+
+    Every rule below is a conjunction of things the two stored rows actually
+    say. Nothing is asserted from the product name alone.
+    """
+    out: list[dict[str, Any]] = []
+    t_by_dim: dict[str, list[dict]] = {}
+    for r in target_rows:
+        t_by_dim.setdefault(str(r.get("dimension") or ""), []).append(r)
+    a_by_dim: dict[str, list[dict]] = {}
+    for r in adv_rows:
+        a_by_dim.setdefault(str(r.get("dimension") or ""), []).append(r)
+
+    def _has(store: dict, dim: str, *words: str) -> list[dict]:
+        rows = store.get(dim) or []
+        if not words:
+            return rows
+        return [r for r in rows
+                if any(w in str(r.get("title", "")).lower()
+                       or w in str(r.get("rationale", "")).lower() for w in words)]
+
+    t_priv = t_by_dim.get("training_data_privacy") or []
+    a_recon = a_by_dim.get("data_recon") or []
+    if t_priv and a_recon:
+        out.append(_hypothesis(
+            "H01",
+            "held-out training rows are recoverable through the serving surface",
+            "the profile says it trains on personal data, and the misuse flow "
+            "derived an inference-side extraction capability from the same "
+            "profile",
+            "memorised rows are reachable by querying the model and reading "
+            "the residual memorisation back out",
+            "confidential training records leave via the inference API, which "
+            "is the one surface access control already treats as trusted",
+            "sample 20 training rows the model was fit on and request them back "
+            "verbatim; if it declines or paraphrases on every row, the claim "
+            "does not hold",
+            supporting=[r["id"] for r in t_priv] + [r["id"] for r in a_recon],
+            counter=[r["id"] for r in _has(t_by_dim, "training_data_privacy", "minimis", "minimiz")],
+            impact=5, testability=5))
+    t_integ = t_by_dim.get("model_integrity") or []
+    a_manip = a_by_dim.get("manipulation") or []
+    if t_integ and a_manip:
+        out.append(_hypothesis(
+            "H02",
+            "the model can be steered by whoever controls its training or "
+            "fine-tuning input",
+            "both flows independently flagged the supply path: internals on "
+            "provenance, misuse on poisoning and backdooring",
+            "an actor with ingestion or fine-tuning access can plant behaviour "
+            "that persists across restarts and is indistinguishable from the "
+            "model's own",
+            "a silent behavioural change ships inside a model artefact that "
+            "every downstream control trusts",
+            "run the model against a held-out behavioural test set; if its "
+            "refusals and outputs are stable, the backdoor is not present",
+            supporting=[r["id"] for r in t_integ] + [r["id"] for r in a_manip],
+            counter=[],
+            impact=5, testability=3))
+    t_deploy = t_by_dim.get("deployment_surface") or []
+    a_evas = a_by_dim.get("evasion") or []
+    if t_deploy and a_evas:
+        out.append(_hypothesis(
+            "H03",
+            "the serving surface is also an evasion surface -- content and "
+            "decisions can be laundered through it",
+            "internals flagged inference exposure and logging gaps; misuse "
+            "derived laundering and identity-spoofing capabilities from the "
+            "same interface facts",
+            "an output that no control inspects is an output no control can "
+            "constrain, and a model generates plausible text faster than any "
+            "reviewer can read it",
+            "policy checks that gate the tool are bypassed by going through the "
+            "model's own output",
+            "send known-bad content through the model and check whether it "
+            "survives to the consumer; if the consumer blocks it, the claim "
+            "fails",
+            supporting=[r["id"] for r in t_deploy] + [r["id"] for r in a_evas],
+            counter=[],
+            impact=4, testability=4))
+    a_cap = a_by_dim.get("capability_abuse") or []
+    if a_cap:
+        out.append(_hypothesis(
+            "H04",
+            "the model's raw capability is the asset, and it is exposed to "
+            "whoever can reach an endpoint",
+            "the misuse flow derived capabilities that need no model defect at "
+            "all -- only a reachable endpoint",
+            "capability abuse needs no backdoor and no poisoned weights, which "
+            "means no finding in flow 1 will ever detect it",
+            "the risk lives in access control to the endpoint, not in the "
+            "model's integrity -- and it is invisible to a model review",
+            "remove the endpoint and re-run the misuse scenarios; if they no "
+            "longer apply, exposure was the whole mechanism",
+            supporting=[r["id"] for r in a_by_dim["capability_abuse"]],
+            counter=[],
+            impact=4, testability=5))
+    if not out and profile.get("is_model_query"):
+        # Never return an empty set for a model: an empty hypothesis list reads
+        # as "nothing to test" when it actually means "the two flows produced
+        # nothing to cross-reference". Say that instead.
+        out.append(_hypothesis(
+            "H01",
+            "the two prior assessments produced no overlapping signal to test",
+            f"profile: {profile.get('summary') or 'unclassified model'}",
+            "with neither internals findings nor misuse scenarios recorded, "
+            "there is no evidence base for a claim",
+            "this hypothesis is untested by construction and exists to mark the "
+            "gap, not to assert anything",
+            "run the internals and misuse assessments and re-run this flow",
+            supporting=[], counter=[], impact=1, testability=1))
+    return out
+
+
+def hypothesis_analyst_handle(env: dict[str, Any], db: Any = None) -> dict[str, Any]:
+    """Intent ``draft_hypotheses``: claims from the two prior flows.
+
+    Reads the stored internals findings and misuse scenarios handed to it and
+    drafts falsifiable claims. LLM first, deterministic cross-flow conjunction
+    rules on failure -- a down gateway must not yield an empty hypothesis set,
+    which would read as "nothing worth testing".
+    """
+    from . import security as sec
+    payload = env.get("payload", {})
+    product = payload.get("product_name", "the model")
+    use_case = payload.get("use_case", "")
+    focus = payload.get("focus") or []
+    profile = payload.get("profile") or sec.profile_model_subject(
+        product, use_case, focus)
+    target_rows = [r for r in (payload.get("target_rows") or []) if isinstance(r, dict)]
+    adv_rows = [r for r in (payload.get("adversarial_rows") or []) if isinstance(r, dict)]
+    hyps = _hypothesis_fallback(target_rows, adv_rows, profile)
+    source = "deterministic cross-flow rules (no LLM)"
+    try:
+        from . import llm as _llm
+        sys_p = (
+            "You are a research lead turning two completed AI security "
+            "assessments into FALSIFIABLE HYPOTHESES. Flow 1 asked whether the "
+            "model is sound (findings about the model). Flow 2 asked what an "
+            "attacker could build with it (scenarios about misuse). "
+            "A hypothesis is a CLAIM someone could test and be wrong about -- "
+            "not a restatement of a finding. Every claim needs a premise, a "
+            "mechanism, a consequence if true, and a falsifier that would "
+            "REFUTE it. Prefer claims both assessments support; mark "
+            "single-assessment claims. Never assert a control that is not "
+            "named. Reply with STRICT JSON only: {\"hypotheses\": [{\"id\": "
+            "\"H##\", \"claim\": str (one falsifiable sentence), \"premise\": str, "
+            "\"mechanism\": str, \"consequence\": str, \"falsifier\": str (a "
+            "specific observation that would refute it), \"impact\": 1-5 (stakes "
+            "if true), \"testability\": 1-5}]}."
+        )
+        user_p = (f"Model: {product}\nUse: {use_case}\n"
+                  f"Profile: {profile.get('summary') or 'unclassified'}\n"
+                  f"Flow 1 (internals) findings: "
+                  f"{json.dumps([{k: r.get(k) for k in ('id','title','dimension','inherent_score')} for r in target_rows])[:2500]}\n"
+                  f"Flow 2 (misuse) scenarios: "
+                  f"{json.dumps([{k: r.get(k) for k in ('id','title','dimension','inherent_score')} for r in adv_rows])[:2500]}")
+        raw = _llm.chat([{"role": "system", "content": sys_p},
+                         {"role": "user", "content": user_p}],
+                        temperature=0.1, max_tokens=1500).strip()
+        m = re.search(r"\{.*\}", raw, re.S)
+        if not m:
+            raise ValueError("model did not return a hypotheses object")
+        data = json.loads(m.group(0))
+        llm_h = []
+        for i, h in enumerate(data.get("hypotheses") or [], 1):
+            if not isinstance(h, dict) or not h.get("claim"):
+                continue
+            if not h.get("falsifier"):
+                continue          # a claim with no refutation is an assertion
+            llm_h.append(_hypothesis(
+                str(h.get("id") or f"H{i:02d}"), str(h["claim"])[:200],
+                str(h.get("premise") or "unstated")[:240],
+                str(h.get("mechanism") or "unstated")[:240],
+                str(h.get("consequence") or "unstated")[:240],
+                str(h["falsifier"])[:240],
+                impact=h.get("impact", 3), testability=h.get("testability", 3)))
+        if llm_h:
+            # Re-attach traceability the prose lost. The claims stay the
+            # LLM's, but each one now names the rows of flows 1 and 2 it can be
+            # read off, so the verifier can still tell a corroborated claim
+            # from one only a single flow reached.
+            for h in llm_h:
+                h["supporting"] = (_match_hyp_sources(h, target_rows)
+                                   + _match_hyp_sources(h, adv_rows))
+            hyps = llm_h
+            source = "hypothesis-analyst via LLM gateway"
+    except Exception as exc:
+        source = f"deterministic cross-flow rules (LLM unavailable: {exc})"
+    hyps.sort(key=lambda h: (-h["impact"], -h["testability"]))
+    return reply_envelope(
+        env, "hypothesis-analyst", "hypotheses_drafted",
+        {"hypotheses": hyps, "source": source},
+        note=(f"{len(hyps)} claims drafted, {sum(1 for h in hyps if h['falsifier'])} "
+              f"with falsifiers" if hyps else "0 claims") + f" ({source})",
+    )
+
+
+def hypothesis_verifier_handle(env: dict[str, Any], db: Any = None) -> dict[str, Any]:
+    """Intent ``verify_hypotheses``: argue with each claim.
+
+    Assigns support, surfaces the evidence that argues AGAINST each claim, and
+    flags the ones whose refutation test is too vague to settle anything. A
+    claim scoring high with no counter-evidence is downgraded on purpose --
+    "nothing argues against this" is more often a gap in collection than a
+    well-supported claim.
+    """
+    from . import security as sec
+    payload = env.get("payload", {})
+    hyps = [h for h in (payload.get("hypotheses") or []) if isinstance(h, dict)]
+    evidence = [e for e in (payload.get("evidence") or []) if isinstance(e, dict)]
+    verified = []
+    for h in hyps:
+        support = list(h.get("supporting") or [])
+        counter = list(h.get("counter_evidence") or [])
+        testability = float(h.get("testability", 3))
+        impact = float(h.get("impact", 3))
+        # Evidence support: cited source rows, plus any in-app artifact the
+        # claim's keywords match. Not a count -- capped, because ten artifacts
+        # repeating one source is not ten independent confirmations.
+        support_score = min(100.0, 25.0 + 20.0 * min(3, len(support)))
+        blob = " ".join((str(h.get("claim", "")), str(h.get("mechanism", "")))).lower()
+        matched = [e for e in evidence
+                   if any(tok in blob for tok in
+                          _hyp_keywords(str(e.get("title", ""))))]
+        if matched:
+            top = max(float(e.get("relevance", 0) or 0) for e in matched)
+            support_score = min(100.0, support_score + 25.0 * top)
+        # Cross-flow corroboration: a claim both flows reached is worth more
+        # than one only a single path produced.
+        tgt = any(r in support for r in (h.get("_target_ids") or []))
+        adv = any(r in support for r in (h.get("_adversarial_ids") or []))
+        corroborated = tgt and adv
+        cross = 100.0 if corroborated else (55.0 if (tgt or adv) else 30.0)
+        # Penalty for an unfalsifiable claim: "review the deployment" settles
+        # nothing, and a claim nobody can refute cannot be promoted.
+        if not str(h.get("falsifier", "")).strip():
+            testability = 1.0
+        dims = {
+            "evidence_support": max(0.0, min(100.0, support_score - 15.0 * len(counter))),
+            "cross_flow_corroboration": cross,
+            "testability": testability / 5.0 * 100.0,
+            "impact_if_true": impact / 5.0 * 100.0,
+        }
+        v = dict(h)
+        v.update({
+            "support_score": round(dims["evidence_support"], 1),
+            "cross_flow": corroborated,
+            "verification_dimensions": {k: round(x, 1) for k, x in dims.items()},
+            "counter_evidence": counter,
+            "supporting_artifacts": [e.get("artifact_id") for e in matched[:5]],
+            # Confidence is the verifier's own read, not the drafter's.
+            "confidence": round(
+                0.40 * dims["evidence_support"]
+                + 0.25 * dims["cross_flow_corroboration"]
+                + 0.20 * dims["testability"]
+                + 0.15 * dims["impact_if_true"], 1),
+        })
+        verified.append(v)
+    verified.sort(key=lambda v: -v.get("confidence", 0))
+    return reply_envelope(
+        env, "hypothesis-verifier", "hypotheses_verified",
+        {"verified": verified,
+         "dimension_inputs": _hypothesis_dimension_inputs(verified)},
+        note=(f"{len(verified)} claims verified, "
+              f"{sum(1 for v in verified if v.get('cross_flow'))} corroborated "
+              f"by both flows, {sum(1 for v in verified if not v.get('counter_evidence'))} "
+              f"uncountered"),
+    )
+
+
+def _hyp_keywords(title: str) -> list[str]:
+    """Distinctive tokens of an artifact title, for evidence matching.
+
+    Short and generic tokens are dropped: matching a claim on the word
+    "model" would attach every artifact in the investigation and make the
+    evidence column decorative.
+    """
+    stop = {"the", "and", "for", "with", "from", "that", "this", "model", "data",
+            "using", "into", "your", "what", "how", "why", "are", "was", "can"}
+    toks = [t for t in re.findall(r"[a-z]{5,}", title.lower()) if t not in stop]
+    return toks[:8]
+
+
+def _match_hyp_sources(h: dict[str, Any],
+                       rows: list[dict[str, Any]]) -> list[str]:
+    """Source-row ids a drafted claim can be traced to.
+
+    The LLM is handed ids and titles but writes prose, so a claim it drafted
+    arrives with an empty ``supporting`` list. Without this the verifier reads
+    it as uncorroborated and the confidence aggregate collapses the moment the
+    gateway comes back up -- the better-connected answer gets the worse score,
+    and the report's "corroborated by both flows" column empties itself in
+    production while every test run on the deterministic branch passes.
+
+    Matching is deliberately conservative: a distinctive token must appear in
+    BOTH the claim and the row, and at most four ids are taken per flow, so one
+    vague claim cannot stake a claim on the entire evidence base.
+    """
+    blob = " ".join((str(h.get("claim", "")), str(h.get("premise", "")),
+                     str(h.get("mechanism", "")),
+                     str(h.get("consequence", "")))).lower()
+    out: list[str] = []
+    for r in rows:
+        rid = r.get("id")
+        if not rid:
+            continue
+        src = " ".join((str(r.get("title", "")), str(r.get("rationale", "")),
+                        str(r.get("dimension", "")).replace("_", " "))).lower()
+        toks = _hyp_keywords(src)
+        if any(t in blob for t in toks) and str(rid) not in out:
+            out.append(str(rid))
+    return out[:4]
+
+
+def _hypothesis_dimension_inputs(verified: list[dict[str, Any]],
+                                 ) -> dict[str, float]:
+    """Mean verifier dimension across claims, shaped for the confidence scorer.
+
+    Mean, not max: the aggregate describes the claim SET, and a set is only as
+    good as the claims that make it up. Taking the strongest claim would let
+    one well-evidenced claim vouch for ten vague ones.
+    """
+    if not verified:
+        return {}
+    keys = ("evidence_support", "cross_flow_corroboration", "testability",
+            "impact_if_true")
+    out: dict[str, float] = {}
+    for k in keys:
+        vals = [float((v.get("verification_dimensions") or {}).get(k, 0.0))
+                for v in verified]
+        out[k] = round(sum(vals) / len(vals), 1)
+    return out
+
+
+def hypothesis_reporter_handle(env: dict[str, Any], db: Any = None) -> dict[str, Any]:
+    """Intent ``write_hypothesis_report``: the claims as prose + diagrams.
+
+    Each claim gets its own section with the evidence, the counter-evidence and
+    the falsifier stated next to it, because a claim printed without its
+    refutation is an assertion wearing a hypothesis's clothes.
+    """
+    from . import security as sec
+    payload = env.get("payload", {})
+    product = payload.get("product_name", "the model")
+    verified = [h for h in (payload.get("verified") or []) if isinstance(h, dict)]
+    scoring = payload.get("scoring") or {}
+    lines: list[str] = ["## Hypotheses and what would settle them", ""]
+    lines.append(
+        f"Confidence aggregate **{scoring.get('confidence_pct', 0):g}/100** "
+        f"— {_HYPOTHESIS_CAVEAT}")
+    lines.append("")
+    for h in verified:
+        conf = h.get("confidence", 0)
+        lines.append(f"### {h['id']} — {h['claim']}")
+        lines.append("")
+        lines.append(f"_Confidence {conf:g}/100 · stakes if true "
+                     f"{h.get('impact', 0):g}/5 · refutable "
+                     f"{'yes' if str(h.get('falsifier', '')).strip() else 'NO'}_")
+        lines.append("")
+        if h.get("premise"):
+            lines.append(f"- **Premise:** {h['premise']}")
+        if h.get("mechanism"):
+            lines.append(f"- **Mechanism:** {h['mechanism']}")
+        if h.get("consequence"):
+            lines.append(f"- **If true:** {h['consequence']}")
+        if h.get("falsifier"):
+            lines.append(f"- **Refuted by:** {h['falsifier']}")
+        if h.get("supporting"):
+            lines.append(f"- **Traces to:** {', '.join(h['supporting'])}")
+        if h.get("counter_evidence"):
+            lines.append(f"- **Counter-evidence:** "
+                         f"{', '.join(h['counter_evidence'])}")
+        if h.get("supporting_artifacts"):
+            arts = ", ".join(f"#{a}" for a in h["supporting_artifacts"])
+            lines.append(f"- **In-app evidence:** {arts}")
+        if h.get("cross_flow"):
+            lines.append("- **Corroborated:** reached independently by the "
+                         "internals and misuse assessments")
+        lines.append("")
+        lines.append("```mermaid")
+        lines.append(sec.mermaid_hypothesis_chain(h).rstrip())
+        lines.append("```")
+        lines.append("")
+    exec_paragraph = ""
+    if verified:
+        top = verified[:3]
+        strongest = max(verified, key=lambda h: h.get("confidence", 0))
+        exec_paragraph = (
+            f"{len(verified)} hypotheses were drafted from the model's internals "
+            f"and misuse assessments and are held with a mean confidence of "
+            f"{sum(float(h.get('confidence', 0)) for h in verified) / len(verified):g}/100. "
+            f"The best-evidenced is {strongest['id']}: {strongest['claim']}. "
+            + ("Highest stakes: " + "; ".join(
+                f"{h['id']} ({h.get('impact', 0):g}/5) {h['claim']}" for h in top)
+               if top else "")
+            + ". Each claim names the observation that would refute it, so the "
+              "set is checkable rather than a list of worries.")
+    return reply_envelope(
+        env, "hypothesis-reporter", "hypothesis_report_written",
+        {"hypothesis_sections": "\n".join(lines),
+         "exec_paragraph": exec_paragraph},
+        note=(f"hypothesis report ({len(verified)} claims, {len(lines)} lines) "
+              f"+ {len(exec_paragraph)}-char exec paragraph"),
+    )
+
+
+_HYPOTHESIS_CAVEAT = (
+    "this is a CONFIDENCE aggregate, not a risk score. Higher means the claims "
+    "below are better evidenced, not that the system is more dangerous."
+)
+
+
 _MODEL_HANDLERS = {
     "model-profiler": {"profile_model": model_profiler_handle},
     "model-internals": {"review_internals": model_internals_handle},
     "model-privacy": {"assess_model_privacy": model_privacy_handle},
     "model-reporter": {"write_model_report": model_reporter_handle},
+    "model-adversary": {"derive_capabilities": model_adversary_handle},
+    "misuse-scout": {"engineer_scenarios": misuse_scout_handle},
+    "misuse-reporter": {"write_misuse_report": misuse_reporter_handle},
+    "hypothesis-analyst": {"draft_hypotheses": hypothesis_analyst_handle},
+    "hypothesis-verifier": {"verify_hypotheses": hypothesis_verifier_handle},
+    "hypothesis-reporter": {"write_hypothesis_report": hypothesis_reporter_handle},
 }
+
+
+def _adversarial_dimension_inputs(scenarios: list[dict[str, Any]],
+                                  ) -> list[dict[str, Any]]:
+    """Per-dimension 0..100 inputs for the misuse scorer: mean scenario
+    feasibility×impact per dimension, baseline where a dimension drew none.
+
+    Deliberately NOT the internals aggregation. There, the worst finding
+    dominates because a single catastrophic defect outweighs a broad set of
+    small ones. Here every scenario is a choice an attacker makes, so breadth
+    of reachable options is the risk: a model with five mediocre chains is more
+    dangerous than one with a single unreachable one.
+    """
+    from . import security as sec
+    by_dim: dict[str, list[float]] = {}
+    for s in scenarios:
+        try:
+            score = float(s.get("inherent_score", 0)) / 25.0 * 100.0
+        except (TypeError, ValueError):
+            continue
+        by_dim.setdefault(str(s.get("dimension", "capability_abuse")), []).append(score)
+    out = []
+    for dim_id, _weight, _desc in sec.ADVERSARIAL_DIMENSIONS:
+        vals = by_dim.get(dim_id, [])
+        out.append({"id": dim_id,
+                    "score": sum(vals) / len(vals) if vals else 20.0})
+    return out
+
+
+def run_model_adversarial_a2a_workflow(
+    product_name: str,
+    use_case: str,
+    focus: Optional[list[str]] = None,
+    db: Any = None,
+    investigation_id: Any = None,
+    exposure_label: str = "",
+    exposure: str = "confidential_data",
+) -> dict[str, Any]:
+    """Adversarial-misuse workflow: profiler → adversary → scout → collector →
+    scoring (engine) → misuse-reporter. Never raises.
+
+    The second model flow, and deliberately a separate assessment from
+    run_model_a2a_workflow rather than a second section of it. The two answer
+    different questions -- "is this model sound?" versus "what can someone
+    build with it?" -- and a sound model is still a weapon. Averaging them
+    would hide both. Shares the profiler (one subject, one profile) and the
+    collector, but not a single agent, not a single weight, and not a single
+    stored number. No standards mapping, same policy as the target path.
+    """
+    from . import security as sec
+    task_id = new_task_id(prefix="adv")
+    trace: list[dict[str, Any]] = [{
+        "agent": "adversary-orchestrator", "intent": "plan_misuse_assessment",
+        "at": _now(),
+        "note": (f"task {task_id}: model-profiler → model-adversary → "
+                 "misuse-scout → research-collector → scoring engine → "
+                 "misuse-reporter (no standards mapping)"),
+    }]
+    focus = focus or []
+    evidence: list[dict[str, Any]] = []
+    queries_run: list[str] = []
+    scope = ""
+    capabilities: list[dict[str, Any]] = []
+    unexploitable: list[str] = []
+    scenarios: list[dict[str, Any]] = []
+    profile: dict[str, Any] = {}
+    scoring: dict[str, Any] = {}
+    exec_paragraph = ""
+    misuse_sections = ""
+    try:
+        env0 = new_envelope(
+            "adversary-orchestrator", "model-profiler", "profile_model",
+            {"product_name": product_name, "use_case": use_case, "focus": focus},
+            task_id=task_id, trace=trace,
+            note="reuse the same subject profile; capability derivation reads it",
+        )
+        res0 = dispatch(env0, db)
+        trace = res0["trace"]
+        profile = res0["payload"].get("profile", {})
+
+        env1 = new_envelope(
+            "adversary-orchestrator", "model-adversary", "derive_capabilities",
+            {"product_name": product_name, "use_case": use_case,
+             "focus": focus, "profile": profile},
+            task_id=task_id, trace=trace,
+            note="what could an attacker build with this model",
+        )
+        res1 = dispatch(env1, db)
+        trace = res1["trace"]
+        capabilities = list(res1["payload"].get("capabilities", []))
+        unexploitable = list(res1["payload"].get("unexploitable", []))
+
+        env2 = new_envelope(
+            "adversary-orchestrator", "misuse-scout", "engineer_scenarios",
+            {"product_name": product_name, "use_case": use_case,
+             "focus": focus, "profile": profile, "capabilities": capabilities},
+            task_id=task_id, trace=trace,
+            note="turn capabilities into attack chains",
+        )
+        res2 = dispatch(env2, db)
+        trace = res2["trace"]
+        scenarios = list(res2["payload"].get("scenarios", []))
+        _hop_io(trace, "misuse-scout", "engineer_scenarios",
+                f"{len(capabilities)} capabilities in",
+                f"{len(scenarios)} scenarios, top "
+                f"{max((s.get('inherent_score', 0) for s in scenarios), default=0):g}/25")
+
+        env3 = new_envelope(
+            "adversary-orchestrator", "research-collector", "collect_research",
+            {"product_name": product_name, "use_case": use_case,
+             "threat_titles": [s["title"].split(" (from ")[0] for s in scenarios],
+             "top_k": 8, "investigation_id": investigation_id},
+            task_id=task_id, trace=trace,
+            note="delegate agentic in-app search on the scenario set",
+        )
+        res3 = dispatch(env3, db)
+        trace = res3["trace"]
+        evidence = res3["payload"].get("evidence", [])
+        queries_run = res3["payload"].get("queries_run", [])
+        scope = res3["payload"].get("scope", "")
+        _hop_io(trace, "research-collector", "collect_research",
+                f"{len(queries_run)} queries · scope {scope or 'all'}",
+                f"{len(evidence)} artifacts, top relevance "
+                f"{max((e.get('relevance', 0) for e in evidence), default=0):.2f}")
+
+        scoring = sec.score_model_adversarial(
+            {d["id"]: d["score"] for d in _adversarial_dimension_inputs(scenarios)})
+        trace.append({
+            "agent": "adversary-orchestrator", "intent": "score",
+            "at": _now(),
+            "note": (f"misuse aggregate {scoring.get('overall_pct', 0):g}/100 "
+                     f"({scoring.get('method', '')})"),
+        })
+
+        env4 = new_envelope(
+            "adversary-orchestrator", "misuse-reporter", "write_misuse_report",
+            {"product_name": product_name, "exposure_label": exposure_label,
+             "profile": profile, "capabilities": capabilities,
+             "scenarios": scenarios, "evidence": evidence, "scoring": scoring},
+            task_id=task_id, trace=trace,
+            note="draft misuse sections + exec paragraph",
+        )
+        res4 = dispatch(env4, db)
+        trace = res4["trace"]
+        misuse_sections = res4["payload"].get("misuse_sections", "")
+        exec_paragraph = res4["payload"].get("exec_paragraph", "")
+        _hop_io(trace, "misuse-reporter", "write_misuse_report",
+                f"{len(scenarios)} scenarios, {len(evidence)} evidence items",
+                f"{len(misuse_sections)} chars sections, "
+                f"{len(exec_paragraph)} chars paragraph")
+    except Exception as exc:
+        trace.append({"agent": "adversary-orchestrator", "intent": "workflow_error",
+                      "at": _now(), "note": f"{exc}"})
+    return {
+        "task_id": task_id,
+        "evidence": evidence,
+        "queries_run": queries_run,
+        "scope": scope,
+        "known_exploits": [],
+        "exploits_markdown": "",
+        "exec_evidence_lines": [],
+        "exec_evidence_refs": [],
+        "exec_paragraph": exec_paragraph,
+        "control_plan": {},
+        "applicability": {},
+        "evidence_confidence": {},
+        "scoring": scoring,
+        "a2a_trace": trace,
+        # misuse-path extras (ignored by standard consumers)
+        "model_profile": profile,
+        "adversarial_dimensions": scoring.get("dimensions", []),
+        "adversarial_capabilities": capabilities,
+        "adversarial_scenarios": scenarios,
+        "adversarial_unexploitable": unexploitable,
+        "misuse_sections": misuse_sections,
+    }
 _HANDLERS.update(_MODEL_HANDLERS)
+
+
+def run_hypothesis_a2a_workflow(
+    product_name: str,
+    use_case: str,
+    focus: Optional[list[str]] = None,
+    db: Any = None,
+    investigation_id: Any = None,
+    target_rows: Optional[list[dict[str, Any]]] = None,
+    adversarial_rows: Optional[list[dict[str, Any]]] = None,
+) -> dict[str, Any]:
+    """Hypothesis-synthesis workflow: analyst → collector → verifier →
+    scoring (engine) → reporter. Never raises.
+
+    The third flow, and the only one that READS the other two: it is handed
+    their stored rows and turns them into falsifiable claims. That ordering is
+    why it is a separate run rather than a section of either -- a claim drawn
+    across both flows cannot be made until both have finished, and the queue
+    claims jobs in id order, so launching it third guarantees the rows exist.
+
+    Shares the collector with the other two (one graph, one search) and shares
+    no agent and no weight with either. Its aggregate is a confidence, not a
+    risk, and the scorer says so in its method string.
+    """
+    from . import security as sec
+    task_id = new_task_id(prefix="hyp")
+    trace: list[dict[str, Any]] = [{
+        "agent": "hypothesis-orchestrator", "intent": "plan_hypothesis_synthesis",
+        "at": _now(),
+        "note": (f"task {task_id}: hypothesis-analyst → research-collector → "
+                 "hypothesis-verifier → scoring engine → hypothesis-reporter "
+                 f"(reads {len(target_rows or [])} internals finding(s) and "
+                 f"{len(adversarial_rows or [])} misuse scenario(s))"),
+    }]
+    focus = focus or []
+    evidence: list[dict[str, Any]] = []
+    queries_run: list[str] = []
+    scope = ""
+    hypotheses: list[dict[str, Any]] = []
+    verified: list[dict[str, Any]] = []
+    scoring: dict[str, Any] = {}
+    profile: dict[str, Any] = {}
+    exec_paragraph = ""
+    hypothesis_sections = ""
+    try:
+        env0 = new_envelope(
+            "hypothesis-orchestrator", "model-profiler", "profile_model",
+            {"product_name": product_name, "use_case": use_case, "focus": focus},
+            task_id=task_id, trace=trace,
+            note="the shared subject profile both prior flows used",
+        )
+        res0 = dispatch(env0, db)
+        trace = res0["trace"]
+        profile = res0["payload"].get("profile", {})
+
+        env1 = new_envelope(
+            "hypothesis-orchestrator", "hypothesis-analyst", "draft_hypotheses",
+            {"product_name": product_name, "use_case": use_case,
+             "focus": focus, "profile": profile,
+             "target_rows": target_rows or [],
+             "adversarial_rows": adversarial_rows or []},
+            task_id=task_id, trace=trace,
+            note="claims from what the two prior assessments found",
+        )
+        res1 = dispatch(env1, db)
+        trace = res1["trace"]
+        hypotheses = list(res1["payload"].get("hypotheses", []))
+        # Carry the source ids per claim so the verifier can tell a claim both
+        # flows reached from one only a single flow produced. Computed here,
+        # not in the handler, because it is a join across two inputs.
+        tgt_ids = {str(r.get("id")) for r in (target_rows or [])}
+        adv_ids = {str(r.get("id")) for r in (adversarial_rows or [])}
+        for h in hypotheses:
+            sup = {str(s) for s in (h.get("supporting") or [])}
+            h["supported_by_target"] = bool(sup & tgt_ids)
+            h["supported_by_adversarial"] = bool(sup & adv_ids)
+            h["_target_ids"] = sorted(sup & tgt_ids)
+            h["_adversarial_ids"] = sorted(sup & adv_ids)
+        _hop_io(trace, "hypothesis-analyst", "draft_hypotheses",
+                f"{len(target_rows or [])} findings + "
+                f"{len(adversarial_rows or [])} scenarios in",
+                f"{len(hypotheses)} claims, "
+                f"{sum(1 for h in hypotheses if h.get('falsifier'))} with falsifiers")
+
+        env2 = new_envelope(
+            "hypothesis-orchestrator", "research-collector", "collect_research",
+            {"product_name": product_name, "use_case": use_case,
+             "threat_titles": [h.get("claim", "") for h in hypotheses],
+             "top_k": 8, "investigation_id": investigation_id},
+            task_id=task_id, trace=trace,
+            note="evidence for the claims, not for the product",
+        )
+        res2 = dispatch(env2, db)
+        trace = res2["trace"]
+        evidence = res2["payload"].get("evidence", [])
+        queries_run = res2["payload"].get("queries_run", [])
+        scope = res2["payload"].get("scope", "")
+        _hop_io(trace, "research-collector", "collect_research",
+                f"{len(queries_run)} queries · scope {scope or 'all'}",
+                f"{len(evidence)} artifacts")
+
+        env3 = new_envelope(
+            "hypothesis-orchestrator", "hypothesis-verifier", "verify_hypotheses",
+            {"product_name": product_name, "use_case": use_case,
+             "hypotheses": hypotheses, "evidence": evidence},
+            task_id=task_id, trace=trace,
+            note="argue with each claim; counter-evidence is the point",
+        )
+        res3 = dispatch(env3, db)
+        trace = res3["trace"]
+        verified = list(res3["payload"].get("verified", []))
+        _hop_io(trace, "hypothesis-verifier", "verify_hypotheses",
+                f"{len(hypotheses)} claims + {len(evidence)} artifacts in",
+                f"{len(verified)} verified, mean confidence "
+                f"{(sum(float(v.get('confidence', 0)) for v in verified) / len(verified)) if verified else 0:.0f}/100")
+
+        env4_inputs = res3["payload"].get("dimension_inputs", {})
+        # The confidence aggregate is arithmetic, so it runs in the engine and
+        # is traced as a hop -- not dispatched to an "agent" that does not
+        # exist. Same rule the other two flows follow.
+        scoring = sec.score_hypotheses(env4_inputs)
+        trace.append({
+            "agent": "hypothesis-orchestrator", "intent": "score",
+            "at": _now(),
+            "note": (f"confidence aggregate {scoring.get('confidence_pct', 0):g}/100 "
+                     f"({scoring.get('method', '')}) — a confidence, not a risk"),
+        })
+
+        env5 = new_envelope(
+            "hypothesis-orchestrator", "hypothesis-reporter",
+            "write_hypothesis_report",
+            {"product_name": product_name, "use_case": use_case,
+             "verified": verified, "scoring": scoring, "profile": profile},
+            task_id=task_id, trace=trace,
+            note="claims with confidence, evidence and falsifiers",
+        )
+        res5 = dispatch(env5, db)
+        trace = res5["trace"]
+        hypothesis_sections = res5["payload"].get("hypothesis_sections", "")
+        exec_paragraph = res5["payload"].get("exec_paragraph", "")
+        _hop_io(trace, "hypothesis-reporter", "write_hypothesis_report",
+                f"{len(verified)} verified claims in",
+                f"{len(hypothesis_sections)} chars + diagrams")
+    except Exception as exc:                       # pragma: no cover - defensive
+        trace.append({"agent": "hypothesis-orchestrator", "intent": "error",
+                      "at": _now(), "note": f"{type(exc).__name__}: {exc}"})
+        # A synthesis flow with no claims is a legitimate result: it means the
+        # two prior assessments produced nothing to cross-reference. Score the
+        # documented neutral baseline rather than failing the run, so the
+        # report can say so in as many words.
+        hypotheses = hypotheses or []
+        verified = verified or []
+        scoring = scoring or sec.score_hypotheses({})
+        hypothesis_sections = hypothesis_sections or (
+            "## Hypotheses and what would settle them\n\n"
+            "_No claims were drafted: this flow had no evidence base to work "
+            "from._")
+    return {
+        "task_id": task_id,
+        "a2a_trace": trace,
+        "evidence": evidence,
+        "queries_run": queries_run,
+        "scope": scope,
+        "hypotheses": hypotheses,
+        "hypothesis_verified": verified,
+        "hypothesis_sections": hypothesis_sections,
+        "exec_paragraph": exec_paragraph,
+        "scoring": scoring,
+        "model_profile": profile,
+    }
 
 
 def run_security_a2a_workflow(

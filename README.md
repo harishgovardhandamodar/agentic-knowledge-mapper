@@ -24,7 +24,7 @@ control catalogue.
 | [docs/architecture.md](docs/architecture.md) | System context, containers, UML component/class diagrams, runtime flows |
 | [docs/agent-loop.md](docs/agent-loop.md) | Collection loop state machine, activity flow, stage protocol, guards |
 | [docs/explainer.md](docs/explainer.md) | Q&A pipeline, graph-first routing, grounding, write guard, threads/quiz/watch |
-| [docs/security-agent.md](docs/security-agent.md) | A2A envelope protocol, nine agent cards (catalog + model paths), threat model, report structure |
+| [docs/security-agent.md](docs/security-agent.md) | A2A envelope protocol, fifteen agent cards (catalog + three model paths), threat model, report structure |
 | [docs/threatpack.md](docs/threatpack.md) | The versioned scoring catalog: 12 threats, 15 controls, exposure tiers, evalkit |
 | [docs/agentic-manager.md](docs/agentic-manager.md) | Command parsing, fan-out, timeline, summary compilation, nesting |
 | [docs/standards-coverage.md](docs/standards-coverage.md) | 34 frameworks × 10 pillars, score matrix, Findings grading, dashboard |
@@ -226,7 +226,7 @@ question about the same run:
 
 ![Evidence with per-claim sources and claim hashes](docs/screenshots/21-security-evidence.png)
 
-![The five A2A agents and what each returned](docs/screenshots/22-security-agents.png)
+![The A2A agents for the path that produced this report](docs/screenshots/22-security-agents.png)
 
 **Approvals.** Tick *require approval* and the run parks at
 `awaiting_approval` before doing any work: an approval request lands on the
@@ -390,11 +390,12 @@ an action are provable afterwards:
 | GET/POST | `/api/investigations/{id}/explain`, `/api/investigations/{id}/explanations` | Ask / history |
 | GET | `/api/explanations/{id}`, `…/thread`, `…/suggestions` | Detail / thread / follow-up ideas |
 | POST | `/api/explanations/{id}/followup`, `…/quiz`, `…/bookmark`, `…/watch`, `…/feedback`, `…/save_to_graph`, `…/investigate_gaps` | Threads, quiz, curation, watch, gap runs |
-| POST | `/api/investigations/{id}/security/assess` | Start security assessment run |
+| POST | `/api/investigations/{id}/security/assess` | Start a security assessment run (`assessment_mode`: `target` / `adversarial` / `hypothesis` / auto) |
+| POST | `/api/security/classify-subject` | Is this a model subject, and which question does the wording imply? (drives the mode selector) |
 | GET | `/api/investigations/{id}/security/assessments` | Assessment history |
 | GET | `/api/security/assessments/{id}`, `…/markdown`, `…/pdf` | Report / exports |
 | POST | `/api/security/runs/{id}/approval` | Grant or deny a parked run (≠ the requester) |
-| GET | `/api/agents/cards`, `/.well-known/agents` | A2A agent registry (five cards) |
+| GET | `/api/agents/cards`, `/.well-known/agents` | A2A agent registry (fifteen cards) |
 | GET | `/api/standards/score-matrix?assessment_id=` | Relevance-ranked framework matrix for an assessment |
 | GET | `/api/design/docs`, `/api/design/docs/{id}` | The design set: index with diagram counts / one document as Markdown |
 | POST | `/api/manager/parse`, `/api/manager/run` | Understand a command (no side effects) / fan out |
@@ -531,7 +532,7 @@ agentic-knowledge-mapper/
 │   ├── agent.py           # plan→search→analyze→map loop (background thread)
 │   ├── explainer.py       # Q&A pipeline: research→compose→ground→critique→diagram
 │   ├── security_agent.py  # security runs (job queue, approval gate, A2A dispatch)
-│   ├── agents.py          # A2A envelope protocol + nine agent cards (catalog + model paths)
+│   ├── agents.py          # A2A envelope protocol + fifteen agent cards (catalog + 3 model paths)
 │   ├── security.py        # threat/control catalog, scoring, report engine
 │   ├── threatpack.py      # version, fingerprint, CVSS mapping
 │   ├── evalkit.py         # pinned scoring cases + invariants (CI gate)

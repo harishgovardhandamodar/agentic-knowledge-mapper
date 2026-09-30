@@ -195,12 +195,26 @@ class SecurityAssessRequest(BaseModel):
     focus: Optional[list[str]] = ["accidental_copy", "misclassification"]
     declared_controls: Optional[list[str]] = []
     require_approval: bool = False
+    # Which question to ask about a model subject: "target" (is it sound?),
+    # "adversarial" (what can someone build with it?), or "hypothesis" (which
+    # of those claims is true, and what would settle it). Empty means read the
+    # wording -- and never means hypothesis, which is only ever asked for
+    # explicitly because it needs the other two to have run.
+    assessment_mode: str = ""
 
 
 class SecurityRescoreRequest(BaseModel):
     active_controls: Optional[list[str]] = None
     applicability: Optional[dict] = None
     persist: bool = False
+
+
+class SecuritySubjectRequest(BaseModel):
+    """Subject text for the pre-run classifier. No side effects: the form
+    calls it while the user is still typing."""
+    product_name: str = ""
+    use_case: str = ""
+    focus: Optional[list[str]] = []
 
 
 class SecurityApprovalRequest(BaseModel):
@@ -1414,13 +1428,16 @@ def _security_json(rec: SecurityAssessment) -> dict:
 
 
 def _assessment_path_fields(rec, scoring: dict) -> dict:
-    """How this assessment was produced: standard catalog path or the
-    separate model-internals path. Stored rows predate the marker, so it is
-    re-derived from the row's own product/use_case/focus when absent -- the
-    profiler is deterministic, so derivation then and now agree."""
+    """How this assessment was produced: standard catalog, model-internals
+    target path, or model-misuse adversarial path. Stored rows predate the
+    markers, so they are re-derived from the row's own product/use_case/focus
+    when absent -- the profiler is deterministic, so derivation then and now
+    agree. Re-derivation can only produce target or standard: a row without a
+    stored marker cannot have come from the adversarial path, which is newer.
+    """
     path = scoring.get("assessment_path")
     profile = None
-    if path not in ("model", "standard"):
+    if path not in ("model", "model_adversarial", "model_hypothesis", "standard"):
         try:
             import json as _json
             focus = _json.loads(rec.focus_json) if rec.focus_json else []
@@ -1538,15 +1555,20 @@ def rescore_security_assessment(assessment_id: int, data: SecurityRescoreRequest
         stored_scoring = json.loads(rec.scoring_json or "{}")
     except Exception:
         stored_scoring = {}
-    if _assessment_path_fields(rec, stored_scoring).get("assessment_path") == "model":
+    if _assessment_path_fields(rec, stored_scoring).get("assessment_path") in (
+            "model", "model_adversarial", "model_hypothesis"):
         # The what-if re-scorer varies catalog controls against catalog
-        # threats; a model assessment has neither (dimension weights
-        # instead). Re-running catalog math on it would produce numbers
-        # from the wrong method wearing this id.
+        # threats; a model assessment has neither (dimension weights or
+        # hypothesis confidence instead). Re-running catalog math on it would
+        # produce numbers from the wrong method wearing this id.
+        _ap = _assessment_path_fields(rec, stored_scoring).get("assessment_path")
+        _label = {"model_adversarial": "Adversarial",
+                  "model_hypothesis": "Hypothesis"}.get(_ap, "Model")
         raise HTTPException(
-            422, "Model-path assessment: re-score does not apply (no catalog "
-                 "threats or controls to vary). Re-run the assessment to "
-                 "recompute its dimension weights.")
+            422, f"{_label}-path "
+                 "assessment: re-score does not apply (no catalog threats or "
+                 "controls to vary). Re-run the assessment to recompute its "
+                 "dimension weights.")
     try:
         stored_threats = json.loads(rec.threats_json or "[]")
     except Exception:
@@ -1634,13 +1656,39 @@ def start_security_assessment(inv_id: int, data: SecurityAssessRequest,
     inv = db.query(Investigation).filter(Investigation.id == inv_id).first()
     if not inv:
         raise HTTPException(404, "Investigation not found")
-    if security_agent.security_run_busy(db, inv_id):
-        raise HTTPException(429, "A security assessment is already running here")
+    # Reject an unknown mode rather than treating it as auto. A typo'd
+    # "adversarial" would otherwise silently run the internals question and
+    # return a report that looks like an answer to a question nobody asked.
+    if data.assessment_mode not in ("", "target", "adversarial", "hypothesis"):
+        raise HTTPException(422, "assessment_mode must be one of: target, "
+                                 "adversarial, hypothesis, or empty for auto")
+    if security_agent.security_run_busy(
+            db, inv_id,
+            assessment_mode=data.assessment_mode or "",
+            product_name=data.product_name or "",
+            use_case=data.use_case or "",
+            focus=data.focus or []):
+        raise HTTPException(429, "A security assessment of this kind is already "
+                                 "running here")
+    # Resolve the mode before queueing, so the plan records what the run will
+    # actually do and the UI can render the right pipeline from the response
+    # instead of guessing from the requested string.
+    from . import security as sec_engine
+    _prof = sec_engine.profile_model_subject(data.product_name or "",
+                                             data.use_case or "",
+                                             data.focus or [])
+    _mode = sec_engine.resolve_model_mode(data.product_name or "",
+                                          data.use_case or "", data.focus or [],
+                                          data.assessment_mode or "",
+                                          subject_profile=_prof)
+    _path = {"target": "model", "adversarial": "model_adversarial",
+             "hypothesis": "model_hypothesis"}.get(_mode, "standard")
     ledger_api.human_action(request, "started_security_assessment",
-                            {"investigation": inv_id, "title": inv.title,
+                            {"investigation": inv.id, "title": inv.title,
                              "product": data.product_name or "Target product",
+                             "assessment_mode": _mode,
                              "require_approval": bool(data.require_approval)})
-    run_id = security_agent.launch_security_assessment(inv_id, {
+    run_id = security_agent.launch_security_assessment(inv.id, {
         "product_name": data.product_name or "Target product",
         "product_url": data.product_url or "",
         "exposure": data.exposure or "confidential_data",
@@ -1650,8 +1698,10 @@ def start_security_assessment(inv_id: int, data: SecurityAssessRequest,
         "focus": data.focus or [],
         "declared_controls": data.declared_controls or [],
         "require_approval": bool(data.require_approval),
+        "assessment_mode": _mode,
     }, requested_by=ledger_api.request_actor(request))
-    return {"status": "started", "run_id": run_id}
+    return {"status": "started", "run_id": run_id,
+            "assessment_mode": _mode, "assessment_path": _path}
 
 
 @app.post("/api/security/runs/{run_id}/approval")
@@ -1887,6 +1937,27 @@ def get_security_pdf(assessment_id: int, db: Session = Depends(get_db)):
         content=pdf, media_type="application/pdf",
         headers={"Content-Disposition":
                  f"attachment; filename=security-assessment-{rec.id}.pdf"})
+
+
+@app.post("/api/security/classify-subject")
+def classify_security_subject(data: SecuritySubjectRequest):
+    """What kind of thing is being assessed, and which paths apply.
+
+    The Security form calls this as the subject is typed so it can offer the
+    model mode selector only when the two model questions actually apply. The
+    profiler is deterministic, so this is the same function the engine will
+    use -- the UI never guesses and then disagrees with the run.
+    """
+    prof = sec_engine.profile_model_subject(data.product_name or "",
+                                            data.use_case or "",
+                                            data.focus or [])
+    out = {"profile": prof, "is_model_query": prof["is_model_query"],
+           "modes": ["target", "adversarial"] if prof["is_model_query"] else []}
+    if prof["is_model_query"]:
+        out["misuse_intent"] = sec_engine.profile_misuse_intent(
+            data.product_name or "", data.use_case or "", data.focus or [],
+            subject_profile=prof)
+    return out
 
 
 @app.get("/.well-known/agents")

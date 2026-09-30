@@ -1023,7 +1023,7 @@ body.pane-sec-top-collapsed .sec-topbar-sub { display: none; }
         <div class="sec-setup">
           <div class="sec-card">
             <div style="font-size:11.5px;color:var(--text2);margin-bottom:10px;">Scoped to investigation: <strong id="secInvName">—</strong>. The agent searches <em>this investigation's knowledge graph</em> for related research, maps known attacks, and writes the report.</div>
-            <div class="form-group"><label>Product name</label><input id="secProduct" placeholder="e.g. Cognition Devin &amp; Windsurf on confidential repositories" /></div>
+            <div class="form-group"><label>Product name</label><input id="secProduct" oninput="secClassifySubject()" placeholder="e.g. Cognition Devin &amp; Windsurf on confidential repositories" /></div>
             <div class="form-group"><label>Product link</label><input id="secUrl" placeholder="https://vendor.example/security" /></div>
             <div class="form-group"><label>Exposure setting</label>
               <select id="secExposure">
@@ -1033,7 +1033,23 @@ body.pane-sec-top-collapsed .sec-topbar-sub { display: none; }
                 <option value="public">Public / synthetic only</option>
               </select>
             </div>
-            <div class="form-group"><label>Use case / data in scope</label><textarea id="secUseCase" style="min-height:60px;" placeholder="What AI feature is in scope, what data does it touch, and which repositories or records are classified restricted or confidential?"></textarea></div>
+            <div class="form-group" id="secModeWrap" hidden>
+              <label>Assessment mode <span style="font-weight:400;color:var(--text2);">— model subject detected</span></label>
+              <select id="secMode" onchange="this.dataset.touched='1'">
+                <option value="target" selected>Model as target — is it sound? (internals, weights, privacy, governance)</option>
+                <option value="adversarial">Adversarial misuse — what could an attacker build WITH it? (scenarios, prerequisites, detection)</option>
+                <option value="hypothesis">Hypotheses — which of these claims is true, and what would settle it? (reads the two above)</option>
+                <option value="">Read the wording above and choose for me</option>
+              </select>
+              <div style="font-size:11.5px;color:var(--text2);margin-top:6px;">
+                Three separate assessments with their own agents, weights and scores — run
+                whichever you need, or all of them. They are never averaged: a well-built model
+                can still be the most useful thing in an attacker's hands, and the hypothesis
+                run is scored as a <em>confidence</em> in its claims, not a risk.
+                The hypothesis option reads the other two, so run it last.
+              </div>
+            </div>
+            <div class="form-group"><label>Use case / data in scope</label><textarea id="secUseCase" oninput="secClassifySubject()" style="min-height:60px;" placeholder="What AI feature is in scope, what data does it touch, and which repositories or records are classified restricted or confidential?"></textarea></div>
             <div class="form-group"><label>Workflow notes (optional)</label><textarea id="secWorkflow" style="min-height:60px;" placeholder="End-to-end path: who triggers it, what data enters context, which systems it reaches, what is retained and for how long."></textarea></div>
             <div class="form-group"><label>Documentation URLs (one per line)</label><textarea id="secDocs" style="min-height:60px;" placeholder="https://vendor.example/security&#10;https://vendor.example/legal/privacy"></textarea></div>
             <div class="form-group"><label>Focus areas</label>
@@ -3673,6 +3689,14 @@ function secClearForm() {
   const mis = document.getElementById('secFocusMisclass');
   if (copy) copy.checked = false;
   if (mis) mis.checked = false;
+  const modeWrap = document.getElementById('secModeWrap');
+  if (modeWrap) modeWrap.hidden = true;
+  const modeSel = document.getElementById('secMode');
+  if (modeSel) { delete modeSel.dataset.touched; modeSel.value = 'target'; }
+  // Invalidate any in-flight classification, or its response lands after the
+  // reset and un-hides the mode selector on an empty form.
+  secClassifySeq++;
+  clearTimeout(secClassifyTimer);
   secSetControls([]);
   const el = document.getElementById('secResult');
   if (el) el.innerHTML = '<div class="sec-card"><p style="color:var(--text2)">No assessment stored for this investigation yet. Configure the product and run the agent.</p></div>';
@@ -4929,6 +4953,7 @@ loadExplDefaults();
 
 /* ---------- AI Security agent ---------- */
 let secRunId = null;
+let secRunPath = null;   // resolved assessment path of the running job, from the server
 let secPollTimer = null;
 let secAssessmentId = null;
 let secAssessmentPath = 'standard';
@@ -5201,7 +5226,12 @@ async function runSecurityAssessment() {
   if (document.getElementById('secFocusCopy').checked) focus.push('accidental_copy');
   if (document.getElementById('secFocusMisclass').checked) focus.push('misclassification');
   const controls = secGetControls();
-  renderSecPipeline([], 'starting');
+  const modeSel = document.getElementById('secMode');
+  const mode = (modeSel && !document.getElementById('secModeWrap').hidden)
+    ? modeSel.value : '';
+  renderSecPipeline([], 'starting', mode === 'adversarial' ? 'model_adversarial'
+    : mode === 'hypothesis' ? 'model_hypothesis'
+    : mode === 'target' ? 'model' : null);
   try {
     const res = await fetch(`${API}/investigations/${currentInv}/security/assess`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -5213,14 +5243,26 @@ async function runSecurityAssessment() {
         workflow_text: document.getElementById('secWorkflow').value,
         doc_urls: docs, focus, declared_controls: controls,
         require_approval: document.getElementById('secRequireApproval').checked,
+        assessment_mode: mode,
       }),
     });
-    if (res.status === 429) { showNotif('A security assessment is already running here', 'error'); btn.disabled = false; return; }
+    if (res.status === 429) { showNotif('An assessment of this kind is already running here', 'error'); btn.disabled = false; return; }
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const data = await res.json();
     secRunId = data.run_id;
+    // The server resolves auto-mode before queueing and returns what it chose.
+    // Trust that rather than the requested string: it is the same resolution
+    // the busy lock and the engine used, so the pipeline shown here cannot
+    // disagree with the pipeline that runs.
+    secRunPath = data.assessment_path || null;
+    if (secRunPath) renderSecPipeline([], 'starting', secRunPath);
     secTabBadge('running', 'running…');
-    showNotif(`Security agent started (${controls.length} control(s) declared) — orchestrator → control-analyst → collector → intel → writer`, 'success');
+    const _what = { model: 'internals/privacy review',
+                    model_adversarial: 'adversarial misuse analysis',
+                    model_hypothesis: 'hypothesis synthesis' }[secRunPath];
+    showNotif(_what
+      ? `Security agent started — ${_what}`
+      : `Security agent started (${controls.length} control(s) declared) — orchestrator → control-analyst → collector → intel → writer`, 'success');
     pollSecurityRun();
     secPollTimer = setInterval(pollSecurityRun, 2500);
   } catch (e) {
@@ -5244,6 +5286,26 @@ const SEC_MODEL_PIPELINE = [
   { agent: 'scoring engine', intent: 'dimension weights' },
   { agent: 'model-reporter', intent: 'write_model_report' },
 ];
+// Flow 2: the model as the tool in someone else's operation. Its own agents,
+// its own weights, its own assessment row -- never a section of flow 1.
+const SEC_ADVERSARIAL_PIPELINE = [
+  { agent: 'model-profiler', intent: 'profile_model' },
+  { agent: 'model-adversary', intent: 'derive_capabilities' },
+  { agent: 'misuse-scout', intent: 'engineer_scenarios' },
+  { agent: 'research-collector', intent: 'collect_research' },
+  { agent: 'scoring engine', intent: 'attacker-value weights' },
+  { agent: 'misuse-reporter', intent: 'write_misuse_report' },
+];
+// Flow 3: the synthesis. Its agents READ the stored output of flows 1 and 2,
+// so it is launched last and its output is a confidence, not a score.
+const SEC_HYPOTHESIS_PIPELINE = [
+  { agent: 'model-profiler', intent: 'profile_model' },
+  { agent: 'hypothesis-analyst', intent: 'claims from both flows' },
+  { agent: 'research-collector', intent: 'collect_research' },
+  { agent: 'hypothesis-verifier', intent: 'argue with each claim' },
+  { agent: 'scoring engine', intent: 'confidence weights' },
+  { agent: 'hypothesis-reporter', intent: 'claims + falsifiers' },
+];
 
 function renderSecPipeline(trace, currentStage, modelPath) {
   const box = document.getElementById('secPipe');
@@ -5251,7 +5313,9 @@ function renderSecPipeline(trace, currentStage, modelPath) {
   const notes = {};
   (trace || []).forEach(h => { if (h && h.agent) notes[h.agent] = h.note || ''; });
   const doneAgents = new Set((trace || []).map(h => h.agent).filter(Boolean));
-  const hops = modelPath ? SEC_MODEL_PIPELINE : SEC_PIPELINE;
+  const hops = modelPath === 'model_adversarial' ? SEC_ADVERSARIAL_PIPELINE
+    : modelPath === 'model_hypothesis' ? SEC_HYPOTHESIS_PIPELINE
+    : modelPath ? SEC_MODEL_PIPELINE : SEC_PIPELINE;
   box.innerHTML = hops.map((hop, i) => {
     let cls = 'wait';
     if (doneAgents.has(hop.agent)) cls = 'done';
@@ -5270,21 +5334,40 @@ async function pollSecurityRun() {
     const ev = await (await fetch(`${API}/runs/${secRunId}/events?after_id=${secLastEvent || 0}`)).json();
     const log = document.getElementById('secLog');
     const stages = [];
+    // The backend sends the path on the run plan and puts the A2A hop on the
+    // event where one ran. Prefer the hop: mapping event stages to agent names
+    // client-side is exactly what made a model run light up the catalog
+    // pipeline's control-analyst.
+    let hops = null;
     for (const e of ev.events || []) {
       secLastEvent = Math.max(secLastEvent || 0, e.id);
       if (log) log.insertAdjacentHTML('beforeend',
         `<div style="font-size:12px;"><span style="color:var(--teal);font-weight:600;">${escHtml(e.stage)}</span> — ${escHtml(e.message)}</div>`);
+      let hop = null;
+      try { hop = (e.data && (JSON.parse(e.data).hop || null)) || null; } catch (_) {}
+      if (hop && hop.agent) { stages.push(hop.agent); hops = null; continue; }
       if (e.stage === 'controls') stages.push('control-analyst');
       if (e.stage === 'search') stages.push('research-collector');
-      if (e.stage === 'analyze') stages.push('threat-intel');
+      if (e.stage === 'analyze') stages.push(secRunPath === 'model_adversarial'
+        ? 'model-adversary'
+        : secRunPath === 'model_hypothesis' ? 'hypothesis-analyst'
+        : secRunPath === 'model' ? 'model-internals' : 'threat-intel');
       if (e.stage === 'score') stages.push('scoring engine');
-      if (e.stage === 'map') stages.push('report-writer');
+      if (e.stage === 'map') stages.push(secRunPath === 'model_adversarial'
+        ? 'misuse-scout'
+        : secRunPath === 'model_hypothesis' ? 'hypothesis-verifier'
+        : secRunPath === 'model' ? 'model-privacy' : 'report-writer');
     }
     if (stages.length) {
       const box = document.getElementById('secPipe');
-      if (box) renderSecPipeline(
-        SEC_PIPELINE.filter(h => stages.includes(h.agent)).map(h => ({ agent: h.agent, note: '' })),
-        stages[stages.length - 1]);
+      if (box) {
+        const live = hops || (secRunPath === 'model_adversarial' ? SEC_ADVERSARIAL_PIPELINE
+          : secRunPath === 'model_hypothesis' ? SEC_HYPOTHESIS_PIPELINE
+          : secRunPath === 'model' ? SEC_MODEL_PIPELINE : SEC_PIPELINE);
+        renderSecPipeline(
+          live.filter(h => stages.includes(h.agent)).map(h => ({ agent: h.agent, note: '' })),
+          stages[stages.length - 1], null);
+      }
     }
     if (ev.status === 'awaiting_approval') {
       renderSecGate(secRunId, log ? log.innerHTML : '');
@@ -5410,7 +5493,12 @@ function secSubtabBar() {
     evidence: (secLastScore ? ((secLastScore.evidence || []).length + (secLastScore.known_exploits || []).length) : 0),
     cves: secCveCount,
   };
-  return '<div class="sec-subtabs">' + SEC_SUBTABS.map(t => {
+  // The Controls tab lists the catalog control plan. No model path has one --
+  // they score dimension weights or claim confidence -- so offering the tab
+  // there shows a checklist the run never consulted.
+  const _modelPath = secAssessmentPath === 'model' || secAssessmentPath === 'model_adversarial'
+    || secAssessmentPath === 'model_hypothesis';
+  return '<div class="sec-subtabs">' + SEC_SUBTABS.filter(t => !(_modelPath && t.key === 'controls')).map(t => {
     const n = t.count ? counts[t.count] : null;
     return `<button class="sec-subtab${t.key === secSubTab ? ' on' : ''}" data-key="${t.key}" onclick="secSwitchSubTab('${t.key}')">` +
       `<i class="fas ${t.icon}"></i>${escHtml(t.label)}` +
@@ -5420,6 +5508,11 @@ function secSubtabBar() {
 
 function secSwitchSubTab(key) {
   if (!SEC_SUBTABS.some(t => t.key === key)) return;
+  // Landing on a tab the current path has no pane for (Controls on a model
+  // assessment) would render an empty pane. Fall back to Overview instead.
+  const _p = secAssessmentPath;
+  if (key === 'controls' && (_p === 'model' || _p === 'model_adversarial'
+      || _p === 'model_hypothesis')) key = 'overview';
   secSubTab = key;
   if (!secSubPanes) {
     // No assessment view rendered (none stored for this investigation). The
@@ -5759,6 +5852,15 @@ function closeSecSeverityOverlay() {
 
 function renderSecurityReport(data) {
   const el = document.getElementById('secResult');
+  // ---- path flags ----
+  // Declared first, before anything below reads them: the score strip picks a
+  // whole different explainer per path, the what-if panel is catalog-only, and
+  // the threat table renders claims or scenarios or risks accordingly. One
+  // declaration, hoisted to the top, so no pane can read a flag in TDZ.
+  const _isAdv = data.assessment_path === 'model_adversarial';
+  const _isHyp = data.assessment_path === 'model_hypothesis';
+  const _hypPath = _isHyp;      // the score strip reads it; same flag, one name in use
+  const _anyModelPath = data.assessment_path === 'model' || _isAdv || _isHyp;
   secPerspectives = Array.isArray(data.perspectives) ? data.perspectives : [];
   secA2ATaskId = data.a2a_task_id || '';
   if (!secPerspectives.some(p => p && p.key === secAudience)) {
@@ -5773,8 +5875,12 @@ function renderSecurityReport(data) {
   };
   const residual = secLastScore.residual_pct;
   const inherent = secLastScore.inherent_pct;
-  const color = secSeverityColor(residual);
-  const inhColor = secSeverityColor(inherent);
+  // The hypothesis path's number is a CONFIDENCE, not a risk. Reusing the
+  // risk colour scale would paint a well-evidenced claim set red because the
+  // arithmetic happened to land above 75, which is exactly backwards: higher
+  // there is better, not worse.
+  const color = _hypPath ? 'var(--teal)' : secSeverityColor(residual);
+  const inhColor = _hypPath ? 'var(--teal)' : secSeverityColor(inherent);
   const threats = data.threats || [];
   const dg = data.diagrams || {};
   const bd = (data.scoring && data.scoring.breakdown) || {};
@@ -5790,7 +5896,47 @@ function renderSecurityReport(data) {
   }).join('');
 
   // ---- score explainer ----
-  const gauge = `
+  // Model paths are scored by weighted dimensions, not by L×I over catalog
+  // findings, so the catalog gauge would print "risk removed" for a number that
+  // never subtracted anything and render an inherent→residual band that does
+  // not exist. Those paths get their own strip off the stored dimension table.
+  const _modelScored = data.assessment_path === 'model' || _isAdv || _hypPath;
+  const _dims = ((data.scoring && data.scoring.dimensions) || []).filter(d => d && d.id);
+  const _dimRows = _dims.map(d => {
+    const w = Math.round((d.weight || 0) * 100);
+    const s = Math.round(d.score || 0);
+    const c = (d.contribution !== undefined ? d.contribution
+      : s * (d.weight || 0)).toFixed(1);
+    return `<tr><td><strong>${escHtml(d.id.replace(/_/g, ' '))}</strong></td>`
+      + `<td style="text-align:right;">${w}%</td>`
+      + `<td style="text-align:right;">${s}</td>`
+      + `<td style="text-align:right;">${c}</td></tr>`;
+  }).join('');
+  const _dimStrip = `
+    <div class="sec-gauge" style="border:none;padding:0;background:none;">
+      <div class="sec-metric"><div class="sec-metric-v" style="color:${color};font-size:20px;">${residual}</div><div class="sec-metric-k">${_hypPath ? 'confidence' : _isAdv ? 'misuse potential' : 'weightage'}</div></div>
+      <div class="sec-metric"><div class="sec-metric-v" style="font-size:20px;">${_dims.length}</div><div class="sec-metric-k">dimensions</div></div>
+      <div class="sec-metric"><div class="sec-metric-v" style="font-size:20px;">${threats.length}</div><div class="sec-metric-k">${_hypPath ? 'claims' : _isAdv ? 'scenarios' : 'findings'}</div></div>
+      <div class="sec-metric"><div class="sec-metric-v" style="font-size:20px;">${explo.length}</div><div class="sec-metric-k">sources</div></div>
+    </div>
+    ${_dims.length ? `<div style="overflow-x:auto;margin-top:10px;"><table class="sec-table"><tr><th>Dimension</th><th style="text-align:right;">Weight</th><th style="text-align:right;">Score</th><th style="text-align:right;">Contribution</th></tr>${_dimRows}</table></div>` : ''}
+    <div class="sec-formula">
+      <strong>How this score is derived</strong> (deterministic — same inputs, same number):<br/>
+      ${_hypPath
+        ? `• four dimensions, weighted: evidence support 40%, cross-flow corroboration 25%, testability 20%, stakes if true 15%<br/>
+           • each dimension is the <strong>mean across all claims</strong>, so the score describes the claim set and one strong claim cannot vouch for weak ones<br/>
+           • an unmeasured dimension takes the neutral 40 baseline — an under-examined claim is not thereby a well-supported one<br/>
+           • the number is a <strong>confidence</strong>: higher means the claims are better evidenced, not that the system is more dangerous`
+        : _isAdv
+        ? `• four dimensions weighted by what the model lets an attacker <em>do</em> — reachability, capability leverage, launderability, and detection difficulty — rather than by what is wrong with the model<br/>
+           • each dimension is scored from the subject profile and the evidence found; scores are deterministic given the same inputs<br/>
+           • the number is <strong>misuse potential</strong>, not model risk: the model is the tool in someone else's operation here<br/>
+           • the companion <em>model-internals</em> assessment answers "is this model sound?" and is never averaged into this one`
+        : `• four dimensions weighted by how much each matters to a deployed model: training data &amp; privacy 35%, model integrity 25%, deployment surface 20%, governance 20%<br/>
+           • each dimension score comes from the findings collected for it; the aggregate is their weighted sum<br/>
+           • the number is <strong>dimension weightage</strong>, not the L×I of the catalog path, and the two are not comparable`}
+    </div>`;
+  const gauge = _modelScored ? _dimStrip : `
     <div class="sec-gauge">
       <div class="sec-metric"><div class="sec-metric-v" style="color:${inhColor}">${inhColor ? inherent : '—'}</div><div class="sec-metric-k">inherent</div></div>
       <div class="sec-gauge-track" title="inherent ${inherent} → residual ${residual}">
@@ -5814,7 +5960,10 @@ function renderSecurityReport(data) {
     </div>`;
 
   // ---- what-if ----
-  const whatIf = `
+  // Catalog-only. It varies catalog controls against catalog threats, and the
+  // backend refuses it off-path (422): offering a toggle that can only fail
+  // would be worse than not offering it.
+  const whatIf = _anyModelPath ? '' : `
     <div class="sec-whatif">
       <strong style="font-size:12px;"><i class="fas fa-flask"></i> What-if:</strong>
       <span style="font-size:11.5px;color:var(--text2)">tick controls on the left to recompute instantly (no LLM, no re-run).</span>
@@ -5826,6 +5975,29 @@ function renderSecurityReport(data) {
     const sev = secThreatSeverity(t);
     const app_ = secThreatApplicable(t);
     const cov = secThreatCoverage(t);
+    if (_isHyp) {
+      // Confidence, not severity. The band column is dropped for the same
+      // reason the risk bands are: colouring a claim red by how sure we are
+      // of it is a category error, and the falsifier is the actionable field.
+      return `<tr${app_ ? '' : ' style="opacity:0.55;"'}>
+        <td><strong>${escHtml(t.id)}</strong></td>
+        <td>${escHtml(t.claim || t.title || '')}<br/><span style="color:var(--text2);font-size:10.5px;">${escHtml(t.dimension || '')}</span></td>
+        <td style="white-space:nowrap;"><strong>${t.confidence != null ? t.confidence + '%' : '—'}</strong><br/><span style="color:var(--text2);font-size:10px;">${t.cross_flow ? 'both flows' : 'one flow'}</span></td>
+        <td style="min-width:260px;">${escHtml(t.falsifier || 'not yet refutable')}</td>
+        <td style="white-space:nowrap;">${t.impact != null ? t.impact + '/5' : '—'}</td>
+        <td>${t.falsifier ? '<span style="color:var(--teal)">testable</span>' : '<span style="color:var(--orange)">assertion</span>'}</td>
+      </tr>`;
+    }
+    if (_isAdv) {
+      return `<tr${app_ ? '' : ' style="opacity:0.55;"'}>
+        <td><strong>${escHtml(t.id)}</strong></td>
+        <td>${escHtml(t.title)}<br/><span style="color:var(--text2);font-size:10.5px;">${escHtml(t.attacker_goal || '')}</span></td>
+        <td style="white-space:nowrap;">reach ${t.feasibility}/5<br/><span style="color:var(--text2)">impact ${t.impact}/5</span></td>
+        <td style="min-width:240px;">${escHtml((t.prerequisites || []).join('; ') || '—')}</td>
+        <td style="white-space:nowrap;"><strong>${secThreatScore(t)}</strong></td>
+        <td><span class="sev-${sev}">${sev}</span></td>
+      </tr>`;
+    }
     return `<tr${app_ ? '' : ' style="opacity:0.55;"'}>
       <td><strong>${escHtml(t.id)}</strong>${app_ ? '' : '<br/><span style="font-size:9.5px;color:var(--text2)">out of scope</span>'}</td>
       <td>${escHtml(t.title)}<br/><span style="color:var(--text2);font-size:10.5px;">${escHtml(t.owasp || '')}</span></td>
@@ -5838,6 +6010,29 @@ function renderSecurityReport(data) {
 
   const details = threats.map(t => {
     const sev = secThreatSeverity(t);
+    if (_isHyp) {
+      return `<div class="sec-card"><h4>${escHtml(t.id)} — ${escHtml(t.claim || t.title || '')}</h4>
+        <p style="color:var(--text2)"><em>confidence ${t.confidence != null ? t.confidence + '/100' : '—'} · stakes if true ${t.impact}/5 · ${t.cross_flow ? 'reached independently by both flows' : 'reached by one flow'}</em></p>
+        ${t.premise ? `<p><strong>Premise:</strong> ${escHtml(t.premise)}</p>` : ''}
+        ${t.mechanism ? `<p><strong>Mechanism:</strong> ${escHtml(t.mechanism)}</p>` : ''}
+        ${t.consequence ? `<p><strong>If true:</strong> ${escHtml(t.consequence)}</p>` : ''}
+        ${t.falsifier ? `<p style="color:var(--orange)"><i class="fas fa-flask"></i> <strong>Refuted by:</strong> ${escHtml(t.falsifier)}</p>` : '<p style="color:var(--red)">No refutation test — this is an assertion, not a hypothesis.</p>'}
+        ${(t.supporting || []).length ? `<p style="color:var(--text2)"><strong>Traces to:</strong> ${escHtml(t.supporting.join(', '))}</p>` : ''}
+        ${(t.counter_evidence || []).length ? `<p style="color:var(--red)"><i class="fas fa-circle-exclamation"></i> <strong>Counter-evidence:</strong> ${escHtml(t.counter_evidence.join(', '))}</p>` : ''}
+        ${(t.supporting_artifacts || []).length ? `<p style="color:var(--teal)"><strong>In-app evidence:</strong> ${t.supporting_artifacts.map(a => '#' + escHtml(String(a))).join(', ')}</p>` : ''}
+        <p style="font-size:11px;color:var(--text2);margin-top:6px;">Untested. Confidence describes the evidence behind this claim, not a measured likelihood.</p></div>`;
+    }
+    if (_isAdv) {
+      return `<div class="sec-card"><h4>${escHtml(t.id)} — ${escHtml(t.title)} <span class="sev-${sev}">${sev}</span></h4>
+        <p style="color:var(--text2)"><em>${escHtml(t.dimension || '')} · reach ${t.feasibility}/5 · impact ${t.impact}/5 · attacker value ${secThreatInherent(t)}</em></p>
+        <p><strong>Goal:</strong> ${escHtml(t.attacker_goal || 'unstated')}</p>
+        ${(t.chain || []).length ? `<p><strong>Chain:</strong></p><ol style="margin-left:18px;">${t.chain.map(s => `<li>${escHtml(s)}</li>`).join('')}</ol>` : ''}
+        ${(t.prerequisites || []).length ? `<p style="color:var(--orange)"><i class="fas fa-key"></i> <strong>Prerequisites:</strong> ${escHtml(t.prerequisites.join('; '))}</p>` : ''}
+        <p><strong>What it achieves:</strong> ${escHtml(t.achieves || '')}</p>
+        ${(t.detections || []).length ? `<p style="color:var(--teal)"><i class="fas fa-radar"></i> <strong>Would show up as:</strong> ${escHtml(t.detections.join('; '))}</p>` : ''}
+        ${(t.mitigations || []).length ? `<ul style="margin-left:18px;"><li>${escHtml(t.mitigations.join('; '))}</li></ul>` : ''}
+        <p style="font-size:11px;color:var(--text2);margin-top:6px;">Defensive use only — stated so the owning team can close the prerequisite, not to run the chain.</p></div>`;
+    }
     return `<div class="sec-card"><h4>${escHtml(t.id)} — ${escHtml(t.title)} <span class="sev-${sev}">${sev}</span></h4>
       <p style="color:var(--text2)"><em>${escHtml(t.stride || '')} · ${escHtml(t.owasp || '')} · inherent ${secThreatInherent(t)} → residual ${secThreatScore(t)} (${secThreatCoverage(t)}% covered${t.applicability !== undefined ? `, applicability ${Math.round(t.applicability * 100)}%` : ''})</em></p>
       <p>${escHtml(t.description || '')}</p>
@@ -5895,19 +6090,44 @@ function renderSecurityReport(data) {
     ${execPara}
     ${whatIf}
     <div class="sec-card"><h3><i class="fas fa-diagram-project"></i> Agent pipeline</h3><div class="sec-pipe" id="secPipe"></div>
-      <div class="sec-formula">A2A protocol <code>a2a/1.0</code>: ${data.assessment_path === 'model'
+      <div class="sec-formula">A2A protocol <code>a2a/1.0</code>: ${_isHyp
+        ? 'hypothesis-orchestrator → <strong>hypothesis-analyst</strong> (claims from the two prior assessments) → research-collector (evidence for the claims) → hypothesis-verifier (support, counter-evidence, falsifier check) → <strong>scoring engine</strong> (confidence weights) → hypothesis-reporter. Reads the stored internals and misuse rows. No standards mapping on this path.'
+        : _isAdv
+        ? 'adversary-orchestrator → <strong>model-profiler</strong> (subject profile) → model-adversary (attacker capabilities) → misuse-scout (attack chains) → research-collector (in-app graph search) → <strong>scoring engine</strong> (attacker-value weights) → misuse-reporter. No standards mapping on this path.'
+        : data.assessment_path === 'model'
         ? 'model-orchestrator → <strong>model-profiler</strong> (subject profile) → model-internals (architecture/training/inference) → research-collector (in-app graph search) → model-privacy (data lifecycle) → <strong>scoring engine</strong> (dimension weights) → model-reporter. No standards mapping on this path.'
         : 'orchestrator → <strong>control-analyst</strong> (applicability + controls) → research-collector (in-app graph search) → threat-intel (attacks + confidence) → <strong>scoring engine</strong> (deterministic L×I math) → report-writer.'}</div>
     </div>
-    <div class="sec-card"><h3><i class="fas fa-diagram-project"></i> Data-flow &amp; trust boundary</h3><div class="diagram-wrap"><div class="mermaid">${escHtml(dg.dataflow || '')}</div></div>
-      ${data.assessment_path === 'model' ? '' : `<h4>Threat paths</h4><div class="diagram-wrap"><div class="mermaid">${escHtml(dg.threat_paths || '')}</div></div>
+    ${_isHyp ? `<div class="sec-card"><h3><i class="fas fa-scale-balanced"></i> What this number is</h3>
+      <div class="sec-formula">This is <strong>confidence in the claims below</strong> (${data.overall_pct}/100) —
+      <em>not</em> a risk score, and not comparable to the other two assessments.
+      Higher means the claims are better evidenced, not that the system is more
+      dangerous. The score is the mean across the claim set rather than its best
+      member, so one strong claim cannot vouch for weak ones.
+
+      Each claim states the observation that would <strong>refute</strong> it.
+      A claim with no refutation is an assertion, and is marked as one below.
+      These claims are untested: confidence describes the evidence behind them,
+      not a measured likelihood.</div></div>` : ''}
+    ${_isAdv ? `<div class="sec-card"><h3><i class="fas fa-scale-balanced"></i> What this number is</h3>
+      <div class="sec-formula">This is <strong>misuse potential</strong> (${data.overall_pct}/100), not model risk. The model is the
+      tool in someone else's operation here, so the dimensions weigh what the model
+      lets an attacker build, infer or launder. The companion
+      <em>model-internals</em> assessment answers the other question — is this model
+      sound? — and carries its own score. The two are stored separately and never
+      averaged: a well-built model can still be the most useful thing in an
+      attacker's hands.</div></div>` : ''}
+    <div class="sec-card"><h3><i class="fas fa-diagram-project"></i> ${_isHyp ? 'Evidence map' : _isAdv ? 'Abuse chain' : 'Data-flow &amp; trust boundary'}</h3><div class="diagram-wrap"><div class="mermaid">${escHtml(dg.dataflow || '')}</div></div>
+      ${_anyModelPath ? '' : `<h4>Threat paths</h4><div class="diagram-wrap"><div class="mermaid">${escHtml(dg.threat_paths || '')}</div></div>
       <h4>Secure workflow</h4><div class="diagram-wrap"><div class="mermaid">${escHtml(dg.workflow || '')}</div></div>`}
     </div>`;
 
   const paneThreats = `
-    <div class="sec-card"><h3><i class="fas fa-triangle-exclamation"></i> Threat &amp; risk register</h3>
+    <div class="sec-card"><h3><i class="fas fa-triangle-exclamation"></i> ${_isHyp ? 'Hypothesis register' : _isAdv ? 'Misuse scenario register' : 'Threat &amp; risk register'}</h3>
+      ${_isHyp ? `<div class="sec-aud-role">Each row is a claim someone could test and be wrong about. The <strong>refuted by</strong> column is the actionable one: it is the observation that would settle the question.</div>` : ''}
+      ${_isAdv ? `<div class="sec-aud-role">These are scenarios an attacker could chain <em>with</em> this model. The prerequisite column is the one to act on — it is what you can actually close.</div>` : ''}
       ${secRoleThreats().length ? `<div class="sec-aud-role">Rows highlighted are the ones this role owns — switch audience above to change the lens.</div>` : ''}
-      <div style="overflow-x:auto;"><table class="sec-table"><tr><th>ID</th><th>Threat</th><th>L×I (inherent)</th><th>Coverage</th><th>Residual</th><th>Severity</th></tr>${rows}</table></div>
+      <div style="overflow-x:auto;"><table class="sec-table"><tr><th>ID</th><th>${_isHyp ? 'Claim' : _isAdv ? 'Scenario &amp; attacker goal' : 'Threat'}</th><th>${_isHyp ? 'Confidence' : _isAdv ? 'Reach × impact' : 'L×I (inherent)'}</th><th>${_isHyp ? 'Refuted by' : _isAdv ? 'Prerequisites' : 'Coverage'}</th><th>${_isHyp ? 'Stakes' : _isAdv ? 'Value' : 'Residual'}</th><th>${_isHyp ? 'Status' : 'Severity'}</th></tr>${rows}</table></div>
     </div>
     ${details}`;
 
@@ -5940,7 +6160,9 @@ function renderSecurityReport(data) {
       <h3><i class="fas fa-file-shield"></i> Executive summary — ${escHtml(data.product_name)}</h3>
       <div class="sec-score"><div class="sec-score-num" style="color:${color}">${residual}<span style="font-size:14px;">/100</span></div>
       <div><div class="sec-posture" style="color:${color}">${escHtml(data.posture || '')}</div>
-      <div style="font-size:11.5px;color:var(--text2)">Residual after controls · inherent was ${inherent} · exposure <strong>${escHtml(data.exposure || '')}</strong> · ${threats.length} threats · ${explo.length} known exploits · run #${data.run_id || '—'}${data.a2a_task_id ? ' · A2A ' + escHtml(data.a2a_task_id) : ''}</div></div></div>
+      <div style="font-size:11.5px;color:var(--text2)">${_hypPath
+        ? `Mean confidence across ${threats.length} claim(s) · <strong>not a risk score</strong> · exposure <strong>${escHtml(data.exposure || '')}</strong> · run #${data.run_id || '—'}${data.a2a_task_id ? ' · A2A ' + escHtml(data.a2a_task_id) : ''}`
+        : `Residual after controls · inherent was ${inherent} · exposure <strong>${escHtml(data.exposure || '')}</strong> · ${threats.length} threats · ${explo.length} known exploits · run #${data.run_id || '—'}${data.a2a_task_id ? ' · A2A ' + escHtml(data.a2a_task_id) : ''}`}</div></div></div>
       ${gauge}
       <div class="sec-btn-row">
         <button class="btn btn-primary btn-sm" onclick="downloadSecurityMarkdown()"><i class="fas fa-file-lines"></i> Markdown</button>
@@ -5969,7 +6191,7 @@ function renderSecurityReport(data) {
   const audHost = document.getElementById('secAudPanel');
   if (audHost) audHost.innerHTML = secAudiencePanel();
   secApplyRoleHighlights();
-  renderSecPipeline(trace, null, data.assessment_path === 'model');
+  renderSecPipeline(trace, null, data.assessment_path);
   // reflect the stored control set in the controls panel
   if (activeCtrls.length || (data.active_controls || []).length === 0) {
     secControlCatalog.forEach(c => {
@@ -6047,13 +6269,65 @@ async function loadSecurityHistory() {
   try {
     const data = await (await fetch(`${API}/investigations/${currentInv}/security/assessments`)).json();
     if (!data.items || !data.items.length) { el.innerHTML = '<span style="color:var(--text2)">No assessments yet for this investigation.</span>'; return; }
-    el.innerHTML = data.items.map(i => `<div style="padding:6px 0;border-bottom:1px solid var(--border);"><a href="#" onclick="loadSecurityById(${i.id});return false;" style="color:var(--accent);">#${i.id} ${escHtml(i.product_name)}</a> <span style="color:var(--text2)">· ${escHtml(i.exposure)} · ${i.overall_pct}/100 · ${i.exploit_count} exploits</span></div>`).join('');
+    el.innerHTML = data.items.map(i => {
+      // Three rows per model topic: without a badge they look like duplicate
+      // runs of the same thing, and the third one is a confidence, not a score.
+      const badge = i.assessment_path === 'model_adversarial'
+        ? ' <span style="font-size:9.5px;border:1px solid var(--orange);color:var(--orange);border-radius:3px;padding:0 4px;">adversarial misuse</span>'
+        : i.assessment_path === 'model_hypothesis'
+        ? ' <span style="font-size:9.5px;border:1px solid var(--teal);color:var(--teal);border-radius:3px;padding:0 4px;">hypotheses · confidence</span>'
+        : i.assessment_path === 'model'
+        ? ' <span style="font-size:9.5px;border:1px solid var(--teal);color:var(--teal);border-radius:3px;padding:0 4px;">model internals</span>'
+        : '';
+      const count = i.assessment_path === 'model_adversarial'
+        ? `${i.threat_count || 0} scenarios`
+        : i.assessment_path === 'model_hypothesis'
+        ? `${i.threat_count || 0} claims · confidence`
+        : `${i.exploit_count || 0} exploits`;
+      return `<div style="padding:6px 0;border-bottom:1px solid var(--border);"><a href="#" onclick="loadSecurityById(${i.id});return false;" style="color:var(--accent);">#${i.id} ${escHtml(i.product_name)}</a>${badge} <span style="color:var(--text2)">· ${escHtml(i.exposure)} · ${i.overall_pct}/100 · ${count}</span></div>`;
+    }).join('');
   } catch (e) { el.innerHTML = '<span style="color:var(--red)">Failed to load history</span>'; }
 }
 
 function secSetField(id, value) {
   const el = document.getElementById(id);
   if (el) el.value = (value == null) ? '' : String(value);
+}
+
+// Offer the two model modes only when the subject really is a model. The
+// classifier is the engine's own deterministic profiler over the API, not a
+// client-side guess, so what the form promises and what the run does cannot
+// drift apart. Debounced because it fires per keystroke.
+let secClassifyTimer = null;
+let secClassifySeq = 0;
+function secClassifySubject() {
+  const wrap = document.getElementById('secModeWrap');
+  if (!wrap) return;
+  clearTimeout(secClassifyTimer);
+  const product = (document.getElementById('secProduct') || {}).value || '';
+  const useCase = (document.getElementById('secUseCase') || {}).value || '';
+  if (!product.trim() && !useCase.trim()) { wrap.hidden = true; return; }
+  const seq = ++secClassifySeq;
+  secClassifyTimer = setTimeout(async () => {
+    try {
+      const r = await fetch(`${API}/security/classify-subject`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ product_name: product, use_case: useCase, focus: [] }),
+      });
+      if (!r.ok || seq !== secClassifySeq) return;   // a newer keystroke won
+      const d = await r.json();
+      if (seq !== secClassifySeq) return;
+      wrap.hidden = !d.is_model_query;
+      const sel = document.getElementById('secMode');
+      const mi = d.misuse_intent;
+      if (sel && mi && !sel.dataset.touched) {
+        // Pre-select from the wording, but only as a starting point: the
+        // user can override, and the backend re-derives when left on auto.
+        sel.value = mi.is_misuse_query ? 'adversarial' : 'target';
+        sel.title = mi.reason;
+      }
+    } catch (_) { /* offline: the run still classifies server-side */ }
+  }, 400);
 }
 
 function secPopulateForm(d) {
@@ -6070,6 +6344,25 @@ function secPopulateForm(d) {
   }
   const ap = document.getElementById('secRequireApproval');
   if (ap) ap.checked = !!d.require_approval;
+  // Reopen the mode selector for a stored model assessment, pre-set to the
+  // path that produced it, so re-running the form does not silently ask the
+  // other question.
+  const modeWrap = document.getElementById('secModeWrap');
+  const modeSel = document.getElementById('secMode');
+  const storedPath = (d.scoring && d.scoring.assessment_path) || d.assessment_path;
+  if (modeWrap) {
+    if (storedPath === 'model' || storedPath === 'model_adversarial'
+        || storedPath === 'model_hypothesis') {
+      modeWrap.hidden = false;
+      if (modeSel) {
+        modeSel.value = { model: 'target', model_adversarial: 'adversarial',
+                          model_hypothesis: 'hypothesis' }[storedPath] || 'target';
+        delete modeSel.dataset.touched;
+      }
+    } else {
+      modeWrap.hidden = true;
+    }
+  }
   const focus = new Set(d.focus || []);
   const copy = document.getElementById('secFocusCopy');
   const mis = document.getElementById('secFocusMisclass');
@@ -6104,18 +6397,30 @@ function secStdKey() { return secAssessmentId ? String(secAssessmentId) : 'all';
 async function secLoadStandards(force) {
   const key = secStdKey();
   const body = document.getElementById('secStdBody');
-  if (secAssessmentId && secAssessmentPath === 'model') {
-    // Model-path assessments are never mapped onto AI-standards frameworks
-    // (the backend says the same if asked directly): show why, not an empty
-    // matrix that reads as "no coverage".
+  if (secAssessmentId && (secAssessmentPath === 'model' || secAssessmentPath === 'model_adversarial'
+      || secAssessmentPath === 'model_hypothesis')) {
+    // No model path is ever mapped onto AI-standards frameworks (the backend
+    // says the same if asked directly): show why, not an empty matrix that
+    // reads as "no coverage".
+    const _adv = secAssessmentPath === 'model_adversarial';
+    const _hyp = secAssessmentPath === 'model_hypothesis';
     document.getElementById('secStdCount').hidden = true;
     document.getElementById('secStdFoot').textContent = '';
     if (body) body.innerHTML = `<div class="std-err" style="border-color:var(--teal);">` +
       `<strong>Not mapped — by design.</strong> Assessment #${escHtml(String(secAssessmentId))} ` +
-      `ran on the model-internals path: it scores the model's own dimensions ` +
-      `(training-data privacy, model integrity, deployment surface, governance) ` +
-      `by weight instead of mapping product threats onto AI-standards frameworks. ` +
-      `See the report's Subject profile section.</div>`;
+      (_hyp
+        ? `ran on the hypothesis-synthesis path: its output is a set of ` +
+          `falsifiable claims with confidence and refutation tests, not controls. ` +
+          `Frameworks score controls a product has. See the claim register.`
+        : _adv
+        ? `ran on the adversarial-misuse path: it scores what an attacker could ` +
+          `build <em>with</em> this model (capability abuse, data recon, evasion, ` +
+          `manipulation, persistence) rather than mapping product threats onto ` +
+          `AI-standards frameworks. See the report's scenario sections.`
+        : `ran on the model-internals path: it scores the model's own dimensions ` +
+          `(training-data privacy, model integrity, deployment surface, governance) ` +
+          `by weight instead of mapping product threats onto AI-standards frameworks. ` +
+          `See the report's Subject profile section.`) + `</div>`;
     return;
   }
   if (!force && secStdCache[key]) { secStdRender(); return; }

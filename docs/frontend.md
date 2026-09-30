@@ -74,13 +74,38 @@ then polls the explanation until `done`; renders the article, evidence drawer,
 trace panel, mermaid diagrams (lazy-loaded `mermaid@10` once, `run({nodes})`),
 suggestions, quiz, and follow-up composer.
 
-**Security assessment.** `runSecurityAssessment()` posts product + exposure,
-polls the run's events into a compact stage log, then loads the finished
-`SecurityAssessment` by `stats.assessment_id` and renders the nine sub-tabs —
-Overview, Threats, Controls, Investigation, Evidence, Known issues, Agents,
-Audit chain, Report. Each sub-tab loads its own route on selection and retries
-in place on failure, so a slow or unreachable sub-tab does not block the
-report behind it.
+**Security assessment.** `runSecurityAssessment()` posts product + exposure
+plus the chosen `assessment_mode`, polls the run's events into a compact stage
+log, then loads the finished `SecurityAssessment` by `stats.assessment_id` and
+renders the sub-tabs — Overview, Threats, Controls, Investigation, Evidence,
+Known issues, Agents, Audit chain, Report. Each sub-tab loads its own route on
+selection and retries in place on failure, so a slow or unreachable sub-tab
+does not block the report behind it.
+
+**One report, four questions.** The report renders from
+`data.assessment_path`, because the three model paths answer different
+questions with different numbers and the UI must not let one be read as
+another:
+
+| Path | What the number is | Register | Hidden |
+|---|---|---|---|
+| standard catalog | residual risk after controls (L×I) | Threat & risk | — |
+| `model` | dimension weightage | Threat & risk | Controls, what-if |
+| `model_adversarial` | misuse potential | Misuse scenario (prerequisites) | Controls, what-if |
+| `model_hypothesis` | confidence in the claims | Hypothesis (refuted-by) | Controls, what-if |
+
+Model paths get a weighted-dimension strip instead of the catalog
+inherent→residual gauge, because printing "risk removed" for a number that
+never subtracted anything invents a control effect the run never measured. The
+Controls tab lists the catalog control plan, so it is removed on model paths
+rather than showing a checklist the run never consulted. Hypothesis colour is
+teal, not the risk scale: higher confidence is good news.
+
+For a model subject the form exposes a mode selector (internals / adversarial /
+hypothesis / auto), revealed by the debounced `secClassifySubject()`
+classification call; the choice is sent with the run and echoed back in the
+response, so the pipeline shown is the pipeline that ran. Hypothesis is never
+inferred from wording — the selector is the only way to ask for it.
 
 **Manager command.** `parseManagerCommand()` previews the plan with no side
 effects, the user edits topics/exposure/launchers, `runManagerCommand()`

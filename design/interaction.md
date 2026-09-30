@@ -158,6 +158,16 @@ sequenceDiagram
     participant COL as research-collector
     participant INT as threat-intel
     participant WRI as report-writer
+    participant MP as model-profiler
+    participant MI as model-internals
+    participant MPR as model-privacy
+    participant MR as model-reporter
+    participant MAD as model-adversary
+    participant MS as misuse-scout
+    participant MRU as misuse-reporter
+    participant HA as hypothesis-analyst
+    participant HV as hypothesis-verifier
+    participant HR as hypothesis-reporter
     participant SEC as security.py
     participant OS as openshell.py
     participant L as ledger.py
@@ -182,7 +192,7 @@ sequenceDiagram
     JQ->>SA: run_security_assessment(run_id, params)
     SA->>L: run.start (mandate hashed)
     SA->>ORC: plan_assessment (a2a/1.0 envelope)
-    alt subject profiles as a model
+    alt subject profiles as a model, mode=target
         ORC->>MP as model-profiler: profile_model
         MP-->>ORC: nature · architecture · class · family · data
         ORC->>MI as model-internals: review_internals
@@ -195,6 +205,27 @@ sequenceDiagram
         SEC-->>ORC: model aggregate (residual = inherent in v1)
         ORC->>MR as model-reporter: write_model_report
         MR-->>ORC: model sections + grounded exec paragraph
+    else subject profiles as a model, mode=adversarial
+        ORC->>MP as model-profiler: profile_model
+        ORC->>MAD as model-adversary: derive_capabilities
+        MAD-->>ORC: what the model lets an attacker do
+        ORC->>MS as misuse-scout: engineer_scenarios
+        MS-->>ORC: attack chains + prerequisites A01…
+        ORC->>COL: collect_research (scenario titles as queries)
+        ORC->>SEC: score_adversarial_assessment (attacker-value weights)
+        SEC-->>ORC: misuse potential — stored separately, never averaged
+        ORC->>MRU as misuse-reporter: write_misuse_report
+    else subject profiles as a model, mode=hypothesis
+        Note over SA,DB: reads the stored rows of the two runs above
+        ORC->>MP as model-profiler: profile_model
+        ORC->>HA as hypothesis-analyst: draft_hypotheses
+        HA-->>ORC: falsifiable claims H01… (no falsifier → dropped)
+        ORC->>COL: collect_research (claim text as queries)
+        ORC->>HV as hypothesis-verifier: verify_hypotheses
+        HV-->>ORC: support · counter-evidence · cross-flow flag
+        ORC->>SEC: score_hypotheses (confidence weights)
+        SEC-->>ORC: confidence aggregate — higher is better-evidenced
+        ORC->>HR as hypothesis-reporter: write_hypothesis_report
     else catalog product
         ORC->>CA: analyse_controls + judge_applicability
     CA-->>ORC: control plan + applicability 0..1 per threat

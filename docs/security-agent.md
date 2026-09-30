@@ -13,8 +13,9 @@ Related: [architecture](architecture.md) · [data-model](data-model.md) ·
 
 ## Agent cards
 
-Five cards, discoverable at `GET /api/agents/cards` and
-`GET /.well-known/agents`:
+Fifteen cards, discoverable at `GET /api/agents/cards` and
+`GET /.well-known/agents`. Five serve the catalog workflow, ten serve the
+model paths:
 
 | Agent | Skills | Endpoint |
 |---|---|---|
@@ -23,10 +24,24 @@ Five cards, discoverable at `GET /api/agents/cards` and
 | `research-collector` | `agentic_search`, `rank_evidence` | `POST /api/agents/invoke` |
 | `threat-intel` | `map_attacks`, `cite_evidence`, `score_evidence_confidence` | `POST /api/agents/invoke` |
 | `report-writer` | `write_exploits_section`, `write_exec_bullets` | `POST /api/agents/invoke` |
+| `model-profiler` | `profile_model` | `POST /api/agents/invoke` |
+| `model-internals` | `review_internals` | `POST /api/agents/invoke` |
+| `model-privacy` | `assess_model_privacy` | `POST /api/agents/invoke` |
+| `model-reporter` | `write_model_report` | `POST /api/agents/invoke` |
+| `model-adversary` | `derive_capabilities` | `POST /api/agents/invoke` |
+| `misuse-scout` | `engineer_scenarios` | `POST /api/agents/invoke` |
+| `misuse-reporter` | `write_misuse_report` | `POST /api/agents/invoke` |
+| `hypothesis-analyst` | `draft_hypotheses` | `POST /api/agents/invoke` |
+| `hypothesis-verifier` | `verify_hypotheses` | `POST /api/agents/invoke` |
+| `hypothesis-reporter` | `write_hypothesis_report` | `POST /api/agents/invoke` |
 
-The **Agents** sub-tab shows these five cards with what each one actually
-returned on the run on screen, so the delegation is inspectable rather than
-asserted.
+`model-profiler` and `research-collector` are shared: one subject profile and
+one graph search serve all three model flows, so the same evidence graph is
+searched once per run rather than three different ways.
+
+The **Agents** sub-tab shows the cards for the path that produced the report
+on screen with what each one actually returned, so the delegation is
+inspectable rather than asserted.
 
 ## Envelope protocol
 
@@ -106,7 +121,7 @@ set. A gate therefore blocks the **run**, not a queue slot:
 - A plan that arrives with no recorded approver is ignored and the run re-parks,
   so the gate cannot be satisfied by the requester setting a field.
 
-![The five A2A agents and what each returned](screenshots/22-security-agents.png)
+![The A2A agents for the path that produced this report](screenshots/22-security-agents.png)
 
 ## Model assessment path (no catalog, no standards)
 
@@ -158,6 +173,103 @@ AI-standards mapping never happens on this path: `GET
 reason, and the Standards coverage sub-tab renders the explanation instead of
 a matrix. Frameworks describe product controls; a weights-and-data question
 is answered from the model.
+
+## Adversarial-misuse path (a separate assessment, not a section)
+
+The model path above asks whether the model is sound. A second, independent
+question is what someone could **build with** it. That is a different question
+with different agents, different weights and a different meaning for the
+number, so it is a second assessment row, never a section of the first and
+never averaged into it:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant ORC as adversary-orchestrator
+    participant MP as model-profiler
+    participant MA as model-adversary
+    participant MS as misuse-scout
+    participant COL as research-collector
+    participant ENG as scoring engine
+    participant MR as misuse-reporter
+    ORC->>MP: profile_model
+    MP-->>ORC: profile
+    ORC->>MA: derive_capabilities
+    MA-->>ORC: what the model lets an attacker do
+    ORC->>MS: engineer_scenarios
+    MS-->>ORC: attack chains + prerequisites A01…
+    ORC->>COL: collect_research (scenario titles as queries)
+    ORC->>ENG: attacker-value weights
+    ENG-->>ORC: misuse potential (method model-misuse-v1)
+    ORC->>MR: write_misuse_report
+```
+
+The aggregate is **misuse potential**, not model risk: the model is the tool in
+someone else's operation here. A well-built model can still be the most useful
+thing in an attacker's hands — which is exactly why the two scores are stored
+separately and never merged. The mode is resolved by
+`security.resolve_model_mode`, and the route, the busy check and the engine
+all call it, so an auto-mode request cannot slip past the lock held by the
+explicit run it resolves to.
+
+## Hypothesis-synthesis path (reads the other two)
+
+A third question again: of everything the first two assessments found, which
+claims are actually true, and what would settle each one? It is a separate run
+because a claim drawn *across* both flows cannot be made until both have
+finished:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant ORC as hypothesis-orchestrator
+    participant MP as model-profiler
+    participant HA as hypothesis-analyst
+    participant COL as research-collector
+    participant HV as hypothesis-verifier
+    participant ENG as scoring engine
+    participant HR as hypothesis-reporter
+    participant DB as SQLite
+    Note over DB: stored rows of flow 1 and flow 2
+    ORC->>MP: profile_model
+    ORC->>HA: draft_hypotheses (+ both flows' stored rows)
+    HA-->>ORC: falsifiable claims H01… with falsifiers
+    ORC->>COL: collect_research (claim text as queries)
+    ORC->>HV: verify_hypotheses
+    HV-->>ORC: support, counter-evidence, testability, cross-flow flag
+    ORC->>ENG: confidence weights
+    ENG-->>ORC: confidence aggregate (method hypothesis-synthesis-v1)
+    ORC->>HR: write_hypothesis_report
+```
+
+Rules this path holds to:
+
+- **A hypothesis is a falsifiable claim.** A claim with no refutation is an
+  assertion; the analyst drops it rather than storing it, and an empty
+  falsifier collapses its testability score.
+- **The number is a confidence, not a risk.** Higher means the claims are
+  better evidenced, not that the system is more dangerous, so it is stored in
+  `confidence_pct` with the meaning declared in the same dict. Reusing the
+  risk colour scale would paint a well-evidenced claim set red.
+- **Weights**: evidence support 40%, cross-flow corroboration 25%,
+  testability 20%, stakes-if-true 15% (`security.HYPOTHESIS_DIMENSIONS`).
+  Each dimension is the **mean across claims**, so one strong claim cannot
+  vouch for ten vague ones; an unmeasured dimension takes the neutral 40
+  baseline.
+- **It reads stored rows, not a re-run.** `security._load_prior_model_rows`
+  takes the most recent `model` and `model_adversarial` rows for the
+  investigation, so a claim always describes the assessment the reader
+  actually saw.
+- **The mode is explicit.** `resolve_model_mode` never infers `hypothesis`
+  from wording — which question to ask is the caller's call.
+- **Ordered last.** The manager launches target → adversarial → hypothesis;
+  the job queue claims in `(next_attempt_at, id)` order, so a freshly queued
+  third run starts after the first two. Launched first — or started while an
+  earlier flow is waiting out a retry backoff — it reads whatever rows exist
+  and reports an explicit gap claim rather than an empty register.
+
+Like the other two model paths, it skips standards mapping and refuses the
+what-if re-scorer (422).
 
 ## Threat model (STRIDE × OWASP LLM)
 

@@ -30,7 +30,14 @@ investigation.
    When the subject is a model, `security.profile_model_subject` further
    profiles its nature, architecture, class, family and data processing
    (see security-agent.md), and chat-surface threats drop below the
-   scoring floor for subjects with no conversational surface.
+   scoring floor for subjects with no conversational surface. A model topic
+   then gets **three** assessments, not one: `target` (is the model sound),
+   `adversarial` (what could be built with it), and `hypothesis` (which of
+   those claims is true, and what would settle it). They are queued in that
+   order because the third reads the stored rows of the first two and the job
+   queue claims in `(next_attempt_at, id)` order; if an earlier flow is waiting
+   out a retry the third reads what exists and says so. A catalog topic still
+   gets exactly one.
 3. **Track** (`GET /api/manager/runs`): per-topic research status and latest
    assessment score, polled while anything runs. Statuses derive live from
    the agent/security tables -- no background watcher, so restarts strand
@@ -115,7 +122,7 @@ stateDiagram-v2
 - Each topic's research run is a normal `AgentRun` with `trigger='manual'`-style
   focus terms; each topic's assessment is a normal security run, with its own
   job, ledger run, and A2A task id. When a topic's subject profiles as a
-  model, its assessment automatically takes the model-internals A2A path
+  model, its assessments automatically take the three model A2A paths
   (see security-agent.md) — no manager option needed, since the routing
   reads the same subject the plan already extracted.
 - The summary is a real investigation holding a `manager-synthesis` artifact,

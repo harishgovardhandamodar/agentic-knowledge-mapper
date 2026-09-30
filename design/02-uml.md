@@ -309,9 +309,9 @@ Envelope shape, verbatim, as `agents.new_envelope` builds it:
 ```
 
 The five agent cards discoverable at `GET /api/agents/cards` and
-`GET /.well-known/agents`, plus the four model-path cards taken by model
-subjects (see security-agent.md — same bus, separate workflow, no standards
-mapping):
+`GET /.well-known/agents`, plus the ten model-path cards taken by model
+subjects across the three model assessments (see security-agent.md — same bus,
+separate workflows, no standards mapping):
 
 | Agent | Skills | Envelope intents it answers |
 |---|---|---|
@@ -324,6 +324,12 @@ mapping):
 | `model-internals` | `review_internals` | `review_internals` |
 | `model-privacy` | `assess_model_privacy` | `assess_model_privacy` |
 | `model-reporter` | `write_model_report` | `write_model_report` |
+| `model-adversary` | `derive_capabilities` | `derive_capabilities` |
+| `misuse-scout` | `engineer_scenarios` | `engineer_scenarios` |
+| `misuse-reporter` | `write_misuse_report` | `write_misuse_report` |
+| `hypothesis-analyst` | `draft_hypotheses` | `draft_hypotheses` |
+| `hypothesis-verifier` | `verify_hypotheses` | `verify_hypotheses` |
+| `hypothesis-reporter` | `write_hypothesis_report` | `write_hypothesis_report` |
 
 ## Related
 

@@ -283,13 +283,18 @@ def build_matrix(db=None, assessment_id: int | None = None) -> dict[str, Any]:
         # this module, so a top-level import would be circular.
         from . import main as main_mod
         record = main_mod._security_json(rec)
-        if record.get("assessment_path") == "model":
-            # Model-path assessments are never mapped onto AI-standards
-            # frameworks: the taxonomy scores product controls, and a
-            # weights-and-data question is answered from the model, not the
-            # catalogue. The frontend renders this as an explanation, and
-            # direct API callers get the same answer (not an empty matrix
-            # that reads as "no coverage").
+        if record.get("assessment_path") in ("model", "model_adversarial",
+                                             "model_hypothesis"):
+            # All three model paths are never mapped onto AI-standards
+            # frameworks: the taxonomy scores product controls, while a
+            # weights-and-data question is answered from the model, a misuse
+            # question from what an attacker could build with it, and a
+            # hypothesis question from neither -- its claims are testable
+            # statements, not controls. The frontend renders this as an
+            # explanation, and direct API callers get the same answer (not an
+            # empty matrix that reads as "no coverage").
+            _adv = record.get("assessment_path") == "model_adversarial"
+            _hyp = record.get("assessment_path") == "model_hypothesis"
             return {"generated": data.get("generated"),
                     "dimensions": tax.get("dimensions", []),
                     "score_legend": tax.get("scoreLegend", {}),
@@ -299,11 +304,23 @@ def build_matrix(db=None, assessment_id: int | None = None) -> dict[str, Any]:
                     "frameworks": [],
                     "findings": None,
                     "skipped": True,
-                    "skip_reason": ("Model-path assessment: AI-standards "
-                                    "frameworks describe product controls; this "
-                                    "assessment scores model internals by "
-                                    "dimension weight instead. See the "
-                                    "assessment's subject-profile section.")}
+                    "skip_reason": (
+                        "Hypothesis-synthesis assessment: AI-standards "
+                        "frameworks describe controls a product has, while "
+                        "this assessment's output is a set of falsifiable "
+                        "claims with confidence and refutation tests, not "
+                        "controls. See the assessment's claims and open-questions "
+                        "sections."
+                        if _hyp else
+                        "Adversarial-misuse assessment: AI-standards frameworks "
+                        "describe controls a product has; this assessment "
+                        "scores what an attacker could build WITH the model. "
+                        "See the assessment's scenario and prerequisites sections."
+                        if _adv else
+                        "Model-path assessment: AI-standards frameworks "
+                        "describe product controls; this assessment scores "
+                        "model internals by dimension weight instead. See the "
+                        "assessment's subject-profile section.")}
         query, basis = assessment_query(record)
         assessment_meta = {"id": rec.id,
                            "product": getattr(rec, "product_name", ""),
