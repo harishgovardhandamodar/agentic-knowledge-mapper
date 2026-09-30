@@ -248,9 +248,95 @@ class TestIntelRoutes(unittest.TestCase):
         for method, path, kwargs in [
                 ("get", "/api/investigations/999999/research-gaps", {}),
                 ("post", "/api/investigations/999999/research-gaps/run", {"json": {}}),
-                ("get", "/api/investigations/999999/summary", {})]:
+                ("get", "/api/investigations/999999/summary", {}),
+                ("post", "/api/investigations/999999/summary/regenerate", {})]:
             r = getattr(self.client, method)(path, **kwargs)
             self.assertEqual(r.status_code, 404, path)
+
+
+class TestSummarySubTab(unittest.TestCase):
+    """The Summary sub-tab: query brief, flag-aware evidence, answers with
+    supporting materials, a deterministic evidence diagram, and regenerate."""
+
+    def _flagged(self):
+        db = SessionLocal()
+        try:
+            inv_id = _inv(db, "Flagged brief")
+            _art(db, inv_id, "Kept grid report about duke energy",
+                 tags="duke energy grid", typ="news", relevance=0.9,
+                 review="accepted")
+            _art(db, inv_id, "Rejected spam post", tags="spam",
+                 typ="news", relevance=0.1, review="rejected")
+            _art(db, inv_id, "Pending duke storage paper",
+                 tags="duke storage", typ="paper", relevance=0.7,
+                 review="pending")
+            db.add(Explanation(
+                investigation_id=inv_id, status="done",
+                question="What is duke doing on grid storage?",
+                answer=json.dumps(
+                    {"summary": "Duke pilots grid storage."}),
+                trace="{}"))
+            db.commit()
+            return inv_id
+        finally:
+            db.close()
+
+    def _summarize(self, inv_id):
+        db = SessionLocal()
+        try:
+            with mock.patch.object(ex.llm, "chat",
+                                   side_effect=RuntimeError("down")):
+                return ex.investigation_summary(db, inv_id)
+        finally:
+            db.close()
+
+    def test_query_brief_and_flag_counts(self):
+        out = self._summarize(self._flagged())
+        self.assertEqual(out["query"]["title"], "Flagged brief")
+        self.assertIn("gaps", out["query"]["keywords"])
+        self.assertEqual(out["flags"],
+                         {"accepted": 1, "pending": 1, "rejected": 1,
+                          "drift": 0})
+
+    def test_rejected_artifacts_are_flagged_out(self):
+        out = self._summarize(self._flagged())
+        titles = [a["title"] for a in out["top_artifacts"]]
+        self.assertNotIn("Rejected spam post", titles)
+        self.assertEqual(titles[0], "Kept grid report about duke energy")
+
+    def test_answers_carry_excerpts_and_supporting_materials(self):
+        out = self._summarize(self._flagged())
+        self.assertEqual(len(out["answers"]), 1)
+        ans = out["answers"][0]
+        self.assertIn("Duke pilots grid storage.", ans["excerpt"])
+        self.assertTrue(ans["supporting"], "answer must name its evidence")
+        for s in ans["supporting"]:
+            self.assertNotEqual(s["review"], "rejected")
+            self.assertIn("id", s)
+        kept = {s["title"] for s in ans["supporting"]}
+        self.assertIn("Kept grid report about duke energy", kept)
+
+    def test_diagram_is_a_valid_evidence_map(self):
+        out = self._summarize(self._flagged())
+        self.assertTrue(out["diagram"].startswith("flowchart TB"))
+        self.assertIn("Flagged brief", out["diagram"])
+        self.assertIn("Kept grid report about duke energy", out["diagram"])
+        self.assertNotIn("Rejected spam post", out["diagram"])
+
+    def test_regenerate_route_recomputes(self):
+        from fastapi.testclient import TestClient
+        from app import main as main_mod
+        client = TestClient(main_mod.app)
+        inv_id = self._flagged()
+        r = client.post(f"/api/investigations/{inv_id}/summary/regenerate")
+        self.assertEqual(r.status_code, 200, r.text)
+        body = r.json()
+        self.assertTrue(body.get("regenerated"))
+        self.assertEqual(body["flags"]["rejected"], 1)
+        self.assertIn("diagram", body)
+        self.assertIn("answers", body)
+        r = client.post("/api/investigations/999999/summary/regenerate")
+        self.assertEqual(r.status_code, 404)
 
 
 if __name__ == "__main__":

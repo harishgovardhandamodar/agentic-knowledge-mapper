@@ -89,10 +89,17 @@ flowchart LR
   `POST …/research-gaps/run` launches a paper-first goal run on the
   least-covered ones.
 - `GET …/investigations/{id}/summary`: executive summary (model prose with
-  a 45s bound, deterministic factual brief on failure), top artifacts by
-  relevance, top threats and recent explanations, novel areas. Shown in the
-  brief panel's Executive summary overlay, and reused verbatim by the security
-  pane's Investigation sub-tab.
+  a 45s bound, deterministic factual brief on failure), the query brief it
+  started from, review-flag counts, top artifacts by relevance, top threats
+  and recent explanations, novel areas, one deterministic evidence diagram
+  (brief → artifacts → answered questions), and every answered question with
+  an excerpt plus its supporting collected artifacts. Rejected artifacts are
+  flagged out of the evidence everywhere. Shown in the brief panel's Executive
+  summary overlay, in the Mapper's Summary sub-tab, and reused verbatim by the
+  security pane's Investigation sub-tab.
+- `POST …/investigations/{id}/summary/regenerate`: recompute the summary from
+  the current review flags (same payload, plus `regenerated: true`), logged to
+  the ledger — the Summary sub-tab's Regenerate button calls this.
 - `GET …/investigations/{id}/recommendations`: the same gaps, plus the three
   derived recommendations — **coverage gaps** (which frameworks/controls have
   no supporting artifact), **control leverage** (which threat's residual score

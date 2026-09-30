@@ -28,13 +28,14 @@ flowchart TB
     STD --> SD1
     DSG --> D2
 
-    M8["8 Mapper views"]
+    M8["9 Mapper views"]
     M8 --> m1["Knowledge graph"]
     M8 --> m2["Review<br/>pending count badge"]
     M8 --> m3["Artifacts<br/>collected, filterable"]
     M8 --> m4["Known issues<br/>CVE count badge"]
     M8 --> m5["Timeline<br/>one chain per run"]
     M8 --> m6["Explainer"]
+    M8 --> m6b["Summary<br/>executive brief · flags<br/>evidence map · regenerate"]
     M8 --> m7["Agent console<br/>live stage log"]
     M8 --> m8b["Audit ledger<br/>violation badge"]
 

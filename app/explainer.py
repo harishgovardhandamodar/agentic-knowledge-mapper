@@ -1570,11 +1570,74 @@ _SUMMARY_POOL = ThreadPoolExecutor(max_workers=2,
                                    thread_name_prefix="inv-summary")
 
 
+def _answer_excerpt(exp) -> str:
+    """One honest paragraph from a stored answer: its summary, else its first
+    section, else nothing. Never invents text the explanation does not have."""
+    try:
+        ans = json.loads(exp.answer or "")
+    except Exception:
+        return ""
+    if not isinstance(ans, dict):
+        return ""
+    if ans.get("summary"):
+        return _short_text(str(ans["summary"]), 280)
+    for s in ans.get("sections") or []:
+        if isinstance(s, dict) and s.get("text"):
+            return _short_text(str(s["text"]), 280)
+        if isinstance(s, str) and s.strip():
+            return _short_text(s, 280)
+    return ""
+
+
+def _supporting_for(question: str, artifacts) -> list:
+    """Collected artifacts behind one answered question, by token overlap --
+    the same 0.3 bar the gap analysis uses, so "supporting" means the same
+    thing in both places. Rejected artifacts are flagged out: a reviewer said
+    they do not belong, so they cannot support anything."""
+    qt = _tok(question)
+    scored = []
+    for a in artifacts:
+        if (a.review or "") == "rejected":
+            continue
+        at = _tok(" ".join([a.title or "", a.tags or "", a.description or ""]))
+        ov = _overlap(qt, at)
+        if ov >= GAP_SUPPORT_OVERLAP:
+            scored.append((ov, a.relevance or 0, a.id or 0, a))
+    scored.sort(key=lambda t: (-t[0], -t[1], -t[2]))
+    return [{"id": a.id, "title": a.title, "url": a.url,
+             "artifact_type": a.artifact_type, "relevance": a.relevance,
+             "review": a.review} for _, _, _, a in scored[:3]]
+
+
+def _summary_diagram(inv_title: str, artifacts, answers) -> str | None:
+    """Deterministic evidence map: brief -> collected artifacts -> the answers
+    they support. Built from ids, not prose, so it cannot hallucinate an edge;
+    validated like any other diagram source before it leaves the backend."""
+    def lab(s, n=44):
+        s = re.sub(r'[\[\]{}"#;`]', "", s or "").replace("\n", " ").strip()
+        return _short_text(s, n) or "?"
+    lines = ["flowchart TB", f'    INV["{lab(inv_title or "Investigation")}"]']
+    idmap = {}
+    for i, a in enumerate(artifacts[:5]):
+        node = f"A{i}"
+        idmap[a.id] = node
+        lines.append(f'    INV --> {node}["{lab(a.title)}"]')
+    for j, ans in enumerate(answers[:3]):
+        sup = ans.get("supporting") or []
+        target = idmap.get(sup[0]["id"], "INV") if sup else "INV"
+        lines.append(f'    {target} -.-> Q{j}["{lab(ans.get("question") or "", 40)}"]')
+    if len(lines) < 3:
+        return None
+    return _validate_mermaid("\n".join(lines))
+
+
 def investigation_summary(db, inv_id: int) -> dict:
     """Executive summary of an investigation: prose plus the artifacts and
     findings behind it. The prose prefers the model and falls back to a
     deterministic brief, so the overlay never comes back empty; the lists
-    are always deterministic."""
+    are always deterministic. Review flags are honoured throughout: rejected
+    artifacts are flagged out of the evidence, so re-flagging in Review and
+    regenerating changes what the summary stands on."""
     from .models import CveFinding
     inv = db.query(Investigation).filter(Investigation.id == inv_id).first()
     if inv is None:
@@ -1582,9 +1645,15 @@ def investigation_summary(db, inv_id: int) -> dict:
     arts = db.query(Artifact).filter(
         Artifact.investigation_id == inv_id).all()
     papers = [a for a in arts if a.artifact_type == "paper"]
+    flags = {"accepted": sum(1 for a in arts if (a.review or "") == "accepted"),
+             "pending": sum(1 for a in arts if (a.review or "") != "accepted"
+                            and (a.review or "") != "rejected"),
+             "rejected": sum(1 for a in arts if (a.review or "") == "rejected"),
+             "drift": sum(1 for a in arts if a.drift)}
+    usable = [a for a in arts if (a.review or "") != "rejected"]
     top_artifacts = sorted(
-        arts, key=lambda a: ((a.review or "") == "accepted",
-                             a.relevance or 0, a.id or 0),
+        usable, key=lambda a: ((a.review or "") == "accepted",
+                               a.relevance or 0, a.id or 0),
         reverse=True)[:8]
     asmt = db.query(SecurityAssessment).filter(
         SecurityAssessment.investigation_id == inv_id).order_by(
@@ -1610,9 +1679,19 @@ def investigation_summary(db, inv_id: int) -> dict:
               "threats": len(stored),
               "explanations": db.query(Explanation).filter(
                   Explanation.investigation_id == inv_id).count(),
-              "assessments": 1 if asmt is not None else 0}
+              "assessments": 1 if asmt is not None else 0,
+              "accepted": flags["accepted"], "pending": flags["pending"],
+              "rejected": flags["rejected"], "drift": flags["drift"]}
+    answers = [{"id": e.id, "question": e.question,
+                "excerpt": _answer_excerpt(e),
+                "supporting": _supporting_for(e.question or "", usable)}
+               for e in exps]
+    diagram = _summary_diagram(inv.title, top_artifacts, answers)
     facts = (f"{inv.title or 'Untitled'}: {counts['artifacts']} artifacts "
              f"({counts['papers']} papers), "
+             f"{flags['accepted']} accepted, {flags['pending']} pending review, "
+             f"{flags['rejected']} rejected"
+             f"{'; keywords: ' + inv.keywords if inv.keywords else ''}, "
              f"{'residual ' + str(asmt.residual_pct) + '/100' if asmt is not None else 'no assessment yet'}"
              f"{'; top threats: ' + ', '.join(t['id'] + ' ' + (t['title'] or '') for t in threats) if threats else ''}"
              f"{'; recent answers: ' + ' | '.join((e.question or '')[:90] for e in exps) if exps else ''}.")
@@ -1640,7 +1719,12 @@ def investigation_summary(db, inv_id: int) -> dict:
                               "status": inv.status},
             "generated": datetime.now(timezone.utc).isoformat(),
             "executive_summary": synthesis, "synthesis": source,
+            "query": {"title": inv.title, "keywords": inv.keywords,
+                      "description": inv.description, "sources": inv.sources},
+            "flags": flags,
             "counts": counts,
+            "diagram": diagram,
+            "answers": answers,
             "top_artifacts": [{"id": a.id, "title": a.title,
                                "artifact_type": a.artifact_type,
                                "source": a.source, "url": a.url,

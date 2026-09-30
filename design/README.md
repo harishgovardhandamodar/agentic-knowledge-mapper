@@ -109,7 +109,7 @@ flowchart TB
 Diagrams are documentation, not configuration — but they are kept honest:
 
 - Every route in a sequence diagram exists in `app/main.py` or `app/ledger_api.py`
-  (95 paths as of this writing; `GET /openapi.json` lists them all).
+  (96 paths as of this writing; `GET /openapi.json` lists them all).
 - Every control in [controls.md](controls.md) names the file that enforces it, and
   the test that would fail if it stopped working.
 - Every table in [data-model.md](data-model.md) is created by `create_all()` in

@@ -92,7 +92,7 @@ flowchart TB
 
 | Container / module | Responsibility |
 |---|---|
-| `static/index.html` | All GUI: 5 apps (Mapper with 8 views, Security with 9 sub-tabs, Manager, Standards, Design & Architecture), sidebar, overlays, polling, mermaid rendering |
+| `static/index.html` | All GUI: 5 apps (Mapper with 9 views, Security with 9 sub-tabs, Manager, Standards, Design & Architecture), sidebar, overlays, polling, mermaid rendering |
 | `app/design_docs.py` | Fixed index over `design/`; serves a design document by id for the Design & Architecture tab |
 | `app/main.py` | FastAPI routes, request schemas, JSON serializers |
 | `app/agent.py` | Collection loop: plan → search → analyze → map → refine (background thread) |

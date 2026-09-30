@@ -844,6 +844,7 @@ body.pane-sec-top-collapsed .sec-topbar-sub { display: none; }
       <div class="main-tab" data-view="cves" onclick="switchView('cves')"><i class="fas fa-bug"></i> Known issues <span id="cveCount"></span></div>
       <div class="main-tab" data-view="timeline" onclick="switchView('timeline')"><i class="fas fa-timeline"></i> Timeline</div>
       <div class="main-tab" data-view="explainer" onclick="switchView('explainer')"><i class="fas fa-lightbulb"></i> Explainer</div>
+      <div class="main-tab" data-view="summary" onclick="switchView('summary')"><i class="fas fa-file-lines"></i> Summary</div>
       <div class="main-tab" data-view="console" onclick="switchView('console')"><i class="fas fa-terminal"></i> Agent console</div>
       <div class="main-tab" data-view="audit" onclick="switchView('audit')"><i class="fas fa-shield-halved"></i> Audit ledger <span id="auditBadge"></span></div>
     </div>
@@ -942,6 +943,16 @@ body.pane-sec-top-collapsed .sec-topbar-sub { display: none; }
           <label style="font-size:11px;color:var(--text2);cursor:pointer;"><input type="checkbox" id="bkmkOnly" onchange="loadExplanationsMarked()" /> bookmarked only</label>
         </div>
         <div id="explHistory"></div>
+      </div>
+      <div class="view" id="summaryView">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap;">
+          <h3 style="font-size:13px;margin:0;"><i class="fas fa-file-lines" style="color:var(--teal);"></i> Executive summary</h3>
+          <span id="sumFlags" style="font-size:11px;color:var(--text2);"></span>
+          <span style="flex:1"></span>
+          <span id="sumMeta" style="font-size:11px;color:var(--text2);"></span>
+          <button class="btn btn-primary btn-sm" id="sumRegenBtn" onclick="regenSummary()" title="Recompute from the current review flags"><i class="fas fa-rotate"></i> Regenerate</button>
+        </div>
+        <div id="sumBody"></div>
       </div>
       <div class="view" id="consoleView">
         <div class="run-bar">
@@ -1615,6 +1626,104 @@ function renderInvSummary(d) {
       novel.map(n => `<span class="tag">${escHtml(n.topic)} · ${n.artifacts}</span>`).join(' ') + '</div></div>';
   }
   body.innerHTML = html;
+}
+
+/* ---------- executive summary sub-tab (Mapper investigation view) ---------- */
+/* The overlay answers "what do we have"; the tab answers it in place, with a
+   regenerate button that recomputes from the current review flags, the brief
+   it started from, an evidence diagram, and every answered question with the
+   collected artifacts behind it. Rejected artifacts never appear as evidence:
+   flagging in Review and regenerating visibly changes what the summary stands
+   on. */
+async function loadSummaryTab() {
+  const box = document.getElementById('sumBody');
+  if (!box) return;
+  if (!currentInv) {
+    box.innerHTML = '<p style="font-size:12.5px;color:var(--text2)">Select an investigation to see its executive summary.</p>';
+    return;
+  }
+  box.innerHTML = '<p style="font-size:12.5px;color:var(--text2)"><i class="fas fa-spinner fa-spin"></i> Summarizing…</p>';
+  try {
+    const r = await fetch(`${API}/investigations/${currentInv}/summary`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    renderSummaryTab(await r.json());
+  } catch (e) {
+    box.innerHTML = `<p style="font-size:12.5px;color:var(--text2)">Could not load summary: ${escHtml(e.message)}</p>`;
+  }
+}
+
+async function regenSummary() {
+  if (!currentInv) return;
+  const btn = document.getElementById('sumRegenBtn');
+  const box = document.getElementById('sumBody');
+  if (btn) btn.disabled = true;
+  if (box) box.innerHTML = '<p style="font-size:12.5px;color:var(--text2)"><i class="fas fa-spinner fa-spin"></i> Regenerating from current flags…</p>';
+  try {
+    const r = await fetch(`${API}/investigations/${currentInv}/summary/regenerate`, { method: 'POST' });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error((d && typeof d.detail === 'string') ? d.detail : `HTTP ${r.status}`);
+    renderSummaryTab(d);
+    showNotif('Summary regenerated', 'success');
+  } catch (e) {
+    if (box) box.innerHTML = `<p style="font-size:12.5px;color:var(--text2)">Regeneration failed: ${escHtml(e.message)}</p>`;
+    showNotif(`Regeneration failed: ${e.message}`, 'error');
+  }
+  if (btn) btn.disabled = false;
+}
+
+function renderSummaryTab(d) {
+  const box = document.getElementById('sumBody');
+  if (!box) return;
+  const inv = d.investigation || {};
+  const c = d.counts || {};
+  const f = d.flags || {};
+  const flagsEl = document.getElementById('sumFlags');
+  if (flagsEl) flagsEl.textContent =
+    `${f.accepted || 0} accepted · ${f.pending || 0} pending · ${f.rejected || 0} rejected` +
+    (f.drift ? ` · ${f.drift} drift-flagged` : '');
+  const metaEl = document.getElementById('sumMeta');
+  if (metaEl) metaEl.textContent =
+    `${d.synthesis === 'llm' ? 'model-written' : 'deterministic brief'}` +
+    (d.generated ? ` · ${escHtml(new Date(d.generated).toLocaleString())}` : '');
+  let html = '';
+  const q = d.query || {};
+  if (q.title || q.keywords || q.description) {
+    html += `<div class="overlay-section"><h4><i class="fas fa-circle-question"></i> What you asked</h4>` +
+      (q.title ? `<div style="font-size:13px;font-weight:600;">${escHtml(q.title)}</div>` : '') +
+      (q.keywords ? `<div style="font-size:11.5px;color:var(--text2);margin-top:2px;">${escHtml(q.keywords)}</div>` : '') +
+      (q.description ? `<p style="font-size:12.5px;margin:6px 0 0;">${escHtml(q.description)}</p>` : '') + '</div>';
+  }
+  html += `<div class="overlay-section"><p style="font-size:13px;line-height:1.6;">${escHtml(d.executive_summary || '')}</p></div>`;
+  if (d.diagram) {
+    html += `<div class="overlay-section"><h4><i class="fas fa-diagram-project"></i> Evidence map</h4>` +
+      `<div class="diagram-wrap"><pre class="mermaid">${escHtml(d.diagram)}</pre></div></div>`;
+  }
+  (d.answers || []).forEach(a => {
+    html += `<div class="overlay-section"><h4><a class="no-und" href="javascript:void(0)" onclick="openExplanation(${a.id})">${escHtml(a.question || '')}</a></h4>`;
+    if (a.excerpt) html += `<p style="font-size:12.5px;margin:4px 0 6px;">${escHtml(a.excerpt)}</p>`;
+    (a.supporting || []).forEach(s => {
+      html += `<div class="rel-item" style="cursor:pointer;" onclick="openDetailOverlay(${s.id})">` +
+        `<span class="rel-type">${escHtml(s.artifact_type || 'item')}</span><span>${escHtml(s.title || '')}</span></div>`;
+    });
+    html += '</div>';
+  });
+  const arts = d.top_artifacts || [];
+  if (arts.length) {
+    html += `<div class="overlay-section"><h4><i class="fas fa-star"></i> Supporting artifacts</h4>` +
+      arts.map(a => `<div class="rel-item" style="cursor:pointer;" onclick="openDetailOverlay(${a.id})">` +
+        `<span class="rel-type">${escHtml(a.artifact_type || 'item')}</span><span>${escHtml(a.title || '')}</span>` +
+        `<span style="font-size:10px;color:${(a.review || '') === 'accepted' ? 'var(--green)' : 'var(--text2)'};">${escHtml(a.review || '')}</span></div>`).join('') + '</div>';
+  }
+  html += `<div class="overlay-section"><h4><i class="fas fa-chart-simple"></i> Coverage</h4>` +
+    `<p style="font-size:12px;color:var(--text2);">${c.artifacts || 0} artifacts (${c.papers || 0} papers) · ${c.threats || 0} threats scored · ${c.explanations || 0} explanations · ${c.cves || 0} known issues</p></div>`;
+  const threats = ((d.top_findings || {}).threats) || [];
+  if (threats.length) {
+    html += `<div class="overlay-section"><h4><i class="fas fa-triangle-exclamation"></i> Top threats</h4>` +
+      threats.map(t => `<div style="font-size:12px;padding:3px 0;"><strong>${escHtml(t.id || '')}</strong> ${escHtml(t.title || '')} ` +
+        `<span style="color:var(--text2);">· ${escHtml(t.severity || '')}</span></div>`).join('') + '</div>';
+  }
+  box.innerHTML = html;
+  secEnsureMermaid(box);
 }
 
 function watchRun(runId) {
@@ -3570,6 +3679,7 @@ function switchView(view) {
   if (el) el.classList.add('visible');
   if (view === 'graph' && network) setTimeout(() => network.fit({ animation: true }), 100);
   if (view === 'explainer') loadPrefs();
+  if (view === 'summary') loadSummaryTab();
   if (view === 'audit') loadAuditRuns();
   if (view === 'collection') loadCollection();
   if (view === 'cves') loadCvesView();

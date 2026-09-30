@@ -1282,6 +1282,29 @@ def investigation_summary(inv_id: int, db: Session = Depends(get_db)):
         raise HTTPException(404, "Investigation not found")
 
 
+@app.post("/api/investigations/{inv_id}/summary/regenerate")
+def regenerate_summary(inv_id: int, request: Request,
+                       db: Session = Depends(get_db)):
+    """Recompute the executive summary from the current review flags.
+
+    The summary is always computed live, so this is the same payload as GET --
+    but explicit, and on the ledger: re-flagging artifacts in Review and then
+    regenerating visibly changes what the summary stands on, and when."""
+    from .explainer import investigation_summary as summary_fn
+    try:
+        out = summary_fn(db, inv_id)
+    except LookupError:
+        raise HTTPException(404, "Investigation not found")
+    flags = out.get("flags") or {}
+    ledger_api.human_action(request, "regenerated_summary",
+                            {"investigation": inv_id,
+                             "synthesis": out.get("synthesis"),
+                             "accepted": flags.get("accepted", 0),
+                             "rejected": flags.get("rejected", 0)})
+    out["regenerated"] = True
+    return out
+
+
 class PrefsRequest(BaseModel):
     preferred_domains: Optional[str] = None
     auto_save_explanations: Optional[int] = None

@@ -10,7 +10,7 @@ Related: [architecture](architecture.md) · [agent-loop](agent-loop.md) ·
 ## View map
 
 `switchApp()` selects one of **five apps**; `switchView()` selects one of the
-**eight Mapper views**. This is the distinction that trips people up: AI
+**nine Mapper views**. This is the distinction that trips people up: AI
 Security, Agentic Manager, AI Standards and Design & Architecture are sibling
 *apps*, not tabs inside the Mapper, and the Mapper's own view list does not
 include them.
@@ -31,6 +31,7 @@ flowchart TB
         CV["cves<br/>Known issues<br/>CVE findings from the graph<br/>NVD → CIRCL → unknown"]
         TL["timeline<br/>run list + manual adds<br/>baseline→target compare<br/>+ highlight in graph"]
         E["explainer<br/>ask row (mode/depth/audience)<br/>article + evidence drawer<br/>trace · roadmap · quiz<br/>threads · bookmarks · watch"]
+        SU["summary<br/>Executive summary<br/>query brief · flags · evidence map<br/>answers + supporting artifacts<br/>regenerate from flags"]
         C["console<br/>run controls<br/>search plan<br/>live event log"]
         AU["audit<br/>chains · sessions<br/>verification · exports"]
     end
@@ -169,6 +170,7 @@ in the [README](../README.md).
 | Findings compare | [11](screenshots/11-findings-compare.png) | Standards dashboard | [24](screenshots/24-standards-dashboard.png) |
 | Manager flow | [12](screenshots/12-manager-flow.png) | Manager nesting | [13](screenshots/13-manager-nest.png) |
 | Design & Architecture | [25](screenshots/25-design-architecture.png) | Design viewer (zoom) | [26](screenshots/26-design-viewer.png) |
+| Executive summary sub-tab | [27](screenshots/27-summary-tab.png) | | |
 
 ![Design & Architecture tab: document rail on the left, a rendered Mermaid diagram on the right](screenshots/25-design-architecture.png)
 

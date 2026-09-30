@@ -196,8 +196,9 @@ Export: Markdown download, PDF (reportlab, tables + headings), browser print.
 
 The report's Investigation sub-tab opens with the investigation's executive
 summary (`GET /api/investigations/{id}/summary`, same payload as the mapper's
-overlay): prose, coverage counts, top supporting artifacts (into the detail
-overlay) and top residual threats. It loads when the sub-tab is selected and
+overlay): prose, query brief, review flags, coverage counts, evidence diagram,
+answered questions with supporting artifacts, top supporting artifacts (into
+the detail overlay) and top residual threats. It loads when the sub-tab is selected and
 retries in place on failure.
 
 ![Threat assessment with per-threat inherent and residual scores](screenshots/20-security-investigation-summary.png)

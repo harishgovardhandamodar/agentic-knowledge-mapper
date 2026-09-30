@@ -74,7 +74,7 @@ and [design/01-system-context.md](design/01-system-context.md).
 review, explain), *AI Security* (assess, score, control), *Agentic Manager*
 (one command → N investigations + a summary), *AI Standards* (34
 frameworks × 10 pillars), and *Design & Architecture* (the nine Mermaid design
-documents, rendered live rather than screenshotted). Mapper has eight views;
+documents, rendered live rather than screenshotted). Mapper has nine views;
 Security has nine sub-tabs; long jobs run through a persisted, lease-based job
 queue so a restart resumes rather than loses.
 
@@ -93,7 +93,10 @@ Two buttons in the sidebar close the loop the agent leaves open:
 
 - **Executive summary** — a single overlay with the aggregate numbers, the top
   threats, the highest-value findings, and the supporting artifacts, each
-  clickable back into the graph.
+  clickable back into the graph. The Mapper's Summary sub-tab shows the same
+  material in place — query brief, review flags, an evidence diagram, answered
+  questions with their supporting artifacts — with a Regenerate button that
+  recomputes from the current flags.
 - **Find open gaps** — reads which dimensions of the brief have *nothing at
   all*, and offers to launch a targeted run at each one. An answer that finds
   its own research.
@@ -362,7 +365,7 @@ an action are provable afterwards:
 
 ## API (selection)
 
-95 paths; `GET /openapi.json` lists them all.
+96 paths; `GET /openapi.json` lists them all.
 
 | Method | Path | Description |
 |---|---|---|
@@ -377,6 +380,7 @@ an action are provable afterwards:
 | GET | `/api/investigations/{id}/graph` | Nodes + edges |
 | GET | `/api/investigations/{id}/graph/clusters?mode=` | category \| similarity centroids |
 | GET | `/api/investigations/{id}/summary` | Executive summary overlay data |
+| POST | `/api/investigations/{id}/summary/regenerate` | Recompute the summary from current review flags |
 | GET | `/api/investigations/{id}/artifacts?review=&search=` | Review queue |
 | GET | `/api/investigations/{id}/artifacts/overview` | Collection: timeline, purpose, actor involvement shares |
 | GET | `/api/investigations/{id}/recommendations` | Coverage gaps, control leverage, stale brief, query yields |
@@ -516,6 +520,7 @@ as rows (Markdown included); PDFs render on demand.
 | 12 | [Manager flow](docs/screenshots/12-manager-flow.png) | 24 | [Standards dashboard](docs/screenshots/24-standards-dashboard.png) |
 | | | 25 | [Design & Architecture](docs/screenshots/25-design-architecture.png) |
 | | | 26 | [Design viewer, zoomed](docs/screenshots/26-design-viewer.png) |
+| | | 27 | [Executive summary sub-tab](docs/screenshots/27-summary-tab.png) |
 
 ## Structure
 
