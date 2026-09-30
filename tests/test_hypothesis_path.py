@@ -136,9 +136,10 @@ class TestModeResolution(unittest.TestCase):
     def test_catalog_subject_keeps_standard_path_when_no_mode_given(self):
         out = _run("", use_case="answer billing questions in chat",
                    product="Support chatbot", focus=["chatbot"])
-        # The standard catalog path carries no model marker; the API layer is
-        # what normalises an unmarked row to "standard" for the UI.
-        self.assertIsNone(out["scoring"].get("assessment_path"))
+        # The standard catalog path stamps its own marker, so no reader ever
+        # re-derives it from the wording -- a fresh catalog row is already
+        # distinguishable from a legacy unmarked one.
+        self.assertEqual(out["scoring"].get("assessment_path"), "standard")
         self.assertTrue(any(t["id"].startswith("T") for t in out["threats"]))
         self.assertTrue(out["threats"][0]["id"].startswith("T"))
 

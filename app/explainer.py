@@ -1631,6 +1631,154 @@ def _summary_diagram(inv_title: str, artifacts, answers) -> str | None:
     return _validate_mermaid("\n".join(lines))
 
 
+_MODEL_FLOW_ORDER = (
+    # path, section label, what the headline number means. The hypothesis
+    # flow is included only when it has actually run -- "applicable
+    # hypothesis" -- never as an empty section implying questions were asked.
+    ("model", "Workflow 1 · Model internals", "model risk"),
+    ("model_adversarial", "Workflow 2 · Adversarial misuse", "misuse potential"),
+    ("model_hypothesis", "Hypothesis synthesis", "mean confidence"),
+)
+
+
+def _model_flow_synthesis(db, inv_id: int):
+    """One section per model workflow that has run, plus every diagram.
+
+    Returns None when the investigation has no model-path rows, so catalog
+    subjects keep exactly the summary they have today. Otherwise returns the
+    latest stored row per path with its top items, exec paragraph, headline
+    number with its meaning, and mermaid diagram -- the whole payload the
+    Summary tab and the node overlay render, so both stay identical.
+    """
+    from . import security as _sec
+    from .models import SecurityAssessment as _SA
+    rows = db.query(_SA).filter(
+        _SA.investigation_id == inv_id).order_by(_SA.id.desc()).all()
+    latest: dict[str, tuple] = {}
+    for r in rows:
+        try:
+            scoring = json.loads(r.scoring_json or "{}") or {}
+        except Exception:
+            scoring = {}
+        if not isinstance(scoring, dict):
+            scoring = {}
+        path = scoring.get("assessment_path")
+        if path not in ("model", "model_adversarial", "model_hypothesis",
+                        "standard"):
+            # Same rule as the report's path fields: an unmarked row can only
+            # be re-derived as target or standard -- the adversarial and
+            # hypothesis paths never existed without their marker.
+            try:
+                focus = json.loads(r.focus_json) if r.focus_json else []
+            except Exception:
+                focus = []
+            prof = _sec.profile_model_subject(r.product_name or "",
+                                              r.use_case or "", focus or [])
+            path = "model" if prof["is_model_query"] else "standard"
+        if path != "standard" and path not in latest:
+            # Rows arrive newest-first, so the first sighting per path wins.
+            latest[path] = (r, scoring)
+    if not latest:
+        return None
+
+    def _load(raw):
+        try:
+            v = json.loads(raw) if raw else None
+            return v if isinstance(v, (dict, list)) else None
+        except Exception:
+            return None
+
+    flows = []
+    diagrams = []
+    for path, label, meaning in _MODEL_FLOW_ORDER:
+        if path not in latest:
+            continue
+        r, scoring = latest[path]
+        items = _load(r.threats_json) or []
+        if not isinstance(items, list):
+            items = []
+        dg = _load(r.diagrams_json) or {}
+        ev = _load(getattr(r, "evidence_json", None)) or {}
+        headline = scoring.get("overall_pct", r.overall_pct)
+        try:
+            headline = float(headline)
+        except (TypeError, ValueError):
+            headline = 0
+
+        def _num(x, keys):
+            for k in keys:
+                try:
+                    return float(x.get(k))
+                except (TypeError, ValueError):
+                    continue
+            return 0
+
+        if path == "model_hypothesis":
+            scored = [(_num(h, ("confidence",)), h) for h in items
+                      if isinstance(h, dict)]
+            score_label = "confidence"
+        else:
+            scored = [(_num(t, ("inherent_score", "overall_score",
+                                "residual_score")), t) for t in items
+                      if isinstance(t, dict)]
+            score_label = "score"
+        scored.sort(key=lambda p: -p[0])
+        if path == "model_hypothesis":
+            def _item(h, s):
+                return {
+                    "id": h.get("id"), "title": h.get("claim") or h.get("title"),
+                    "severity": ("corroborated" if h.get("cross_flow")
+                                 else h.get("status") or "untested"),
+                    "residual": None, "flow": label,
+                    "score": s, "score_label": score_label,
+                    "detail": (f"Refuted by: {h['falsifier']}"
+                               if h.get("falsifier") else "no falsifier named"),
+                }
+        elif path == "model_adversarial":
+            def _item(s, v):
+                pre = s.get("prerequisites") or []
+                pre = "; ".join(str(p)[:80] for p in pre[:2])
+                return {
+                    "id": s.get("id"), "title": s.get("title"),
+                    "severity": s.get("severity") or s.get("dimension"),
+                    "residual": None, "flow": label,
+                    "score": v, "score_label": score_label,
+                    "detail": (f"Prerequisites: {pre}" if pre
+                               else (s.get("dimension") or "")),
+                }
+        else:
+            def _item(t, v):
+                return {
+                    "id": t.get("id"), "title": t.get("title"),
+                    "severity": (t.get("residual_severity")
+                                 or t.get("severity") or t.get("dimension")),
+                    "residual": t.get("residual_score"),
+                    "flow": label, "score": v, "score_label": score_label,
+                    "detail": t.get("dimension") or "",
+                }
+        top = [{**_item(t, v)} for v, t in scored[:3]]
+        everything = [{**_item(t, v)} for v, t in scored]
+        flows.append({
+            "path": path, "label": label, "assessment_id": r.id,
+            "product_name": r.product_name,
+            "headline": headline, "score_meaning": meaning,
+            "score_note": (scoring.get("score_meaning")
+                           or f"{headline:g}/100 {meaning}"),
+            "item_count": len(scored),
+            "exec_paragraph": (ev.get("exec_paragraph") or ""),
+            "top_items": top, "all_items": everything,
+        })
+        mermaid = (dg.get("dataflow") or "").strip()
+        if mermaid:
+            diagrams.append({
+                "path": path, "label": label, "assessment_id": r.id,
+                "mermaid": mermaid,
+            })
+    subject = next((f["product_name"] for f in flows if f["product_name"]),
+                   None)
+    return {"subject": subject, "flows": flows, "diagrams": diagrams}
+
+
 def investigation_summary(db, inv_id: int) -> dict:
     """Executive summary of an investigation: prose plus the artifacts and
     findings behind it. The prose prefers the model and falls back to a
@@ -1670,6 +1818,21 @@ def investigation_summary(db, inv_id: int) -> dict:
             threats.append({"id": t.get("id"), "title": t.get("title"),
                             "severity": t.get("residual_severity"),
                             "residual": t.get("residual_score")})
+    # Model-flow synthesis: when this investigation assessed a model subject,
+    # the executive summary must stand on all three workflows, not just the
+    # latest row. Workflow 1 (target/internals) asks is the model sound,
+    # workflow 2 (adversarial/misuse) asks what could be built with it, and
+    # the hypothesis flow -- when it has run -- says which of their claims
+    # are true and what would settle each one. The three aggregates have
+    # different meanings, so they are reported side by side, never merged
+    # and never ranked against each other.
+    model_synthesis = _model_flow_synthesis(db, inv_id)
+    if model_synthesis is not None:
+        threats = []
+        for flow in model_synthesis["flows"]:
+            threats.extend(flow["top_items"])
+        stored = [t for flow in model_synthesis["flows"]
+                  for t in flow["all_items"]]
     exps = db.query(Explanation).filter(
         Explanation.investigation_id == inv_id,
         Explanation.status == "done").order_by(Explanation.id.desc()).limit(3).all()
@@ -1687,14 +1850,33 @@ def investigation_summary(db, inv_id: int) -> dict:
                 "supporting": _supporting_for(e.question or "", usable)}
                for e in exps]
     diagram = _summary_diagram(inv.title, top_artifacts, answers)
-    facts = (f"{inv.title or 'Untitled'}: {counts['artifacts']} artifacts "
-             f"({counts['papers']} papers), "
-             f"{flags['accepted']} accepted, {flags['pending']} pending review, "
-             f"{flags['rejected']} rejected"
-             f"{'; keywords: ' + inv.keywords if inv.keywords else ''}, "
-             f"{'residual ' + str(asmt.residual_pct) + '/100' if asmt is not None else 'no assessment yet'}"
-             f"{'; top threats: ' + ', '.join(t['id'] + ' ' + (t['title'] or '') for t in threats) if threats else ''}"
-             f"{'; recent answers: ' + ' | '.join((e.question or '')[:90] for e in exps) if exps else ''}.")
+    if model_synthesis is not None:
+        # The brief names each workflow with its own number and meaning, so
+        # both the deterministic paragraph and the model-written one report
+        # three answers, never one blended score.
+        flow_facts = "; ".join(
+            f"{f['label']}: {f['headline']:g}/100 {f['score_meaning']} "
+            f"({f['item_count']} items; e.g. "
+            + ", ".join(f"{i.get('id') or '?'} {i.get('title') or ''}".strip()
+                        for i in f['top_items'][:2]) + ")"
+            for f in model_synthesis["flows"])
+        facts = (f"{inv.title or 'Untitled'}: {counts['artifacts']} artifacts "
+                 f"({counts['papers']} papers), "
+                 f"{flags['accepted']} accepted, {flags['pending']} pending review, "
+                 f"{flags['rejected']} rejected"
+                 f"{'; keywords: ' + inv.keywords if inv.keywords else ''}, "
+                 f"model security synthesis over {len(model_synthesis['flows'])} "
+                 f"workflows: {flow_facts}"
+                 f"{'; recent answers: ' + ' | '.join((e.question or '')[:90] for e in exps) if exps else ''}.")
+    else:
+        facts = (f"{inv.title or 'Untitled'}: {counts['artifacts']} artifacts "
+                 f"({counts['papers']} papers), "
+                 f"{flags['accepted']} accepted, {flags['pending']} pending review, "
+                 f"{flags['rejected']} rejected"
+                 f"{'; keywords: ' + inv.keywords if inv.keywords else ''}, "
+                 f"{'residual ' + str(asmt.residual_pct) + '/100' if asmt is not None else 'no assessment yet'}"
+                 f"{'; top threats: ' + ', '.join((t.get('id') or '?') + ' ' + (t.get('title') or '') for t in threats) if threats else ''}"
+                 f"{'; recent answers: ' + ' | '.join((e.question or '')[:90] for e in exps) if exps else ''}.")
     synthesis, source = facts, "deterministic"
     try:
         # Bounded: a hanging model must not stall the overlay past this.
@@ -1724,6 +1906,7 @@ def investigation_summary(db, inv_id: int) -> dict:
             "flags": flags,
             "counts": counts,
             "diagram": diagram,
+            "model_synthesis": model_synthesis,
             "answers": answers,
             "top_artifacts": [{"id": a.id, "title": a.title,
                                "artifact_type": a.artifact_type,

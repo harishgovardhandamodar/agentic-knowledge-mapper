@@ -267,6 +267,15 @@ Rules this path holds to:
   third run starts after the first two. Launched first — or started while an
   earlier flow is waiting out a retry backoff — it reads whatever rows exist
   and reports an explicit gap claim rather than an empty register.
+- **Synthesised in the executive summary.** `GET /summary` carries a
+  `model_synthesis` block with the latest row per workflow that ran, each
+  workflow's own headline number and meaning, top items, exec paragraph, and
+  mermaid diagram. The Summary tab and the node overlay render the same
+  block; nothing is merged across workflows.
+- **Every scoring dict names its path.** `model`, `model_adversarial`,
+  `model_hypothesis`, and `standard` are stamped at scoring time, so readers
+  key on the marker instead of re-deriving the path from the wording. Rows
+  that predate the markers are still re-derived (target or standard only).
 
 Like the other two model paths, it skips standards mapping and refuses the
 what-if re-scorer (422).

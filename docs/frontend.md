@@ -31,7 +31,7 @@ flowchart TB
         CV["cves<br/>Known issues<br/>CVE findings from the graph<br/>NVD → CIRCL → unknown"]
         TL["timeline<br/>run list + manual adds<br/>baseline→target compare<br/>+ highlight in graph"]
         E["explainer<br/>ask row (mode/depth/audience)<br/>article + evidence drawer<br/>trace · roadmap · quiz<br/>threads · bookmarks · watch"]
-        SU["summary<br/>Executive summary<br/>query brief · flags · evidence map<br/>answers + supporting artifacts<br/>regenerate from flags"]
+        SU["summary<br/>Executive summary<br/>query brief · flags · evidence map<br/>model synthesis when model rows exist<br/>answers + supporting artifacts<br/>regenerate from flags"]
         C["console<br/>run controls<br/>search plan<br/>live event log"]
         AU["audit<br/>chains · sessions<br/>verification · exports"]
     end
@@ -200,3 +200,15 @@ in the [README](../README.md).
 ![Design & Architecture tab: document rail on the left, a rendered Mermaid diagram on the right](screenshots/25-design-architecture.png)
 
 ![Executive summary overlay with coverage counts and top threats](screenshots/17-executive-summary.png)
+
+### Model security synthesis (Summary tab, node overlay, security pane)
+
+When the investigation holds model-path rows, `GET /summary` carries a
+`model_synthesis` block: the latest stored row per workflow that has run
+(internals, misuse, and the hypothesis synthesis only when it exists), each
+with its own headline number and meaning, top items, exec paragraph, and
+mermaid diagram. The Summary tab and the node overlay render the same block
+from the same payload, so the two can never disagree; the security
+investigation pane shows the compact three-number strip. Nothing is merged
+and nothing is ranked across workflows -- a confidence is not comparable to
+a risk, so the sections sit side by side with their meanings attached.

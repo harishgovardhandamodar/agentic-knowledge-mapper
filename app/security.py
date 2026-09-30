@@ -1158,6 +1158,11 @@ def score_assessment(
 
     return {
         "threats": sorted(rows, key=lambda r: (-r["residual_score"], -r["inherent_score"], r["id"])),
+        # The marker every consumer keys on. The model scorers stamp their
+        # own paths; without this, a fresh catalog row is indistinguishable
+        # from a legacy unmarked one and gets re-derived from its wording --
+        # a gamble no reader should have to take.
+        "assessment_path": "standard",
         "inherent_pct": inherent_pct,
         "residual_pct": residual_pct,
         "delta": round(residual_pct - inherent_pct, 1),

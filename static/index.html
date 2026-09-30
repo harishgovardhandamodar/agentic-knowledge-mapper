@@ -1634,6 +1634,7 @@ function renderInvSummary(d) {
   header.innerHTML = `<div><div style="font-size:11px;color:var(--text2);">Executive summary · ${d.synthesis === 'llm' ? 'model-written' : 'deterministic brief'}</div>` +
     `<h2 style="font-size:16px;font-weight:600;line-height:1.3;">${escHtml(inv.title || 'Investigation')}</h2></div>`;
   let html = `<div class="overlay-section"><p style="font-size:13px;line-height:1.55;">${escHtml(d.executive_summary || '')}</p></div>`;
+  html += secModelSynthesisHtml(d.model_synthesis, 'overlay-section');
   html += `<div class="overlay-section"><h4><i class="fas fa-chart-simple"></i> Coverage</h4>` +
     `<p style="font-size:12px;color:var(--text2);">${c.artifacts || 0} artifacts (${c.papers || 0} papers) · ${c.threats || 0} threats scored · ${c.explanations || 0} explanations · ${c.cves || 0} known issues</p></div>`;
   const arts = d.top_artifacts || [];
@@ -1649,8 +1650,7 @@ function renderInvSummary(d) {
   if (threats.length || exps.length) {
     html += `<div class="overlay-section"><h4><i class="fas fa-triangle-exclamation"></i> Top findings</h4>`;
     threats.forEach(t => {
-      html += `<div style="font-size:12px;padding:3px 0;"><strong>${escHtml(t.id || '')}</strong> ${escHtml(t.title || '')} ` +
-        `<span style="color:var(--text2);">· ${escHtml(t.severity || '')} ${t.residual != null ? t.residual : ''}</span></div>`;
+      html += secThreatRowHtml(t);
     });
     exps.forEach(e => {
       html += `<div style="font-size:12px;padding:3px 0;"><a class="no-und" href="javascript:void(0)" onclick="closeOverlay();openExplanation(${e.id})"><b>${escHtml(e.question || '')}</b></a></div>`;
@@ -1663,6 +1663,7 @@ function renderInvSummary(d) {
       novel.map(n => `<span class="tag">${escHtml(n.topic)} · ${n.artifacts}</span>`).join(' ') + '</div></div>';
   }
   body.innerHTML = html;
+  secEnsureMermaid(body);
 }
 
 /* ---------- executive summary sub-tab (Mapper investigation view) ---------- */
@@ -1731,6 +1732,7 @@ function renderSummaryTab(d) {
       (q.description ? `<p>${escHtml(q.description)}</p>` : '') + '</div>';
   }
   html += `<div class="sum-section"><p>${escHtml(d.executive_summary || '')}</p></div>`;
+  html += secModelSynthesisHtml(d.model_synthesis, 'sum-section');
   if (d.diagram) {
     html += `<div class="sum-section"><h4><i class="fas fa-diagram-project"></i> Evidence map</h4>` +
       `<div class="diagram-wrap"><pre class="mermaid">${escHtml(d.diagram)}</pre></div></div>`;
@@ -1756,8 +1758,7 @@ function renderSummaryTab(d) {
   const threats = ((d.top_findings || {}).threats) || [];
   if (threats.length) {
     html += `<div class="sum-section"><h4><i class="fas fa-triangle-exclamation"></i> Top threats</h4>` +
-      threats.map(t => `<div class="sum-item"><strong>${escHtml(t.id || '')}</strong><span class="sum-title">${escHtml(t.title || '')}</span> ` +
-        `<span style="color:var(--text2);font-size:11px;">· ${escHtml(t.severity || '')}</span></div>`).join('') + '</div>';
+      threats.map(t => secThreatRowHtml(t)).join('') + '</div>';
   }
   box.innerHTML = html;
   secEnsureMermaid(box);
@@ -5472,6 +5473,50 @@ function secEnsureMermaid(root) {
   mmLoad(() => mmRender(nodes));
 }
 
+/* Model security synthesis: one section per workflow that ran (internals,
+   misuse, and the hypothesis synthesis when it exists), with that flow's own
+   headline number and meaning, its top findings, and every diagram. Shared by
+   the Summary tab and the node overlay so the two can never disagree; pass
+   'sum-section' or 'overlay-section' for the host's styling. */
+function secModelSynthesisHtml(ms, cls) {
+  if (!ms || !ms.flows || !ms.flows.length) return '';
+  cls = cls || 'sum-section';
+  let html = `<div class="${cls}"><h4><i class="fas fa-shield-halved"></i> Model security synthesis` +
+    (ms.subject ? ` — ${escHtml(ms.subject)}` : '') + '</h4>' +
+    '<p style="font-size:12px;color:var(--text2);">Three workflows, three answers. ' +
+    'Each number has its own meaning — they are reported side by side, never merged.</p>';
+  ms.flows.forEach(f => {
+    html += `<div style="margin:10px 0 4px;font-size:12.5px;"><strong>${escHtml(f.label)}</strong> ` +
+      `<span style="font-size:12px;">· ${escHtml(String(f.headline))}/100 ${escHtml(f.score_meaning || '')}</span> ` +
+      `<span style="font-size:11px;color:var(--text2);">· ${f.item_count || 0} items · run #${f.assessment_id || '—'}</span></div>`;
+    if (f.exec_paragraph) html += `<p style="font-size:12.5px;">${escHtml(f.exec_paragraph)}</p>`;
+    (f.top_items || []).forEach(t => {
+      html += `<div class="sum-item"><strong>${escHtml(t.id || '?')}</strong>` +
+        `<span class="sum-title">${escHtml(t.title || '')}</span> ` +
+        `<span style="color:var(--text2);font-size:11px;">· ${escHtml(t.score_label || 'score')} ${escHtml(String(t.score != null ? t.score : ''))}` +
+        (t.detail ? ` · ${escHtml(t.detail)}` : '') + '</span></div>';
+    });
+  });
+  (ms.diagrams || []).forEach(g => {
+    html += `<div style="margin:10px 0 4px;font-size:12.5px;"><strong>${escHtml(g.label)} diagram</strong> ` +
+      `<span style="font-size:11px;color:var(--text2);">· run #${g.assessment_id || '—'}</span></div>` +
+      `<div class="diagram-wrap"><pre class="mermaid">${escHtml(g.mermaid || '')}</pre></div>`;
+  });
+  html += '</div>';
+  return html;
+}
+
+/* One threat row that may carry a model-flow label and its own score meaning.
+   Catalog rows keep the exact rendering they always had. */
+function secThreatRowHtml(t) {
+  const flow = t.flow ? `<span class="sum-type">${escHtml(t.flow)}</span>` : '';
+  const extra = t.flow
+    ? `<span style="color:var(--text2);font-size:11px;">· ${escHtml(t.score_label || 'score')} ${escHtml(String(t.score != null ? t.score : ''))}</span>`
+    : `<span style="color:var(--text2);font-size:11px;">· ${escHtml(t.severity || '')}</span>`;
+  return `<div class="sum-item"><strong>${escHtml(t.id || '')}</strong>` +
+    `<span class="sum-title">${escHtml(t.title || '')}</span> ${flow}${extra}</div>`;
+}
+
 function secRoleThreats() {
   return SEC_ROLE_THREATS[secAudience] || [];
 }
@@ -5736,6 +5781,18 @@ async function secLoadInvSummary() {
     let html = `<p style="font-size:12.5px;line-height:1.55;">${escHtml(d.executive_summary || '')}</p>` +
       `<p style="font-size:11.5px;color:var(--text2);">${c.artifacts || 0} artifacts (${c.papers || 0} papers) · ` +
       `${c.threats || 0} threats scored · ${c.explanations || 0} explanations · ${c.cves || 0} known issues</p>`;
+    const ms = d.model_synthesis;
+    if (ms && (ms.flows || []).length) {
+      // Compact strip: the three workflows' own numbers side by side. The
+      // full per-flow findings and every diagram live one click away in the
+      // Summary tab, rendered from this same payload.
+      html += '<div style="font-size:12px;margin:6px 0 2px;"><strong>Model synthesis</strong> ' +
+        '<span style="color:var(--text2);">· three workflows, three answers, never merged</span></div>' +
+        ms.flows.map(f => `<div style="font-size:12px;padding:2px 0;"><strong>${escHtml(f.label)}</strong> ` +
+          `${escHtml(String(f.headline))}/100 ${escHtml(f.score_meaning || '')} ` +
+          `<span style="color:var(--text2);">· ${f.item_count || 0} items · run #${f.assessment_id || '—'}</span></div>`).join('') +
+        `<div style="font-size:11.5px;color:var(--text2);margin-top:2px;">${(ms.diagrams || []).length} diagram(s) and per-flow findings in the Summary tab.</div>`;
+    }
     const arts = (d.top_artifacts || []).slice(0, 5);
     if (arts.length) {
       html += '<div style="margin-top:6px;">' + arts.map(a =>
@@ -5744,11 +5801,21 @@ async function secLoadInvSummary() {
       ).join('') + '</div>';
     }
     const threats = (tf.threats || []).slice(0, 3);
-    if (threats.length) {
-      html += '<div style="font-size:12px;margin-top:6px;">' + threats.map(t =>
-        `<div style="padding:2px 0;"><strong>${escHtml(t.id || '')}</strong> ${escHtml(t.title || '')} ` +
-        `<span style="color:var(--text2);">· ${escHtml(t.severity || '')}${t.residual != null ? ' ' + t.residual : ''}</span></div>`
-      ).join('') + '</div>';
+    if (ms && (ms.flows || []).length) {
+      // One row per workflow, not the first three rows of workflow 1: the
+      // pane is a strip, and each answer deserves its representative.
+      const seen = new Set();
+      const perFlow = [];
+      (tf.threats || []).forEach(t => {
+        const k = t.flow || '';
+        if (!seen.has(k)) { seen.add(k); perFlow.push(t); }
+      });
+      if (perFlow.length) {
+        html += '<div style="font-size:12px;margin-top:6px;">' +
+          perFlow.map(t => secThreatRowHtml(t)).join('') + '</div>';
+      }
+    } else if (threats.length) {
+      html += '<div style="font-size:12px;margin-top:6px;">' + threats.map(t => secThreatRowHtml(t)).join('') + '</div>';
     }
     const live = document.getElementById('secInvSummary');
     if (live) live.innerHTML = html;
