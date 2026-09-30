@@ -1725,14 +1725,18 @@ def _model_flow_synthesis(db, inv_id: int):
         scored.sort(key=lambda p: -p[0])
         if path == "model_hypothesis":
             def _item(h, s):
+                detail = (f"Refuted by: {h['falsifier']}"
+                          if h.get("falsifier") else "no falsifier named")
+                if h.get("contradicted_by"):
+                    detail += ("; in tension with flow 1 ("
+                               + ", ".join(h["contradicted_by"]) + ")")
                 return {
                     "id": h.get("id"), "title": h.get("claim") or h.get("title"),
                     "severity": ("corroborated" if h.get("cross_flow")
                                  else h.get("status") or "untested"),
                     "residual": None, "flow": label,
                     "score": s, "score_label": score_label,
-                    "detail": (f"Refuted by: {h['falsifier']}"
-                               if h.get("falsifier") else "no falsifier named"),
+                    "detail": detail,
                 }
         elif path == "model_adversarial":
             def _item(s, v):
@@ -1851,23 +1855,27 @@ def investigation_summary(db, inv_id: int) -> dict:
                for e in exps]
     diagram = _summary_diagram(inv.title, top_artifacts, answers)
     if model_synthesis is not None:
-        # The brief names each workflow with its own number and meaning, so
-        # both the deterministic paragraph and the model-written one report
-        # three answers, never one blended score.
-        flow_facts = "; ".join(
-            f"{f['label']}: {f['headline']:g}/100 {f['score_meaning']} "
-            f"({f['item_count']} items; e.g. "
-            + ", ".join(f"{i.get('id') or '?'} {i.get('title') or ''}".strip()
-                        for i in f['top_items'][:2]) + ")"
-            for f in model_synthesis["flows"])
+        # The brief reads as sentences, not a semicolon dump: one per
+        # workflow, each naming its own number and meaning. Both the fallback
+        # paragraph and the model-written one below build on this, so both
+        # report three answers, never one blended score.
+        flow_lines = []
+        for f in model_synthesis["flows"]:
+            eg = ", ".join(f"{i.get('id') or '?'} {i.get('title') or ''}".strip()
+                           for i in f["top_items"][:2])
+            flow_lines.append(
+                f"{f['label']} holds {f['headline']:g}/100 {f['score_meaning']} "
+                f"across {f['item_count']} items (e.g. {eg}).")
         facts = (f"{inv.title or 'Untitled'}: {counts['artifacts']} artifacts "
                  f"({counts['papers']} papers), "
                  f"{flags['accepted']} accepted, {flags['pending']} pending review, "
                  f"{flags['rejected']} rejected"
-                 f"{'; keywords: ' + inv.keywords if inv.keywords else ''}, "
-                 f"model security synthesis over {len(model_synthesis['flows'])} "
-                 f"workflows: {flow_facts}"
-                 f"{'; recent answers: ' + ' | '.join((e.question or '')[:90] for e in exps) if exps else ''}.")
+                 f"{'; keywords: ' + inv.keywords if inv.keywords else ''}. "
+                 + " ".join(flow_lines)
+                 + (f" Recent answers: "
+                    + " | ".join((e.question or '')[:90] for e in exps) + "."
+                    if exps else ""))
+        counts["assessments"] = len(model_synthesis["flows"])
     else:
         facts = (f"{inv.title or 'Untitled'}: {counts['artifacts']} artifacts "
                  f"({counts['papers']} papers), "

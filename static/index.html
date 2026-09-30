@@ -5981,7 +5981,7 @@ function renderSecurityReport(data) {
   }).join('');
   const _dimStrip = `
     <div class="sec-gauge" style="border:none;padding:0;background:none;">
-      <div class="sec-metric"><div class="sec-metric-v" style="color:${color};font-size:20px;">${residual}</div><div class="sec-metric-k">${_hypPath ? 'confidence' : _isAdv ? 'misuse potential' : 'weightage'}</div></div>
+      <div class="sec-metric"><div class="sec-metric-v" style="color:${color};font-size:20px;">${residual}</div><div class="sec-metric-k">${_hypPath ? 'confidence' : _isAdv ? 'misuse potential' : 'weighting'}</div></div>
       <div class="sec-metric"><div class="sec-metric-v" style="font-size:20px;">${_dims.length}</div><div class="sec-metric-k">dimensions</div></div>
       <div class="sec-metric"><div class="sec-metric-v" style="font-size:20px;">${threats.length}</div><div class="sec-metric-k">${_hypPath ? 'claims' : _isAdv ? 'scenarios' : 'findings'}</div></div>
       <div class="sec-metric"><div class="sec-metric-v" style="font-size:20px;">${explo.length}</div><div class="sec-metric-k">sources</div></div>
@@ -6001,7 +6001,7 @@ function renderSecurityReport(data) {
            • the companion <em>model-internals</em> assessment answers "is this model sound?" and is never averaged into this one`
         : `• four dimensions weighted by how much each matters to a deployed model: training data &amp; privacy 35%, model integrity 25%, deployment surface 20%, governance 20%<br/>
            • each dimension score comes from the findings collected for it; the aggregate is their weighted sum<br/>
-           • the number is <strong>dimension weightage</strong>, not the L×I of the catalog path, and the two are not comparable`}
+           • the number is <strong>dimension weighting</strong>, not the L×I of the catalog path, and the two are not comparable`}
     </div>`;
   const gauge = _modelScored ? _dimStrip : `
     <div class="sec-gauge">

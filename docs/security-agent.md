@@ -161,7 +161,7 @@ sequenceDiagram
     ORC->>DB: SecurityAssessment row (same contract, model content)
 ```
 
-Weightage is explicit and stored: training-data privacy 35%, model integrity
+Weighting is explicit and stored: training-data privacy 35%, model integrity
 25%, deployment surface 20%, governance 20% (`security.MODEL_DIMENSIONS`,
 method `model-internals-v1`). Residual equals inherent — v1 maps no declared
 controls onto model dimensions, and the report says so instead of inventing a
@@ -262,6 +262,11 @@ Rules this path holds to:
   actually saw.
 - **The mode is explicit.** `resolve_model_mode` never infers `hypothesis`
   from wording — which question to ask is the caller's call.
+- **Claims are checked against flow 1.** The verifier flags a claim that
+  asserts what an internals finding denies (shared subject matter, negation
+  on exactly one side), penalises its support, and names the finding in the
+  report as in tension with it. The drafter is instructed not to assert what
+  the findings deny in the first place.
 - **Ordered last.** The manager launches target → adversarial → hypothesis;
   the job queue claims in `(next_attempt_at, id)` order, so a freshly queued
   third run starts after the first two. Launched first — or started while an

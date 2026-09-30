@@ -90,7 +90,7 @@ another:
 | Path | What the number is | Register | Hidden |
 |---|---|---|---|
 | standard catalog | residual risk after controls (L×I) | Threat & risk | — |
-| `model` | dimension weightage | Threat & risk | Controls, what-if |
+| `model` | dimension weighting | Threat & risk | Controls, what-if |
 | `model_adversarial` | misuse potential | Misuse scenario (prerequisites) | Controls, what-if |
 | `model_hypothesis` | confidence in the claims | Hypothesis (refuted-by) | Controls, what-if |
 

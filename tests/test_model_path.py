@@ -60,14 +60,20 @@ class TestModelRouting(unittest.TestCase):
         self.assertNotEqual(out["scoring"].get("assessment_path"), "model")
         self.assertTrue(any(t["id"].startswith("T") for t in out["threats"]))
 
-    def test_report_carries_profile_and_weightage(self):
+    def test_report_carries_profile_and_weighting(self):
         out = _model_out()
         md = out["markdown"]
-        for section in ("## Subject profile", "## Weightage",
+        for section in ("## Subject profile", "## Weighting",
                         "## Privacy findings", "## Internals findings",
                         "(model)"):
             self.assertIn(section, md)
         self.assertIn("tabular", md.lower())
+
+    def test_subject_profile_printed_once(self):
+        # The reporter sections and the renderer each used to print the
+        # profile, so the report stated it twice, back to back.
+        md = _model_out()["markdown"]
+        self.assertEqual(md.count("## Subject profile"), 1)
 
 
 class TestModelScoring(unittest.TestCase):
@@ -92,7 +98,7 @@ class TestModelScoring(unittest.TestCase):
             self.assertEqual(row["score"], 20.0)
         self.assertEqual(out["overall_pct"], 20.0)
 
-    def test_weightage_favours_internals(self):
+    def test_weighting_favours_internals(self):
         out = sec.score_model_assessment(
             {"training_data_privacy": 80.0, "model_integrity": 60.0,
              "deployment_surface": 40.0, "governance": 20.0})
@@ -152,8 +158,11 @@ class TestModelAgents(unittest.TestCase):
                            "dimensions": [],
                            "findings": [], "evidence": [],
                            "scoring": {"overall_pct": 20.0}}))
-        self.assertIn("Tabular Foundation Models",
-                      out["payload"]["model_sections"])
+        # The product name lives in the renderer's Subject profile section,
+        # not in these sections; what matters here is the deterministic
+        # fallback ships instead of invented prose.
+        self.assertNotIn("Tabular Foundation Models",
+                         out["payload"]["model_sections"])
         self.assertIn("Deterministic brief", out["payload"]["exec_paragraph"])
 
     def test_registry_lists_model_agents(self):

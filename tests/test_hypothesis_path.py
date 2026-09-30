@@ -17,6 +17,7 @@ from the other two rather than a third copy of them:
 """
 import json
 import os
+import re
 import tempfile
 import unittest
 from unittest import mock
@@ -372,6 +373,96 @@ class TestVerifier(unittest.TestCase):
         self.assertLess(by_id["H03"]["support_score"], by_id["H01"]["support_score"])
 
 
+class TestContradictions(unittest.TestCase):
+    """A claim that denies a flow-1 finding is arguing with its own evidence."""
+
+    P01 = {"id": "P01", "title": "Training-data minimization unverified",
+           "rationale": "no personal-data signals; minimization posture unstated",
+           "dimension": "training_data_privacy"}
+    M02 = {"id": "M02", "title": "Schema and distribution inference from outputs",
+           "rationale": "tabular outputs reveal column semantics and distributions",
+           "dimension": "model_integrity"}
+
+    def _verify(self, hyps, rows):
+        env = {"payload": {"hypotheses": hyps, "target_rows": rows},
+               "task_id": "t", "trace": []}
+        res = agents.hypothesis_verifier_handle(env)["payload"]["verified"]
+        return {v["id"]: v for v in res}
+
+    def test_claim_denied_by_a_finding_is_flagged(self):
+        # The live H01/P01 case: the premise asserts personal training data,
+        # the finding states there are no personal-data signals.
+        h = agents._hypothesis(
+            "H01", "held-out training rows are recoverable through the serving surface",
+            "the profile says it trains on personal data",
+            "memorised rows are reachable by querying the model",
+            "confidential training records leave via the inference API",
+            "request the rows back verbatim",
+            supporting=["A01"])
+        v = self._verify([h], [self.P01, self.M02])["H01"]
+        self.assertEqual(v["contradicted_by"], ["P01"])
+
+    def test_contradiction_lowers_support(self):
+        h = agents._hypothesis(
+            "H01", "held-out training rows are recoverable through the serving surface",
+            "the profile says it trains on personal data",
+            "memorised rows are reachable by querying the model",
+            "confidential training records leave via the inference API",
+            "request the rows back verbatim",
+            supporting=["M02"])
+        clean = agents._hypothesis(
+            "H02", "outputs reveal column distributions",
+            "the model serves confidence scores", "scores expose the schema",
+            "an attacker maps the columns", "serve labels only",
+            supporting=["M02"])
+        by_id = self._verify([h, clean], [self.P01, self.M02])
+        self.assertLess(by_id["H01"]["support_score"],
+                        by_id["H02"]["support_score"])
+
+    def test_agreeing_claim_is_not_flagged(self):
+        h = agents._hypothesis(
+            "H01", "tabular outputs reveal column semantics",
+            "the model serves full distributions",
+            "distributions expose column ranges",
+            "an attacker reconstructs the schema", "serve labels only",
+            supporting=["M02"])
+        v = self._verify([h], [self.P01, self.M02])["H01"]
+        self.assertEqual(v.get("contradicted_by"), [])
+
+    def test_vague_claim_matches_nothing(self):
+        h = agents._hypothesis("H09", "things are bad somewhere", "p", "m",
+                               "k", "f", supporting=[])
+        v = self._verify([h], [self.P01, self.M02])["H09"]
+        self.assertEqual(v.get("contradicted_by"), [])
+
+    def test_quoting_a_denial_is_not_flagged(self):
+        # A claim that repeats the finding's own denial agrees with it: both
+        # sides negated means symmetric, not contradictory.
+        h = agents._hypothesis(
+            "H05", "minimization cannot be verified from the outside",
+            "P01 found no personal-data signals in the served outputs",
+            "black-box probing cannot confirm what is minimized",
+            "minimization claims stay unverified", "inspect the pipeline",
+            supporting=["P01"])
+        v = self._verify([h], [self.P01, self.M02])["H05"]
+        self.assertEqual(v.get("contradicted_by"), [])
+
+    def test_report_names_the_tension(self):
+        h = agents._hypothesis(
+            "H01", "held-out training rows are recoverable through the serving surface",
+            "the profile says it trains on personal data",
+            "memorised rows are reachable by querying the model",
+            "confidential training records leave via the inference API",
+            "request the rows back verbatim",
+            supporting=["A01"])
+        v = self._verify([h], [self.P01, self.M02])["H01"]
+        env = {"payload": {"product_name": "M", "verified": [v], "scoring": {}},
+               "task_id": "t", "trace": []}
+        sections = agents.hypothesis_reporter_handle(env)["payload"]["hypothesis_sections"]
+        self.assertIn("In tension with flow 1", sections)
+        self.assertIn("P01", sections)
+
+
 class TestReadFromStoredRows(unittest.TestCase):
     """Flow 3 reads the stored rows, not a fresh run of the other agents."""
 
@@ -448,6 +539,42 @@ class TestDiagrams(unittest.TestCase):
 
     def test_empty_map_still_renders(self):
         self.assertIn("flowchart", sec.mermaid_hypothesis_map([]))
+
+    def test_labels_cut_at_word_boundaries(self):
+        # A fixed slice landed mid-word ("trains o") in every rendered
+        # diagram; labels must end on a whole word instead.
+        self.assertEqual(
+            sec._mermaid_label("the profile says it trains on personal records here", 28),
+            "the profile says it trains")
+        self.assertEqual(sec._mermaid_label("short", 28), "short")
+        self.assertEqual(sec._mermaid_label("supercalifragilisticexpialidocious", 10),
+                         "supercalif")
+        d = sec.mermaid_hypothesis_chain({
+            "claim": "held-out training rows are recoverable through XYZ",
+            "premise": "the profile says it trains on personal records here",
+            "mechanism": "memorised rows are reachable by querying",
+            "consequence": "records leave", "falsifier": "ask them back"})
+        self.assertIn("the profile says it trains", d)
+        self.assertNotIn("trains o", d)
+
+    def test_exec_paragraph_is_short_and_rounded(self):
+        # The old template recomputed the mean inline (:g keeps six
+        # significant digits, hence "83.9333/100") and crammed every claim
+        # into one run-on sentence.
+        env = {"payload": {
+            "product_name": "M",
+            "verified": [
+                {"id": "H01", "claim": "rows leak", "confidence": 94.0,
+                 "impact": 5, "falsifier": "ask them back"},
+                {"id": "H02", "claim": "steering works", "confidence": 70.0,
+                 "impact": 3, "falsifier": "try it"}],
+            "scoring": {"confidence_pct": 82.0}},
+            "task_id": "t", "trace": []}
+        para = agents.hypothesis_reporter_handle(env)["payload"]["exec_paragraph"]
+        self.assertNotIn("83.9333", para)
+        self.assertIn("82/100", para)
+        self.assertLess(len(para), 400)
+        self.assertIn("H01", para)
 
 
 class TestAgentRegistry(unittest.TestCase):

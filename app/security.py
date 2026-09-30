@@ -447,7 +447,7 @@ _MIN_RESIDUAL_LIKELIHOOD = 0.35  # controls never take a threat below 35% of inh
 _MIN_APPLICABILITY = 0.3          # below this a threat is reported but not scored
 
 
-# Model assessment dimensions: the weightage of a model security assessment.
+# Model assessment dimensions: the weighting of a model security assessment.
 # A conversational product is scored threat-by-threat against the catalog;
 # a model is scored by how it handles data, how sound it is, how it is
 # exposed, and how it is governed -- internals and working first (60%),
@@ -524,7 +524,7 @@ def mermaid_misuse_chain(product: str, profile: dict[str, Any]) -> str:
     )
 
 
-# Adversarial-misuse dimensions: the weightage of the second model flow.
+# Adversarial-misuse dimensions: the weighting of the second model flow.
 # Flow 1 asks "is this model sound?"; this asks "what can someone BUILD with
 # it?". The two answer different questions, so they are scored separately and
 # never averaged: a perfectly safe model in the wrong hands is still a
@@ -658,6 +658,21 @@ def score_hypotheses(dimensions: dict[str, float]) -> dict[str, Any]:
     }
 
 
+def _mermaid_label(text: Any, n: int) -> str:
+    """Shorten text for a mermaid node label without cutting a word in half.
+
+    A fixed slice lands mid-word ("trains o"), which reads as a typo in every
+    rendered diagram. Cutting at the last space before the limit keeps whole
+    words; a run with no space in range falls back to the hard slice rather
+    than emitting an empty label.
+    """
+    s = str(text or "").replace('"', "'").strip()
+    if len(s) <= n:
+        return s
+    cut = s.rfind(" ", 0, n)
+    return s[:cut] if cut > 0 else s[:n]
+
+
 def mermaid_hypothesis_map(hypotheses: list[dict[str, Any]]) -> str:
     """Evidence map for the hypothesis flow: claim nodes fed by the two flows.
 
@@ -681,7 +696,7 @@ def mermaid_hypothesis_map(hypotheses: list[dict[str, Any]]) -> str:
     lines.append("    classDef single fill:#4a4458,stroke:#333,color:#fff")
     for i, h in enumerate(hypotheses[:8]):
         hid = f"H{i + 1:02d}"
-        label = str(h.get("claim", ""))[:44].replace('"', "'")
+        label = _mermaid_label(h.get("claim", ""), 44)
         both = bool(h.get("supported_by_target")) and bool(h.get("supported_by_adversarial"))
         style = "corroborated" if both else "single"
         lines.append(f'    {hid}["{label}"]:::{style}')
@@ -701,7 +716,7 @@ def mermaid_hypothesis_chain(h: dict[str, Any]) -> str:
     the claim, and it is the reason the hypothesis is allowed to exist.
     """
     def _q(s: Any, n: int = 30) -> str:
-        return str(s or "").replace('"', "'")[:n]
+        return _mermaid_label(s, n)
 
     claim = _q(h.get("claim"), 34)
     premise = _q(h.get("premise"), 28)
@@ -1955,7 +1970,7 @@ def render_adversarial_markdown(product_name: str, product_url: str,
     if profile.get("data"):
         A(f"Processes {', '.join(profile['data'])}.")
     A("")
-    A("## Weightage: how the number is built")
+    A("## Weighting: how the number is built")
     A("")
     A("Weights here follow attacker value, not attacker novelty: a scenario "
       "scores by how reachable it is and what it yields, and a dimension with "
@@ -2172,7 +2187,7 @@ def render_hypothesis_markdown(product_name: str, product_url: str,
     A("")
     A(f"_{profile.get('summary') or 'Unclassified model.'}_")
     A("")
-    A("## Confidence weightage: how the number is built")
+    A("## Confidence weighting: how the number is built")
     A("")
     A("| Dimension | Weight | Score | Contributes |")
     A("|---|---|---|---|")
@@ -2413,11 +2428,11 @@ def render_model_markdown(product_name: str, product_url: str,
                           diagrams: dict[str, str], evidence: list[dict],
                           queries_run: list[str], model_sections: str,
                           exec_paragraph: str, a2a_task_id: str) -> str:
-    """Report markdown for a model assessment: profile, weightage, findings.
+    """Report markdown for a model assessment: profile, weighting, findings.
 
     Mirrors the standard report's shape (title, exposure line, executive
     summary, scoped sections) so readers and the markdown renderer meet no
-    surprises; every section is model-native, and a weightage table states
+    surprises; every section is model-native, and a weighting table states
     exactly how much each dimension moves the headline number.
     """
     L: list[str] = []
@@ -2453,7 +2468,7 @@ def render_model_markdown(product_name: str, product_url: str,
     if profile.get("data"):
         A(f"Processes {', '.join(profile['data'])}.")
     A("")
-    A("## Weightage: how the number is built")
+    A("## Weighting: how the number is built")
     A("")
     A("| Dimension | Weight | Score | Contributes |")
     A("|---|---|---|---|")

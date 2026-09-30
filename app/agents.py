@@ -1148,7 +1148,7 @@ def _hop_io(trace: list[dict[str, Any]], agent: str, intent: str,
 # standard path scores catalog threats written around an AI writing
 # assistant; this one scores the model's own dimensions (training-data
 # privacy, model integrity, deployment surface, governance) with the
-# weightage in security.MODEL_DIMENSIONS. No AI-standards mapping happens
+# weighting in security.MODEL_DIMENSIONS. No AI-standards mapping happens
 # anywhere on this path -- frameworks describe product controls, and a
 # weights-and-data question is answered from the model, not the catalogue.
 
@@ -1414,20 +1414,25 @@ def model_reporter_handle(env: dict[str, Any], db: Any = None) -> dict[str, Any]
     scoring = payload.get("scoring", {}) or {}
     lines: list[str] = []
     A = lines.append
-    A(f"## Subject profile — {product}")
-    A("")
-    A(f"_{profile.get('summary') or 'Unclassified model: assess conservatively.'}_")
-    A("")
-    if profile.get("families"):
-        A(f"Family: {', '.join(profile['families'])}. ")
-    if profile.get("data"):
-        A(f"Processes {', '.join(profile['data'])}.")
-    A("")
+    # No profile header here: render_model_markdown prints the one Subject
+    # profile section (with architectures, which this payload does not carry).
+    # A second copy used to ship inside these sections, so the report stated
+    # the profile twice, back to back.
     A("## Internals review (weighted dimensions)")
     A("")
+    _by_dim: dict[str, list] = {}
+    for _f in findings:
+        _by_dim.setdefault(str(_f.get("dimension") or ""), []).append(_f)
     for d in dimensions:
+        _ds = sorted(_by_dim.get(str(d["id"]), []),
+                     key=lambda f: -(f.get("inherent_score", 0) or 0))
+        # The weight table in the renderer already states the arithmetic; this
+        # list used to repeat it number for number. Now each dimension names
+        # the finding that drives it, which the table cannot show.
+        _driver = (f" — driven by **{_ds[0]['id']}** {_ds[0]['title']}"
+                   if _ds else " — no finding mapped")
         A(f"- **{d['id']}** ({d['weight']:.0%} weight): "
-          f"**{d['score']:.0f}/100**.")
+          f"**{d['score']:.0f}/100**{_driver}.")
     A("")
     A("## Privacy findings")
     A("")
@@ -2288,8 +2293,15 @@ def misuse_reporter_handle(env: dict[str, Any], db: Any = None) -> dict[str, Any
     A("")
     A("## Misuse potential (weighted dimensions)")
     A("")
+    _by_dim: dict[str, list] = {}
+    for _s in scenarios:
+        _by_dim.setdefault(str(_s.get("dimension") or ""), []).append(_s)
     for d in scoring.get("dimensions", []):
-        A(f"- **{d['id']}** ({d['weight']:.0%} weight): **{d['score']:.0f}/100**.")
+        _ds = sorted(_by_dim.get(str(d["id"]), []),
+                     key=lambda s: -(s.get("inherent_score", 0) or 0))
+        _driver = (f" — sharpest chain **{_ds[0]['id']}** {_ds[0]['title']}"
+                   if _ds else " — no scenario mapped")
+        A(f"- **{d['id']}** ({d['weight']:.0%} weight): **{d['score']:.0f}/100**{_driver}.")
     A("")
     A("## Engineered adversarial scenarios")
     A("")
@@ -2552,7 +2564,9 @@ def hypothesis_analyst_handle(env: dict[str, Any], db: Any = None) -> dict[str, 
             "mechanism, a consequence if true, and a falsifier that would "
             "REFUTE it. Prefer claims both assessments support; mark "
             "single-assessment claims. Never assert a control that is not "
-            "named. Reply with STRICT JSON only: {\"hypotheses\": [{\"id\": "
+            "named. Check every claim against the flow-1 findings: a claim "
+            "must not assert what a finding denies (the verifier will flag "
+            "it and mark the report). Reply with STRICT JSON only: {\"hypotheses\": [{\"id\": "
             "\"H##\", \"claim\": str (one falsifiable sentence), \"premise\": str, "
             "\"mechanism\": str, \"consequence\": str, \"falsifier\": str (a "
             "specific observation that would refute it), \"impact\": 1-5 (stakes "
@@ -2618,10 +2632,17 @@ def hypothesis_verifier_handle(env: dict[str, Any], db: Any = None) -> dict[str,
     payload = env.get("payload", {})
     hyps = [h for h in (payload.get("hypotheses") or []) if isinstance(h, dict)]
     evidence = [e for e in (payload.get("evidence") or []) if isinstance(e, dict)]
+    target_rows = [r for r in (payload.get("target_rows") or [])
+                   if isinstance(r, dict)]
     verified = []
     for h in hyps:
         support = list(h.get("supporting") or [])
         counter = list(h.get("counter_evidence") or [])
+        # Flow-1 cross-check: a claim that denies what an internals finding
+        # states (or asserts what it rules out) is arguing with its own
+        # evidence base, not corroborated by it. Named and penalised like
+        # counter-evidence, through the same dimension.
+        contradicted = _hypothesis_contradictions(h, target_rows)
         testability = float(h.get("testability", 3))
         impact = float(h.get("impact", 3))
         # Evidence support: cited source rows, plus any in-app artifact the
@@ -2646,7 +2667,9 @@ def hypothesis_verifier_handle(env: dict[str, Any], db: Any = None) -> dict[str,
         if not str(h.get("falsifier", "")).strip():
             testability = 1.0
         dims = {
-            "evidence_support": max(0.0, min(100.0, support_score - 15.0 * len(counter))),
+            "evidence_support": max(0.0, min(100.0, support_score
+                                            - 15.0 * len(counter)
+                                            - 15.0 * len(contradicted))),
             "cross_flow_corroboration": cross,
             "testability": testability / 5.0 * 100.0,
             "impact_if_true": impact / 5.0 * 100.0,
@@ -2657,6 +2680,7 @@ def hypothesis_verifier_handle(env: dict[str, Any], db: Any = None) -> dict[str,
             "cross_flow": corroborated,
             "verification_dimensions": {k: round(x, 1) for k, x in dims.items()},
             "counter_evidence": counter,
+            "contradicted_by": contradicted,
             "supporting_artifacts": [e.get("artifact_id") for e in matched[:5]],
             # Confidence is the verifier's own read, not the drafter's.
             "confidence": round(
@@ -2674,8 +2698,73 @@ def hypothesis_verifier_handle(env: dict[str, Any], db: Any = None) -> dict[str,
         note=(f"{len(verified)} claims verified, "
               f"{sum(1 for v in verified if v.get('cross_flow'))} corroborated "
               f"by both flows, {sum(1 for v in verified if not v.get('counter_evidence'))} "
-              f"uncountered"),
+              f"uncountered, {sum(1 for v in verified if v.get('contradicted_by'))} "
+              f"in tension with flow-1 findings"),
     )
+
+
+_NEGATION_TOKENS = {"no", "not", "never", "without", "absent", "lack",
+                    "lacks", "lacking", "fail", "fails", "failed", "cannot",
+                    "none", "neither", "unverified", "deny", "denies",
+                    "refutes"}
+
+_CLAIM_STOP = {"the", "and", "with", "from", "that", "this", "into", "your",
+               "what", "which", "will", "would", "could", "should", "there",
+               "their", "they", "them", "then", "than", "also", "only",
+               "such", "have", "has", "are", "was", "were", "been", "being",
+               "does", "about", "across", "under", "over", "between",
+               "through", "while", "model", "models", "claim", "claims"}
+
+
+def _stem(tok: str) -> str:
+    for suf in ("ing", "ed", "es", "s"):
+        if len(tok) - len(suf) >= 4 and tok.endswith(suf):
+            return tok[:-len(suf)]
+    return tok
+
+
+def _content_tokens(text: str) -> set[str]:
+    return {_stem(t) for t in re.findall(r"[a-z]{4,}", text.lower())
+            if t not in _CLAIM_STOP}
+
+
+def _negated(text: str) -> bool:
+    toks = set(re.findall(r"[a-z]+", text.lower()))
+    return bool(toks & _NEGATION_TOKENS)
+
+
+def _hypothesis_contradictions(h: dict[str, Any],
+                               target_rows: list[dict[str, Any]]) -> list[str]:
+    """Flow-1 finding ids the claim argues with.
+
+    A claim shares distinctive tokens with a finding but exactly one side is
+    negated: the claim's premise says the profile trains on personal data
+    while P01 states there are no personal-data signals. Such a claim is not
+    corroborated by that finding -- it contradicts it -- so the id is
+    returned for the verifier to penalise and the report to name.
+
+    Conservative by construction: needs at least two shared content tokens
+    AND negation on exactly one side, compared field by field -- a "no" in
+    the mechanism must not launder an affirmative premise that denies a
+    finding, and quoting a finding's own denial must not flag either.
+    """
+    fields = [str(h.get(k, "")) for k in ("claim", "premise", "mechanism")]
+    if not any(_content_tokens(f) for f in fields):
+        return []
+    out = []
+    for r in target_rows or []:
+        if not isinstance(r, dict) or not r.get("id"):
+            continue
+        ftext = " ".join((str(r.get("title", "")),
+                          str(r.get("rationale", ""))))
+        ftoks = _content_tokens(ftext)
+        fneg = _negated(ftext)
+        for field in fields:
+            btoks = _content_tokens(field)
+            if len(btoks & ftoks) >= 2 and _negated(field) != fneg:
+                out.append(str(r["id"]))
+                break
+    return out
 
 
 def _hyp_keywords(title: str) -> list[str]:
@@ -2780,6 +2869,11 @@ def hypothesis_reporter_handle(env: dict[str, Any], db: Any = None) -> dict[str,
         if h.get("counter_evidence"):
             lines.append(f"- **Counter-evidence:** "
                          f"{', '.join(h['counter_evidence'])}")
+        if h.get("contradicted_by"):
+            lines.append(f"- **In tension with flow 1:** "
+                         f"{', '.join(h['contradicted_by'])} — the claim and "
+                         f"the finding disagree; settle it before acting on "
+                         f"either.")
         if h.get("supporting_artifacts"):
             arts = ", ".join(f"#{a}" for a in h["supporting_artifacts"])
             lines.append(f"- **In-app evidence:** {arts}")
@@ -2793,18 +2887,20 @@ def hypothesis_reporter_handle(env: dict[str, Any], db: Any = None) -> dict[str,
         lines.append("")
     exec_paragraph = ""
     if verified:
-        top = verified[:3]
+        # Short sentences, rounded numbers. This used to recompute the mean
+        # inline (:g keeps six significant digits, hence "83.9333/100" in
+        # prose) and to cram every claim into one run-on sentence. The claims
+        # themselves live in the sections below; the paragraph is a pointer.
+        mean = scoring.get("confidence_pct", 0)
         strongest = max(verified, key=lambda h: h.get("confidence", 0))
+        stakes = max(verified, key=lambda h: h.get("impact", 0))
         exec_paragraph = (
-            f"{len(verified)} hypotheses were drafted from the model's internals "
-            f"and misuse assessments and are held with a mean confidence of "
-            f"{sum(float(h.get('confidence', 0)) for h in verified) / len(verified):g}/100. "
-            f"The best-evidenced is {strongest['id']}: {strongest['claim']}. "
-            + ("Highest stakes: " + "; ".join(
-                f"{h['id']} ({h.get('impact', 0):g}/5) {h['claim']}" for h in top)
-               if top else "")
-            + ". Each claim names the observation that would refute it, so the "
-              "set is checkable rather than a list of worries.")
+            f"{len(verified)} testable claims at {mean:g}/100 mean confidence. "
+            f"Best-evidenced: {strongest['id']} "
+            f"({strongest.get('confidence', 0):g}/100). "
+            f"Highest stakes: {stakes['id']} ({stakes.get('impact', 0):g}/5). "
+            "Every claim below names its refutation; test the high-stakes "
+            "ones first.")
     return reply_envelope(
         env, "hypothesis-reporter", "hypothesis_report_written",
         {"hypothesis_sections": "\n".join(lines),
@@ -3113,7 +3209,8 @@ def run_hypothesis_a2a_workflow(
         env3 = new_envelope(
             "hypothesis-orchestrator", "hypothesis-verifier", "verify_hypotheses",
             {"product_name": product_name, "use_case": use_case,
-             "hypotheses": hypotheses, "evidence": evidence},
+             "hypotheses": hypotheses, "evidence": evidence,
+             "target_rows": target_rows},
             task_id=task_id, trace=trace,
             note="argue with each claim; counter-evidence is the point",
         )

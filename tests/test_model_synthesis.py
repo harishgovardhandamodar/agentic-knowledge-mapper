@@ -176,10 +176,13 @@ class TestModelSynthesis(unittest.TestCase):
         try:
             d = _summarise(inv, ("target", "adversarial", "hypothesis"))
             brief = d["executive_summary"]
-            self.assertIn("model security synthesis over 3 workflows", brief)
-            self.assertIn("model risk", brief)
-            self.assertIn("misuse potential", brief)
-            self.assertIn("mean confidence", brief)
+            # One sentence per workflow, each with its own number and meaning.
+            for label, meaning in (("Workflow 1", "model risk"),
+                                   ("Workflow 2", "misuse potential"),
+                                   ("Hypothesis synthesis", "mean confidence")):
+                self.assertIn(label, brief)
+                self.assertIn(meaning, brief)
+            self.assertEqual(d["counts"]["assessments"], 3)
         finally:
             inv.close()
 

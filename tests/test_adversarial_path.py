@@ -256,7 +256,7 @@ class TestReport(unittest.TestCase):
         self.assertIn("tool", md.lower())
         self.assertIn("never averaged", md)
         self.assertIn("No AI-standards mapping applies", md)
-        self.assertIn("## Weightage", md)
+        self.assertIn("## Weighting", md)
         self.assertIn("## Engineered adversarial scenarios", md)
 
     def test_report_is_defensive_use_only(self):
