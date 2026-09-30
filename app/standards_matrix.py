@@ -283,6 +283,27 @@ def build_matrix(db=None, assessment_id: int | None = None) -> dict[str, Any]:
         # this module, so a top-level import would be circular.
         from . import main as main_mod
         record = main_mod._security_json(rec)
+        if record.get("assessment_path") == "model":
+            # Model-path assessments are never mapped onto AI-standards
+            # frameworks: the taxonomy scores product controls, and a
+            # weights-and-data question is answered from the model, not the
+            # catalogue. The frontend renders this as an explanation, and
+            # direct API callers get the same answer (not an empty matrix
+            # that reads as "no coverage").
+            return {"generated": data.get("generated"),
+                    "dimensions": tax.get("dimensions", []),
+                    "score_legend": tax.get("scoreLegend", {}),
+                    "assessment": {"id": rec.id,
+                                   "product": getattr(rec, "product_name", ""),
+                                   "skipped": True},
+                    "frameworks": [],
+                    "findings": None,
+                    "skipped": True,
+                    "skip_reason": ("Model-path assessment: AI-standards "
+                                    "frameworks describe product controls; this "
+                                    "assessment scores model internals by "
+                                    "dimension weight instead. See the "
+                                    "assessment's subject-profile section.")}
         query, basis = assessment_query(record)
         assessment_meta = {"id": rec.id,
                            "product": getattr(rec, "product_name", ""),

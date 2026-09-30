@@ -108,6 +108,57 @@ set. A gate therefore blocks the **run**, not a queue slot:
 
 ![The five A2A agents and what each returned](screenshots/22-security-agents.png)
 
+## Model assessment path (no catalog, no standards)
+
+When the subject profiles as a model (`security.profile_model_subject`:
+nature, architecture, class, family, data, interface — each reported only on
+explicit evidence), the assessment takes a separate A2A path instead of the
+catalog workflow above:
+
+```mermaid
+sequenceDiagram
+    actor R as Researcher
+    participant UI as Security tab
+    participant API as FastAPI
+    participant ORC as model-orchestrator
+    participant MP as model-profiler
+    participant MI as model-internals
+    participant COL as research-collector
+    participant MPR as model-privacy
+    participant ENG as scoring engine
+    participant MR as model-reporter
+    participant DB as SQLite
+    R->>UI: model name + use case + exposure
+    UI->>API: POST /investigations/{id}/security/assess
+    API->>ORC: plan_model_assessment
+    ORC->>MP: profile_model
+    MP-->>ORC: profile (family/arch/class/data/interface)
+    ORC->>MI: review_internals
+    MI-->>ORC: findings M01… + ruled-out list
+    ORC->>COL: collect_research (finding titles as queries)
+    COL-->>ORC: ranked evidence
+    ORC->>MPR: assess_model_privacy
+    MPR-->>ORC: privacy findings P01…
+    ORC->>ENG: dimension weights (privacy .35, integrity .25, surface .20, governance .20)
+    ENG-->>ORC: model aggregate (residual = inherent in v1)
+    ORC->>MR: write_model_report
+    MR-->>ORC: model sections + grounded exec paragraph
+    ORC->>DB: SecurityAssessment row (same contract, model content)
+```
+
+Weightage is explicit and stored: training-data privacy 35%, model integrity
+25%, deployment surface 20%, governance 20% (`security.MODEL_DIMENSIONS`,
+method `model-internals-v1`). Residual equals inherent — v1 maps no declared
+controls onto model dimensions, and the report says so instead of inventing a
+reduction. The what-if re-scorer refuses model rows (422): catalog arithmetic
+on model findings would be numbers from the wrong method.
+
+AI-standards mapping never happens on this path: `GET
+/api/standards/score-matrix?assessment_id=` returns `skipped: true` with the
+reason, and the Standards coverage sub-tab renders the explanation instead of
+a matrix. Frameworks describe product controls; a weights-and-data question
+is answered from the model.
+
 ## Threat model (STRIDE × OWASP LLM)
 
 Twelve threats (T01–T12) scaled by exposure tier

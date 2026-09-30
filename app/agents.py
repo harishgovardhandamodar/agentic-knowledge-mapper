@@ -88,6 +88,43 @@ AGENT_CARDS: list[dict[str, Any]] = [
         "skills": ["write_exploits_section", "write_exec_bullets"],
         "endpoint": "/api/agents/invoke",
     },
+    {
+        "name": "model-profiler",
+        "protocol": PROTOCOL,
+        "description": (
+            "Deterministically profiles the assessment subject (nature, "
+            "architecture, class, family, data, interface). No model call."
+        ),
+        "skills": ["profile_model"],
+        "endpoint": "/api/agents/invoke",
+    },
+    {
+        "name": "model-internals",
+        "protocol": PROTOCOL,
+        "description": (
+            "Reviews a model's architecture, training and inference surface; "
+            "deterministic profile rules when the model is unreachable."
+        ),
+        "skills": ["review_internals"],
+        "endpoint": "/api/agents/invoke",
+    },
+    {
+        "name": "model-privacy",
+        "protocol": PROTOCOL,
+        "description": (
+            "Assesses data minimization, retention and personal-data handling "
+            "across collect, train, serve, log and delete."
+        ),
+        "skills": ["assess_model_privacy"],
+        "endpoint": "/api/agents/invoke",
+    },
+    {
+        "name": "model-reporter",
+        "protocol": PROTOCOL,
+        "description": "Drafts the model report sections + executive paragraph.",
+        "skills": ["write_model_report"],
+        "endpoint": "/api/agents/invoke",
+    },
 ]
 
 
@@ -1036,6 +1073,521 @@ def _hop_io(trace: list[dict[str, Any]], agent: str, intent: str,
             entry["inputs"] = inputs
             entry["outputs"] = outputs
             return
+
+
+# --------------------------------------- model assessment A2A path ---------
+# A separate workflow for when the subject is a MODEL, not a conversational
+# product. Same envelope bus, different agents and different arithmetic: the
+# standard path scores catalog threats written around an AI writing
+# assistant; this one scores the model's own dimensions (training-data
+# privacy, model integrity, deployment surface, governance) with the
+# weightage in security.MODEL_DIMENSIONS. No AI-standards mapping happens
+# anywhere on this path -- frameworks describe product controls, and a
+# weights-and-data question is answered from the model, not the catalogue.
+
+
+def model_profiler_handle(env: dict[str, Any]) -> dict[str, Any]:
+    """Intent ``profile_model``: deterministic subject profile.
+
+    Pure function of product/use_case/focus -- no model call, so it cannot
+    fail, hallucinate, or stall. Everything downstream reads this profile
+    instead of re-guessing what kind of thing is being assessed.
+    """
+    from . import security as sec
+    payload = env.get("payload", {})
+    profile = sec.profile_model_subject(payload.get("product_name", ""),
+                                        payload.get("use_case", ""),
+                                        payload.get("focus") or [])
+    return reply_envelope(
+        env, "model-profiler", "model_profiled", {"profile": profile},
+        note=(f"subject_kind={'model' if profile['is_model_query'] else 'other'}; "
+              f"{profile['summary'] or 'no model signals'}"),
+    )
+
+
+def _model_finding(fid: str, title: str, dimension: str, likelihood: int,
+                   impact: int, rationale: str,
+                   mitigations: list[str]) -> dict[str, Any]:
+    from .security import _severity
+    likelihood = max(1, min(5, int(likelihood)))
+    impact = max(1, min(5, int(impact)))
+    inherent = likelihood * impact
+    return {"id": fid, "title": title, "dimension": dimension,
+            "likelihood": float(likelihood), "impact": float(impact),
+            "inherent_score": float(inherent),
+            "residual_score": float(inherent),
+            "residual_severity": _severity(inherent),
+            "coverage": 0.0, "controls": [], "applicable": True,
+            "applicability": 1.0, "rationale": rationale,
+            "mitigations": list(mitigations)}
+
+
+def _model_fallback_findings(profile: dict[str, Any]) -> tuple[list[dict], list[str]]:
+    """Deterministic internals findings from the profile alone.
+
+    Every finding states only what the profile evidences; severities are fixed
+    per rule and documented here, not tuned per subject. Anything subtler
+    waits for the LLM branch (or a human).
+    """
+    findings: list[dict[str, Any]] = []
+    excluded: list[str] = []
+    data = " ".join(profile.get("data", []))
+    if profile.get("personal_data"):
+        findings.append(_model_finding(
+            "M01", "Training-data memorization and extraction", "training_data_privacy",
+            4, 5, "trains on personal data: memorized rows are extractable outputs",
+            ["Minimize training rows to task-relevant columns",
+             "Deduplicate training data",
+             "Canary + extraction testing before release"]))
+    elif profile.get("trains_on_data"):
+        findings.append(_model_finding(
+            "M01", "Training-set membership inference", "training_data_privacy",
+            3, 4, "trains on data: membership is inferable from outputs",
+            ["Membership-inference testing", "Output rounding / top-k limiting"]))
+    if "tabular" in data:
+        findings.append(_model_finding(
+            "M02", "Schema and distribution inference from outputs",
+            "training_data_privacy", 3, 3,
+            "tabular outputs reveal column semantics and distributions",
+            ["Return predictions without confidence where unused",
+             "Rate-limit high-volume scoring"]))
+    if profile.get("model_class") in ("foundation", "large generative",
+                                      "pretrained", "pretrained encoder",
+                                      "pretrained encoder-decoder"):
+        findings.append(_model_finding(
+            "M03", "Weights provenance and supply chain", "model_integrity",
+            3, 4, "pretrained weights inherit upstream data and backdoor risk",
+            ["Pin weights by hash", "Provenance record per checkpoint"]))
+    if profile.get("model_class") == "fine-tuned":
+        findings.append(_model_finding(
+            "M03", "Poisoned fine-tuning data", "model_integrity",
+            3, 4, "fine-tuning inherits the tuning set's integrity",
+            ["Curate and version tuning data", "Pre/post eval diff"]))
+    if profile.get("interface") == "non_conversational":
+        excluded.append("prompt injection via conversational UI (no chat surface)")
+    if not findings:
+        findings.append(_model_finding(
+            "M00", "Model internals review inconclusive from brief alone",
+            "governance", 2, 3,
+            "profile carries no architecture/data signals; nothing asserted",
+            ["Supply architecture and data-flow documentation, then re-run"]))
+    return findings, excluded
+
+
+def model_internals_handle(env: dict[str, Any]) -> dict[str, Any]:
+    """Intent ``review_internals``: architecture, training and inference review.
+
+    LLM proposes per-dimension findings; the deterministic fallback below
+    still returns a usable, profile-honest review when the model is down.
+    """
+    from . import security as sec
+    payload = env.get("payload", {})
+    product = payload.get("product_name", "the model")
+    use_case = payload.get("use_case", "")
+    focus = payload.get("focus") or []
+    profile = payload.get("profile") or sec.profile_model_subject(
+        product, use_case, focus)
+    findings, excluded = _model_fallback_findings(profile)
+    source = "deterministic profile rules (no LLM)"
+    try:
+        from . import llm as _llm
+        sys_p = (
+            "You are a machine-learning security reviewer. Review the MODEL "
+            "below -- its architecture, training, weights and inference "
+            "surface -- not a chatbot product. "
+            f"Profile: {profile['summary'] or 'unclassified model'}. "
+            "Reply with STRICT JSON only: {\"findings\": [{\"id\": \"M##\", "
+            "\"title\": str, \"dimension\": one of training_data_privacy | "
+            "model_integrity | deployment_surface | governance, "
+            "\"likelihood\": 1-5, \"impact\": 1-5, "
+            "\"rationale\": str (one sentence, grounded in the profile), "
+            "\"mitigations\": [str]}], "
+            "\"excluded\": [str] (threat classes with no surface here, e.g. "
+            "conversational prompt injection when there is no chat UI)}."
+        )
+        user_p = (f"Model: {product}\nUse: {use_case}\n"
+                  f"Profile: {profile['summary'] or 'unclassified'}\n"
+                  f"Data: {', '.join(profile['data']) or 'unknown'}\n"
+                  f"Interface: {profile['interface']}\n"
+                  f"Focus: {', '.join(focus) or 'none stated'}")
+        raw = _llm.chat([{"role": "system", "content": sys_p},
+                         {"role": "user", "content": user_p}],
+                        temperature=0.1, max_tokens=1200).strip()
+        m = re.search(r"\{.*\}", raw, re.S)
+        if not m:
+            raise ValueError("model did not return a findings object")
+        data = json.loads(m.group(0))
+        llm_findings = []
+        for i, f in enumerate(data.get("findings") or [], 1):
+            if not isinstance(f, dict) or not f.get("title"):
+                continue
+            dim = str(f.get("dimension") or "governance")
+            if dim not in ("training_data_privacy", "model_integrity",
+                           "deployment_surface", "governance"):
+                dim = "governance"
+            llm_findings.append(_model_finding(
+                str(f.get("id") or f"M{i:02d}"), str(f["title"])[:140], dim,
+                f.get("likelihood", 3), f.get("impact", 3),
+                str(f.get("rationale") or "LLM-proposed finding")[:300],
+                [str(x)[:160] for x in (f.get("mitigations") or [])][:4]))
+        if llm_findings:
+            findings = llm_findings
+            excluded = [str(x)[:160] for x in (data.get("excluded") or [])][:6]
+            source = "model-internals via LLM gateway"
+    except Exception as exc:
+        source = f"deterministic profile rules (LLM unavailable: {exc})"
+    return reply_envelope(
+        env, "model-internals", "internals_reviewed",
+        {"findings": findings, "excluded": excluded, "profile": profile,
+         "source": source},
+        note=(f"{len(findings)} internals findings, "
+              f"{len(excluded)} ruled out ({source})"),
+    )
+
+
+def model_privacy_handle(env: dict[str, Any]) -> dict[str, Any]:
+    """Intent ``assess_model_privacy``: data minimization, retention, PII.
+
+    Privacy gets its own hop because for models the privacy question is about
+    the DATA LIFECYCLE (collect -> train -> serve -> log -> delete), not about
+    a UI surface. Same shape as internals: LLM first, profile rules on failure.
+    """
+    from . import security as sec
+    payload = env.get("payload", {})
+    product = payload.get("product_name", "the model")
+    use_case = payload.get("use_case", "")
+    focus = payload.get("focus") or []
+    profile = payload.get("profile") or sec.profile_model_subject(
+        product, use_case, focus)
+    findings: list[dict[str, Any]] = []
+    if profile.get("personal_data"):
+        findings.append(_model_finding(
+            "P01", "Personal data in training/serving data", "training_data_privacy",
+            4, 5, "personal data present: minimization and purpose limits apply",
+            ["Document lawful basis per data source",
+             "Minimize retained columns", "Deletion path for served data"]))
+        findings.append(_model_finding(
+            "P02", "Inference-time logging of personal data", "deployment_surface",
+            3, 4, "served prompts/outputs may be logged with personal data",
+            ["Log shapes, not values", "Short retention with deletion"]))
+    else:
+        findings.append(_model_finding(
+            "P01", "Training-data minimization unverified", "governance",
+            2, 3, "no personal-data signals; minimization posture unstated",
+            ["Record what the model trains on, even when benign"]))
+    if "tabular records" in profile.get("data", []) or "data rows" in profile.get("data", []):
+        findings.append(_model_finding(
+            "P03", "Row-level re-identification via outputs", "training_data_privacy",
+            3, 4, "tabular outputs can single out rows",
+            ["k-anonymity checks on served slices", "Suppress rare-combination outputs"]))
+    source = "deterministic profile rules (no LLM)"
+    try:
+        from . import llm as _llm
+        sys_p = (
+            "You are a privacy reviewer for MACHINE-LEARNING models, not apps. "
+            "Judge data minimization, retention, and personal-data handling across "
+            "collect -> train -> serve -> log -> delete. "
+            f"Profile: {profile['summary'] or 'unclassified model'}. "
+            "Reply with STRICT JSON only: {\"findings\": [{\"id\": \"P##\", "
+            "\"title\": str, \"dimension\": one of training_data_privacy | "
+            "deployment_surface | governance, \"likelihood\": 1-5, \"impact\": 1-5, "
+            "\"rationale\": str, \"mitigations\": [str]}]}."
+        )
+        user_p = (f"Model: {product}\nUse: {use_case}\n"
+                  f"Profile: {profile['summary'] or 'unclassified'}\n"
+                  f"Data: {', '.join(profile['data']) or 'unknown'}\n"
+                  f"Personal data: {profile['personal_data']}\n"
+                  f"Focus: {', '.join(focus) or 'none stated'}")
+        raw = _llm.chat([{"role": "system", "content": sys_p},
+                         {"role": "user", "content": user_p}],
+                        temperature=0.1, max_tokens=1000).strip()
+        m = re.search(r"\{.*\}", raw, re.S)
+        if not m:
+            raise ValueError("model did not return a findings object")
+        data = json.loads(m.group(0))
+        llm_findings = []
+        for i, f in enumerate(data.get("findings") or [], 1):
+            if not isinstance(f, dict) or not f.get("title"):
+                continue
+            dim = str(f.get("dimension") or "governance")
+            if dim not in ("training_data_privacy", "deployment_surface",
+                           "governance", "model_integrity"):
+                dim = "governance"
+            llm_findings.append(_model_finding(
+                str(f.get("id") or f"P{i:02d}"), str(f["title"])[:140], dim,
+                f.get("likelihood", 3), f.get("impact", 3),
+                str(f.get("rationale") or "LLM-proposed finding")[:300],
+                [str(x)[:160] for x in (f.get("mitigations") or [])][:4]))
+        if llm_findings:
+            findings = llm_findings
+            source = "model-privacy via LLM gateway"
+    except Exception as exc:
+        source = f"deterministic profile rules (LLM unavailable: {exc})"
+    return reply_envelope(
+        env, "model-privacy", "model_privacy_assessed",
+        {"findings": findings, "source": source},
+        note=f"{len(findings)} privacy findings ({source})",
+    )
+
+
+def model_reporter_handle(env: dict[str, Any], db: Any = None) -> dict[str, Any]:
+    """Intent ``write_model_report``: model sections markdown + exec paragraph.
+
+    The exec paragraph follows the same grounding discipline as the standard
+    writer: every #id it cites must resolve to supplied evidence, else the
+    deterministic fallback ships instead of confident fiction.
+    """
+    payload = env.get("payload", {})
+    product = payload.get("product_name", "the model")
+    exposure_label = payload.get("exposure_label", "")
+    profile = payload.get("profile", {}) or {}
+    dimensions = payload.get("dimensions", []) or []
+    findings = payload.get("findings", []) or []
+    evidence = payload.get("evidence", []) or []
+    scoring = payload.get("scoring", {}) or {}
+    lines: list[str] = []
+    A = lines.append
+    A(f"## Subject profile — {product}")
+    A("")
+    A(f"_{profile.get('summary') or 'Unclassified model: assess conservatively.'}_")
+    A("")
+    if profile.get("families"):
+        A(f"Family: {', '.join(profile['families'])}. ")
+    if profile.get("data"):
+        A(f"Processes {', '.join(profile['data'])}.")
+    A("")
+    A("## Internals review (weighted dimensions)")
+    A("")
+    for d in dimensions:
+        A(f"- **{d['id']}** ({d['weight']:.0%} weight): "
+          f"**{d['score']:.0f}/100**.")
+    A("")
+    A("## Privacy findings")
+    A("")
+    for f in [x for x in findings if x["id"].startswith("P")]:
+        A(f"- **{f['id']} {f['title']}** — {f['rationale']} "
+          f"Mitigations: {'; '.join(f['mitigations']) or '—'}.")
+    if not [x for x in findings if x["id"].startswith("P")]:
+        A("No privacy findings recorded.")
+    A("")
+    A("## Internals findings")
+    A("")
+    for f in [x for x in findings if not x["id"].startswith("P")]:
+        A(f"- **{f['id']} {f['title']}** (L{f['likelihood']:g}×I{f['impact']:g}) — "
+          f"{f['rationale']} Mitigations: {'; '.join(f['mitigations']) or '—'}.")
+    A("")
+    exec_paragraph = ""
+    try:
+        from . import llm as _llm
+        ev_txt = "\n".join(
+            f"- #{e['artifact_id']} {e['title']} (rel {e.get('relevance')})"
+            for e in sorted(evidence, key=lambda e: -e.get("relevance", 0))[:6]) or "- none"
+        sys = ("You are an AI security engineer writing one executive-summary "
+               "paragraph about a MACHINE-LEARNING model. Be concrete and cite "
+               "the evidence by artifact #id. Reply with the paragraph only.")
+        user = (f"Model: {product} ({profile.get('summary') or 'unclassified'})\n"
+                f"Exposure tier: {exposure_label}\n"
+                f"Model risk: {scoring.get('overall_pct', 0):g}/100 "
+                f"({scoring.get('method', 'model-internals-v1')})\n"
+                f"In-app evidence:\n{ev_txt}\n\n"
+                "Write 3-4 sentences: verdict, sharpest model-native attack "
+                "path, what the evidence confirms.")
+        text = _llm.chat([{"role": "system", "content": sys},
+                          {"role": "user", "content": user}],
+                         temperature=0.2, max_tokens=512).strip()
+        check = grounding.verify_citation_ids(
+            text, [e.get("artifact_id") for e in evidence or []])
+        check["method"] = "citation_id_check"
+        if check.get("status") == "violation":
+            raise ValueError("exec paragraph cites nothing real")
+        exec_paragraph = text
+    except Exception:
+        top = sorted(findings,
+                     key=lambda f: -(f.get("inherent_score", 0)))[:2]
+        exec_paragraph = (
+            f"Model risk is {scoring.get('overall_pct', 0):g}/100 for {product} "
+            f"({profile.get('summary') or 'unclassified model'}). "
+            + ("Sharpest paths: " + "; ".join(
+                f"{f['id']} {f['title']}" for f in top) + ". " if top else "")
+            + "Deterministic brief: no model call made.")
+    return reply_envelope(
+        env, "model-reporter", "model_report_written",
+        {"model_sections": "\n".join(lines), "exec_paragraph": exec_paragraph},
+        note=(f"model report ({len(lines)} lines) + "
+              f"{len(exec_paragraph)}-char exec paragraph"),
+    )
+
+
+def run_model_a2a_workflow(
+    product_name: str,
+    use_case: str,
+    focus: Optional[list[str]] = None,
+    db: Any = None,
+    investigation_id: Any = None,
+    exposure_label: str = "",
+    exposure: str = "confidential_data",
+) -> dict[str, Any]:
+    """Model assessment workflow: profiler → internals → collector →
+    privacy → scoring (engine) → reporter. Never raises.
+
+    Separate from run_security_a2a_workflow on purpose: different agents,
+    different arithmetic (dimension weights, not catalog L×I), and NO
+    standards mapping anywhere on this path. Returns the same top-level
+    keys the standard workflow returns, so storage and UI need no new
+    columns -- the content differs, the contract does not.
+    """
+    from . import security as sec
+    task_id = new_task_id(prefix="mod")
+    trace: list[dict[str, Any]] = [{
+        "agent": "model-orchestrator", "intent": "plan_model_assessment",
+        "at": _now(),
+        "note": (f"task {task_id}: model-profiler → model-internals → "
+                 "research-collector → model-privacy → scoring engine → "
+                 "model-reporter (no standards mapping)"),
+    }]
+    focus = focus or []
+    evidence: list[dict[str, Any]] = []
+    queries_run: list[str] = []
+    scope = ""
+    findings: list[dict[str, Any]] = []
+    excluded: list[str] = []
+    profile: dict[str, Any] = {}
+    scoring: dict[str, Any] = {}
+    exec_paragraph = ""
+    model_sections = ""
+    try:
+        env0 = new_envelope(
+            "model-orchestrator", "model-profiler", "profile_model",
+            {"product_name": product_name, "use_case": use_case,
+             "focus": focus},
+            task_id=task_id, trace=trace,
+            note="deterministic subject profile",
+        )
+        res0 = dispatch(env0, db)
+        trace = res0["trace"]
+        profile = res0["payload"].get("profile", {})
+
+        env1 = new_envelope(
+            "model-orchestrator", "model-internals", "review_internals",
+            {"product_name": product_name, "use_case": use_case,
+             "focus": focus, "profile": profile},
+            task_id=task_id, trace=trace,
+            note="architecture/training/inference review",
+        )
+        res1 = dispatch(env1, db)
+        trace = res1["trace"]
+        findings = list(res1["payload"].get("findings", []))
+        excluded = list(res1["payload"].get("excluded", []))
+
+        env2 = new_envelope(
+            "model-orchestrator", "research-collector", "collect_research",
+            {"product_name": product_name, "use_case": use_case,
+             "threat_titles": [f["title"] for f in findings],
+             "top_k": 8, "investigation_id": investigation_id},
+            task_id=task_id, trace=trace,
+            note="delegate agentic in-app search",
+        )
+        res2 = dispatch(env2, db)
+        trace = res2["trace"]
+        evidence = res2["payload"].get("evidence", [])
+        queries_run = res2["payload"].get("queries_run", [])
+        scope = res2["payload"].get("scope", "")
+        _hop_io(trace, "research-collector", "collect_research",
+                f"{len(queries_run)} queries · scope {scope or 'all'}",
+                f"{len(evidence)} artifacts, top relevance "
+                f"{max((e.get('relevance', 0) for e in evidence), default=0):.2f}")
+
+        env3 = new_envelope(
+            "model-orchestrator", "model-privacy", "assess_model_privacy",
+            {"product_name": product_name, "use_case": use_case,
+             "focus": focus, "profile": profile},
+            task_id=task_id, trace=trace,
+            note="data lifecycle privacy review",
+        )
+        res3 = dispatch(env3, db)
+        trace = res3["trace"]
+        findings = findings + list(res3["payload"].get("findings", []))
+
+        scoring = sec.score_model_assessment(
+            {d["id"]: d["score"] for d in _model_dimension_inputs(
+                profile, findings)})
+        trace.append({
+            "agent": "model-orchestrator", "intent": "score",
+            "at": _now(),
+            "note": (f"model aggregate {scoring.get('overall_pct', 0):g}/100 "
+                     f"({scoring.get('method', '')})"),
+        })
+
+        env4 = new_envelope(
+            "model-orchestrator", "model-reporter", "write_model_report",
+            {"product_name": product_name, "exposure_label": exposure_label,
+             "profile": profile, "dimensions": scoring.get("dimensions", []),
+             "findings": findings, "evidence": evidence, "scoring": scoring},
+            task_id=task_id, trace=trace,
+            note="draft model sections + exec paragraph",
+        )
+        res4 = dispatch(env4, db)
+        trace = res4["trace"]
+        model_sections = res4["payload"].get("model_sections", "")
+        exec_paragraph = res4["payload"].get("exec_paragraph", "")
+        _hop_io(trace, "model-reporter", "write_model_report",
+                f"{len(findings)} findings, {len(evidence)} evidence items",
+                f"{len(model_sections)} chars sections, "
+                f"{len(exec_paragraph)} chars paragraph")
+    except Exception as exc:
+        trace.append({"agent": "model-orchestrator", "intent": "workflow_error",
+                      "at": _now(), "note": f"{exc}"})
+    return {
+        "task_id": task_id,
+        "evidence": evidence,
+        "queries_run": queries_run,
+        "scope": scope,
+        "known_exploits": [],
+        "exploits_markdown": "",
+        "exec_evidence_lines": [],
+        "exec_evidence_refs": [],
+        "exec_paragraph": exec_paragraph,
+        "control_plan": {},
+        "applicability": {},
+        "evidence_confidence": {},
+        "scoring": scoring,
+        "a2a_trace": trace,
+        # model-path extras (ignored by standard consumers)
+        "model_profile": profile,
+        "model_dimensions": scoring.get("dimensions", []),
+        "model_findings": findings,
+        "model_excluded": excluded,
+        "model_sections": model_sections,
+    }
+
+
+def _model_dimension_inputs(profile: dict[str, Any],
+                            findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Per-dimension 0..100 inputs for the scoring engine: mean finding score
+    per dimension, baseline where a dimension drew no findings."""
+    from . import security as sec
+    by_dim: dict[str, list[float]] = {}
+    for f in findings:
+        try:
+            score = float(f.get("inherent_score", 0)) / 25.0 * 100.0
+        except (TypeError, ValueError):
+            continue
+        by_dim.setdefault(str(f.get("dimension", "governance")), []).append(score)
+    out = []
+    for dim_id, _weight, _desc in sec.MODEL_DIMENSIONS:
+        vals = by_dim.get(dim_id, [])
+        out.append({"id": dim_id,
+                    "score": sum(vals) / len(vals) if vals else 20.0})
+    return out
+
+
+_MODEL_HANDLERS = {
+    "model-profiler": {"profile_model": model_profiler_handle},
+    "model-internals": {"review_internals": model_internals_handle},
+    "model-privacy": {"assess_model_privacy": model_privacy_handle},
+    "model-reporter": {"write_model_report": model_reporter_handle},
+}
+_HANDLERS.update(_MODEL_HANDLERS)
 
 
 def run_security_a2a_workflow(

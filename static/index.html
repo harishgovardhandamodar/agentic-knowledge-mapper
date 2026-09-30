@@ -3681,6 +3681,7 @@ function secClearForm() {
 async function secLoadLatestForInvestigation() {
   if (!currentInv) return;
   secAssessmentId = null;
+  secAssessmentPath = 'standard';
   secLastScore = null;
   secRefreshCveCount();
   try {
@@ -4930,6 +4931,7 @@ loadExplDefaults();
 let secRunId = null;
 let secPollTimer = null;
 let secAssessmentId = null;
+let secAssessmentPath = 'standard';
 let secControlCatalog = [];
 let secLastScore = null;
 let secWhatIfTimer = null;
@@ -5234,14 +5236,23 @@ const SEC_PIPELINE = [
   { agent: 'scoring engine', intent: 'deterministic' },
   { agent: 'report-writer', intent: 'write_section' },
 ];
+const SEC_MODEL_PIPELINE = [
+  { agent: 'model-profiler', intent: 'profile_model' },
+  { agent: 'model-internals', intent: 'review_internals' },
+  { agent: 'research-collector', intent: 'collect_research' },
+  { agent: 'model-privacy', intent: 'assess_model_privacy' },
+  { agent: 'scoring engine', intent: 'dimension weights' },
+  { agent: 'model-reporter', intent: 'write_model_report' },
+];
 
-function renderSecPipeline(trace, currentStage) {
+function renderSecPipeline(trace, currentStage, modelPath) {
   const box = document.getElementById('secPipe');
   if (!box) return;
   const notes = {};
   (trace || []).forEach(h => { if (h && h.agent) notes[h.agent] = h.note || ''; });
   const doneAgents = new Set((trace || []).map(h => h.agent).filter(Boolean));
-  box.innerHTML = SEC_PIPELINE.map((hop, i) => {
+  const hops = modelPath ? SEC_MODEL_PIPELINE : SEC_PIPELINE;
+  box.innerHTML = hops.map((hop, i) => {
     let cls = 'wait';
     if (doneAgents.has(hop.agent)) cls = 'done';
     if (currentStage === hop.agent) cls = 'active';
@@ -5884,11 +5895,13 @@ function renderSecurityReport(data) {
     ${execPara}
     ${whatIf}
     <div class="sec-card"><h3><i class="fas fa-diagram-project"></i> Agent pipeline</h3><div class="sec-pipe" id="secPipe"></div>
-      <div class="sec-formula">A2A protocol <code>a2a/1.0</code>: orchestrator → <strong>control-analyst</strong> (applicability + controls) → research-collector (in-app graph search) → threat-intel (attacks + confidence) → <strong>scoring engine</strong> (deterministic L×I math) → report-writer.</div>
+      <div class="sec-formula">A2A protocol <code>a2a/1.0</code>: ${data.assessment_path === 'model'
+        ? 'model-orchestrator → <strong>model-profiler</strong> (subject profile) → model-internals (architecture/training/inference) → research-collector (in-app graph search) → model-privacy (data lifecycle) → <strong>scoring engine</strong> (dimension weights) → model-reporter. No standards mapping on this path.'
+        : 'orchestrator → <strong>control-analyst</strong> (applicability + controls) → research-collector (in-app graph search) → threat-intel (attacks + confidence) → <strong>scoring engine</strong> (deterministic L×I math) → report-writer.'}</div>
     </div>
     <div class="sec-card"><h3><i class="fas fa-diagram-project"></i> Data-flow &amp; trust boundary</h3><div class="diagram-wrap"><div class="mermaid">${escHtml(dg.dataflow || '')}</div></div>
-      <h4>Threat paths</h4><div class="diagram-wrap"><div class="mermaid">${escHtml(dg.threat_paths || '')}</div></div>
-      <h4>Secure workflow</h4><div class="diagram-wrap"><div class="mermaid">${escHtml(dg.workflow || '')}</div></div>
+      ${data.assessment_path === 'model' ? '' : `<h4>Threat paths</h4><div class="diagram-wrap"><div class="mermaid">${escHtml(dg.threat_paths || '')}</div></div>
+      <h4>Secure workflow</h4><div class="diagram-wrap"><div class="mermaid">${escHtml(dg.workflow || '')}</div></div>`}
     </div>`;
 
   const paneThreats = `
@@ -5956,7 +5969,7 @@ function renderSecurityReport(data) {
   const audHost = document.getElementById('secAudPanel');
   if (audHost) audHost.innerHTML = secAudiencePanel();
   secApplyRoleHighlights();
-  renderSecPipeline(trace, null);
+  renderSecPipeline(trace, null, data.assessment_path === 'model');
   // reflect the stored control set in the controls panel
   if (activeCtrls.length || (data.active_controls || []).length === 0) {
     secControlCatalog.forEach(c => {
@@ -6090,8 +6103,22 @@ function secStdKey() { return secAssessmentId ? String(secAssessmentId) : 'all';
 
 async function secLoadStandards(force) {
   const key = secStdKey();
-  if (!force && secStdCache[key]) { secStdRender(); return; }
   const body = document.getElementById('secStdBody');
+  if (secAssessmentId && secAssessmentPath === 'model') {
+    // Model-path assessments are never mapped onto AI-standards frameworks
+    // (the backend says the same if asked directly): show why, not an empty
+    // matrix that reads as "no coverage".
+    document.getElementById('secStdCount').hidden = true;
+    document.getElementById('secStdFoot').textContent = '';
+    if (body) body.innerHTML = `<div class="std-err" style="border-color:var(--teal);">` +
+      `<strong>Not mapped — by design.</strong> Assessment #${escHtml(String(secAssessmentId))} ` +
+      `ran on the model-internals path: it scores the model's own dimensions ` +
+      `(training-data privacy, model integrity, deployment surface, governance) ` +
+      `by weight instead of mapping product threats onto AI-standards frameworks. ` +
+      `See the report's Subject profile section.</div>`;
+    return;
+  }
+  if (!force && secStdCache[key]) { secStdRender(); return; }
   if (body) body.innerHTML = '<div class="std-err">Loading the standards taxonomy…</div>';
   try {
     const url = secAssessmentId
@@ -6765,6 +6792,7 @@ async function loadSecurityById(id) {
   try {
     const data = await (await fetch(`${API}/security/assessments/${id}`)).json();
     secAssessmentId = data.id;
+    secAssessmentPath = data.assessment_path || 'standard';
     if (data.investigation_id && data.investigation_id !== currentInv) {
       currentInv = data.investigation_id;
       const sel = document.getElementById('secInvSelect');

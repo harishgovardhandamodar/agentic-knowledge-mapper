@@ -1409,7 +1409,31 @@ def _security_json(rec: SecurityAssessment) -> dict:
         "a2a_trace": tr.get("trace", []),
         "threat_pack": pack,
         "created_at": rec.created_at.isoformat() if rec.created_at else None,
+        **_assessment_path_fields(rec, scoring),
     }
+
+
+def _assessment_path_fields(rec, scoring: dict) -> dict:
+    """How this assessment was produced: standard catalog path or the
+    separate model-internals path. Stored rows predate the marker, so it is
+    re-derived from the row's own product/use_case/focus when absent -- the
+    profiler is deterministic, so derivation then and now agree."""
+    path = scoring.get("assessment_path")
+    profile = None
+    if path not in ("model", "standard"):
+        try:
+            import json as _json
+            focus = _json.loads(rec.focus_json) if rec.focus_json else []
+        except Exception:
+            focus = []
+        profile = sec_engine.profile_model_subject(rec.product_name or "",
+                                                   rec.use_case or "",
+                                                   focus or [])
+        path = "model" if profile["is_model_query"] else "standard"
+    if profile is None:
+        profile = sec_engine.profile_model_subject(rec.product_name or "",
+                                                   rec.use_case or "", [])
+    return {"assessment_path": path, "subject_profile": profile}
 
 
 @app.get("/api/security/threat-pack")
@@ -1510,6 +1534,19 @@ def rescore_security_assessment(assessment_id: int, data: SecurityRescoreRequest
         SecurityAssessment.id == assessment_id).first()
     if not rec:
         raise HTTPException(404, "Assessment not found")
+    try:
+        stored_scoring = json.loads(rec.scoring_json or "{}")
+    except Exception:
+        stored_scoring = {}
+    if _assessment_path_fields(rec, stored_scoring).get("assessment_path") == "model":
+        # The what-if re-scorer varies catalog controls against catalog
+        # threats; a model assessment has neither (dimension weights
+        # instead). Re-running catalog math on it would produce numbers
+        # from the wrong method wearing this id.
+        raise HTTPException(
+            422, "Model-path assessment: re-score does not apply (no catalog "
+                 "threats or controls to vary). Re-run the assessment to "
+                 "recompute its dimension weights.")
     try:
         stored_threats = json.loads(rec.threats_json or "[]")
     except Exception:

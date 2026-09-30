@@ -114,7 +114,10 @@ stateDiagram-v2
 
 - Each topic's research run is a normal `AgentRun` with `trigger='manual'`-style
   focus terms; each topic's assessment is a normal security run, with its own
-  job, ledger run, and A2A task id.
+  job, ledger run, and A2A task id. When a topic's subject profiles as a
+  model, its assessment automatically takes the model-internals A2A path
+  (see security-agent.md) — no manager option needed, since the routing
+  reads the same subject the plan already extracted.
 - The summary is a real investigation holding a `manager-synthesis` artifact,
   so it is readable in the mapper, nestable in the sidebar, and answerable by
   the Explainer like any other graph.

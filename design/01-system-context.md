@@ -53,7 +53,7 @@ flowchart TB
         AG["agent.py<br/>collection loop"]
         EX["explainer.py<br/>Q&A pipeline"]
         SA["security_agent.py<br/>assessment worker"]
-        A2A["agents.py<br/>A2A envelope bus · 5 agent cards"]
+        A2A["agents.py<br/>A2A envelope bus · 9 agent cards"]
         EN["security.py<br/>threat pack · scoring · report"]
         MGR["manager.py<br/>parse · fan-out · synthesis"]
         STD["standards_matrix.py<br/>score matrix · findings"]
@@ -86,7 +86,7 @@ flowchart TB
 | `agent.py` | plan → search → analyze → map → refine | 429 guard when a run is already going |
 | `explainer.py` | research → compose → ground → critique → save | Bounded phases; corpus cache makes repeats free |
 | `security_agent.py` | Assessment orchestration + approval gate | Parks on `awaiting_approval` rather than proceeding |
-| `agents.py` | A2A `a2a/1.0` envelopes, 5 agent cards | Every hop appended to the trace and the chain |
+| `agents.py` | A2A `a2a/1.0` envelopes, 9 agent cards (5 catalog + 4 model) | Every hop appended to the trace and the chain |
 | `security.py` | Threat pack 2.1.0, deterministic scoring, report | Pure function; pinned by `evalkit.py` |
 | `manager.py` | Command parse, fan-out, synthesis | No background watcher — statuses derive live |
 | `standards_matrix.py` | 34 frameworks × 10 pillars, relevance ranking | Cached; `no-store` per assessment |

@@ -446,6 +446,86 @@ _MIN_RESIDUAL_LIKELIHOOD = 0.35  # controls never take a threat below 35% of inh
 _MIN_APPLICABILITY = 0.3          # below this a threat is reported but not scored
 
 
+# Model assessment dimensions: the weightage of a model security assessment.
+# A conversational product is scored threat-by-threat against the catalog;
+# a model is scored by how it handles data, how sound it is, how it is
+# exposed, and how it is governed -- internals and working first (60%),
+# deployment and governance second. Weights sum to 1.0; changing them
+# changes every model score, so the method string travels with the numbers.
+MODEL_DIMENSIONS: tuple[tuple[str, float, str], ...] = (
+    ("training_data_privacy", 0.35,
+     "memorization, extraction, membership inference, training-data minimization"),
+    ("model_integrity", 0.25,
+     "poisoning, backdoors, weights provenance, supply chain"),
+    ("deployment_surface", 0.20,
+     "inference exposure, access control, logging of served data"),
+    ("governance", 0.20,
+     "documentation, evaluation, monitoring, incident readiness"),
+)
+MODEL_SCORING_METHOD = "model-internals-v1"
+
+
+def score_model_assessment(dimensions: dict[str, float]) -> dict[str, Any]:
+    """Weighted model aggregate. Pure function, same contract shape as the
+    catalog scorer's headline numbers so storage and UI need no new columns.
+
+    ``dimensions`` maps dimension id -> 0..100 (higher = riskier). Missing
+    dimensions score the documented baseline (low concern, no signals) rather
+    than zero -- an unscored dimension is unexamined, not safe. Residual
+    equals inherent: v1 maps no declared controls onto model dimensions, and
+    a residual that pretends otherwise would be fiction. The posture text
+    says exactly that.
+    """
+    rows = []
+    total = 0.0
+    for dim_id, weight, _desc in MODEL_DIMENSIONS:
+        try:
+            score = max(0.0, min(100.0, float(dimensions.get(dim_id, 20.0))))
+        except (TypeError, ValueError):
+            score = 20.0
+        contrib = round(score * weight, 2)
+        total += contrib
+        rows.append({"id": dim_id, "weight": weight, "score": round(score, 1),
+                     "contribution": contrib})
+    overall = round(total, 1)
+    return {
+        "method": MODEL_SCORING_METHOD,
+        "assessment_path": "model",
+        "dimensions": rows,
+        "weights": {d[0]: d[1] for d in MODEL_DIMENSIONS},
+        "inherent_pct": overall,
+        "overall_pct": overall,
+        "residual_pct": overall,
+        "delta": 0.0,
+        "active_controls": [],
+        "posture": ("MODEL RISK — internals-weighted aggregate; residual equals "
+                    "inherent: v1 maps no declared controls onto model dimensions"),
+    }
+
+
+def mermaid_model_flow(product: str, profile: dict[str, Any]) -> str:
+    """Data-flow diagram for a model subject: training data -> weights ->
+    inference -> consumers. Built from the profile, so an unknown part reads
+    as unknown instead of inventing a box."""
+    p = (product or "Model").replace('"', "'")[:36]
+    fam = ("/".join(profile.get("families", [])) or
+           profile.get("model_class") or "model")
+    fam = fam.replace('"', "'")[:36]
+    data = ", ".join(profile.get("data", [])[:2]) or "training data"
+    data = data.replace('"', "'")[:36]
+    iface = ("chat UI" if profile.get("interface") == "conversational"
+             else "API / batch" if profile.get("interface") == "non_conversational"
+             else "serving surface")
+    return (
+        "flowchart LR\n"
+        f'    D["{data}"] -->|train / fine-tune| W["{fam}\\nweights"]\n'
+        f'    W -->|serve| I["{p}\\ninference"]\n'
+        f'    I -->|{iface}| C["consumers"]\n'
+        '    I -.->|"log + monitor"| M["telemetry"]\n'
+        "    style W fill:#d29922,stroke:#333,color:#000\n"
+    )
+
+
 # Model subject profiler: what KIND of thing is being assessed.
 #
 # The catalog and most prompts were written for a conversational product, so
@@ -516,6 +596,13 @@ _PERSONAL_DATA_TERMS = frozenset(
      "user data", "account holder"))
 
 
+def _hit(blob: str, *frags: str) -> bool:
+    """Whole-word fragment match. Substring matching lies here: "GPT" fires
+    inside "WidgetGPT", "api" inside "rapid", "gru" inside "grumpy" -- each a
+    false model signal that would reroute a product assessment."""
+    return any(re.search(r"\b" + re.escape(f) + r"\b", blob) for f in frags)
+
+
 def profile_model_subject(product: str, use_case: str = "",
                           focus: list[str] | None = None) -> dict[str, Any]:
     """Read what kind of subject an assessment is about.
@@ -533,7 +620,7 @@ def profile_model_subject(product: str, use_case: str = "",
     clean = blob
     for p in _MODEL_QUERY_EXCLUSIONS:
         clean = p.sub(" ", clean)
-    model_hit = any(t in clean for t in _MODEL_QUERY_TERMS)
+    model_hit = _hit(clean, *_MODEL_QUERY_TERMS)
     profile: dict[str, Any] = {
         "is_model_query": bool(model_hit),
         "families": [], "architectures": [], "model_class": "unknown",
@@ -543,29 +630,28 @@ def profile_model_subject(product: str, use_case: str = "",
     if not model_hit:
         return profile
     for frag, label, cls, arch in _MODEL_FAMILIES:
-        if frag in blob and label not in profile["families"]:
+        if _hit(blob, frag) and label not in profile["families"]:
             profile["families"].append(label)
             if profile["model_class"] == "unknown":
                 profile["model_class"] = cls
             if arch not in profile["architectures"]:
                 profile["architectures"].append(arch)
     for frag, arch in _MODEL_ARCH_TERMS:
-        if frag in blob and arch not in profile["architectures"]:
+        if _hit(blob, frag) and arch not in profile["architectures"]:
             profile["architectures"].append(arch)
-    if "foundation" in blob and profile["model_class"] == "unknown":
+    if _hit(blob, "foundation") and profile["model_class"] == "unknown":
         profile["model_class"] = "foundation"
-    elif "fine-tun" in blob:
+    elif re.search(r"\bfine-tun\w*\b|\bfinetun\w*\b", blob):
         profile["model_class"] = "fine-tuned"
     for frag, label in _MODEL_DATA_TERMS:
-        if frag in blob and label not in profile["data"]:
+        if _hit(blob, frag) and label not in profile["data"]:
             profile["data"].append(label)
     profile["trains_on_data"] = bool(
         re.search(r"\btrain\w*\b|\bfit\b|\bfine-tun\w*\b|\bpre-train\w*\b|\bpretrain\w*\b", blob))
-    profile["personal_data"] = any(t in blob for t in _PERSONAL_DATA_TERMS)
-    if any(t in _CONVERSATIONAL_NEGATION.sub(" ", blob)
-            for t in _CONVERSATIONAL_TERMS):
+    profile["personal_data"] = _hit(blob, *_PERSONAL_DATA_TERMS)
+    if _hit(_CONVERSATIONAL_NEGATION.sub(" ", blob), *_CONVERSATIONAL_TERMS):
         profile["interface"] = "conversational"
-    elif any(t in blob for t in _NON_CONVERSATIONAL_TERMS):
+    elif _hit(blob, *_NON_CONVERSATIONAL_TERMS):
         profile["interface"] = "non_conversational"
     bits = []
     if profile["families"]:
@@ -1196,6 +1282,21 @@ def build_assessment(
         )
 
     focus = focus or ["accidental_copy", "misclassification"]
+    model_profile = profile_model_subject(product_name or "", use_case or "",
+                                          focus)
+    if model_profile["is_model_query"]:
+        # Separate A2A path: the subject is a model, so catalog threats
+        # written around a writing assistant would mis-frame it. The model
+        # workflow scores internals by dimension weight and maps no
+        # AI-standards frameworks; same result contract, different content.
+        return _build_model_assessment(
+            product_name=product_name or "Target model",
+            product_url=product_url or "",
+            exposure=exposure, meta=meta, weight=weight,
+            use_case=use_case or "", workflow_text=workflow_text or "",
+            focus=focus, db=db, investigation_id=investigation_id,
+            declared_controls=declared_controls or [],
+            profile=model_profile)
     diagrams = {
         "dataflow": mermaid_dataflow(product_name or "Catalog"),
         "threat_paths": mermaid_threat_paths(),
@@ -1305,6 +1406,195 @@ def build_assessment(
         "openshell": osh_block,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
+
+
+def _build_model_assessment(product_name: str, product_url: str,
+                            exposure: str, meta: dict[str, Any], weight: float,
+                            use_case: str, workflow_text: str,
+                            focus: list[str], db: Any, investigation_id: Any,
+                            declared_controls: list[str],
+                            profile: dict[str, Any]) -> dict[str, Any]:
+    """Assessment for a model subject: separate A2A path, same result contract.
+
+    Runs agents.run_model_a2a_workflow (profiler → internals → collector →
+    privacy → dimension scoring → reporter) and assembles the same keys
+    build_assessment returns, so persistence, the report UI and the manager
+    compile path work unchanged. Differences are all content: model findings
+    instead of catalog threats, dimension weights instead of L×I control
+    math, a model data-flow diagram, and no standards mapping anywhere.
+    """
+    from .agents import run_model_a2a_workflow
+    a2a = run_model_a2a_workflow(
+        product_name=product_name,
+        use_case=use_case,
+        focus=focus,
+        db=db,
+        investigation_id=investigation_id,
+        exposure_label=meta["label"],
+        exposure=exposure,
+    )
+    scoring = a2a.get("scoring") or {}
+    findings = a2a.get("model_findings", []) or []
+    overall_pct = scoring.get("overall_pct", 0)
+    posture = scoring.get("posture", "")
+    control_plan = {"declared_controls": declared_controls or [],
+                    "proposed_controls": [],
+                    "confidence": 0.5,
+                    "source": ("model path: the control catalogue describes "
+                               "product controls, not model dimensions")}
+
+    def _metric(k: str, v: Any, tone: str = "neutral") -> dict[str, Any]:
+        return {"k": k, "v": v, "tone": tone}
+
+    def _bullet(text: str, tone: str = "neutral") -> dict[str, str]:
+        return {"text": text, "tone": tone}
+
+    top = sorted(findings, key=lambda f: -(f.get("residual_score", 0)))
+    perspectives = [{
+        "key": "model", "label": "Model review", "icon": "fa-microchip",
+        "headline": (f"{product_name}: model risk "
+                     f"{scoring.get('overall_pct', 0):g}/100 across "
+                     f"{len(scoring.get('dimensions', []))} weighted dimensions"),
+        "metrics": [
+            _metric("Model risk", f"{scoring.get('overall_pct', 0):g}",
+                    "high" if scoring.get("overall_pct", 0) >= 60 else "medium"),
+            _metric("Top dimension",
+                    next((d["id"] for d in sorted(
+                        scoring.get("dimensions", []),
+                        key=lambda d: -d.get("contribution", 0))), "—")),
+            _metric("Findings", len(findings)),
+            _metric("Ruled out", len(a2a.get("model_excluded", []))),
+        ],
+        "bullets": [
+            _bullet(f"Sharpest paths: " + "; ".join(
+                f"{f['id']} {f['title']}" for f in top[:3]) + "."
+                if top else "No findings recorded."),
+            _bullet("Residual equals inherent: v1 maps no declared controls "
+                    "onto model dimensions; mitigations are advisory until "
+                    "a control mapping exists."),
+        ],
+        "focus": ["Model internals", "Data privacy", "Deployment"],
+    }]
+    diagrams = {
+        "dataflow": mermaid_model_flow(product_name, profile),
+        "threat_paths": "",
+        "workflow": "",
+    }
+    inv_artifacts = _load_investigation_artifacts(db, investigation_id)
+    markdown = render_model_markdown(
+        product_name=product_name, product_url=product_url,
+        exposure_label=meta["label"], exposure_blurb=meta["blurb"],
+        use_case=use_case, profile=profile,
+        scoring=scoring, findings=findings,
+        excluded=a2a.get("model_excluded", []),
+        perspectives=perspectives, diagrams=diagrams,
+        evidence=a2a.get("evidence", []),
+        queries_run=a2a.get("queries_run", []),
+        model_sections=a2a.get("model_sections", ""),
+        exec_paragraph=a2a.get("exec_paragraph", ""),
+        a2a_task_id=a2a.get("task_id", ""))
+    return {
+        "product_name": product_name,
+        "product_url": product_url,
+        "exposure": exposure,
+        "exposure_label": meta["label"],
+        "overall_pct": overall_pct,
+        "inherent_pct": scoring.get("inherent_pct", overall_pct),
+        "residual_pct": scoring.get("residual_pct", overall_pct),
+        "delta": scoring.get("delta", 0.0),
+        "confidence": 0.5,
+        "posture": posture,
+        "threats": findings,
+        "scoring": scoring,
+        "perspectives": perspectives,
+        "control_plan": control_plan,
+        "active_controls": declared_controls or [],
+        "evidence_confidence": {},
+        "diagrams": diagrams,
+        "pages": [],
+        "fetched_count": 0,
+        "markdown": markdown,
+        "evidence": a2a.get("evidence", []),
+        "queries_run": a2a.get("queries_run", []),
+        "artifact_count": len(inv_artifacts),
+        "scope": a2a.get("scope", ""),
+        "known_exploits": [],
+        "exec_paragraph": a2a.get("exec_paragraph", ""),
+        "a2a_trace": a2a.get("a2a_trace", []),
+        "a2a_task_id": a2a.get("task_id", ""),
+        "openshell": [],
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def render_model_markdown(product_name: str, product_url: str,
+                          exposure_label: str, exposure_blurb: str,
+                          use_case: str, profile: dict[str, Any],
+                          scoring: dict[str, Any], findings: list[dict],
+                          excluded: list[str], perspectives: list[dict],
+                          diagrams: dict[str, str], evidence: list[dict],
+                          queries_run: list[str], model_sections: str,
+                          exec_paragraph: str, a2a_task_id: str) -> str:
+    """Report markdown for a model assessment: profile, weightage, findings.
+
+    Mirrors the standard report's shape (title, exposure line, executive
+    summary, scoped sections) so readers and the markdown renderer meet no
+    surprises; every section is model-native, and a weightage table states
+    exactly how much each dimension moves the headline number.
+    """
+    L: list[str] = []
+    A = L.append
+    A(f"# AI Security Assessment — {product_name} (model)")
+    A("")
+    A(f"_Exposure tier:_ **{exposure_label}** · _Path:_ model-internals "
+      f"({scoring.get('method', '')})")
+    if product_url:
+        A(f"_Product link:_ {product_url}")
+    A("")
+    A("---")
+    A("")
+    A("## Executive summary")
+    A("")
+    A(f"> **Model risk: {scoring.get('overall_pct', 0):g}/100 — "
+      f"{scoring.get('posture', '')}**")
+    A(">")
+    A("> No AI-standards mapping applies on this path: frameworks describe "
+      "product controls, and this question is answered from the model itself.")
+    if exec_paragraph:
+        A("")
+        A(f"{exec_paragraph}")
+    A("")
+    A("## Subject profile")
+    A("")
+    A(f"_{profile.get('summary') or 'Unclassified model.'}_")
+    A("")
+    if profile.get("families"):
+        A(f"Family: {', '.join(profile['families'])}.")
+    if profile.get("architectures"):
+        A(f"Architecture: {', '.join(profile['architectures'])}.")
+    if profile.get("data"):
+        A(f"Processes {', '.join(profile['data'])}.")
+    A("")
+    A("## Weightage: how the number is built")
+    A("")
+    A("| Dimension | Weight | Score | Contributes |")
+    A("|---|---|---|---|")
+    for d in scoring.get("dimensions", []):
+        A(f"| {d['id']} | {d['weight']:.0%} | {d['score']:.0f} | {d['contribution']:.1f} |")
+    A("")
+    if model_sections:
+        A(model_sections)
+        A("")
+    if excluded:
+        A("## Ruled out by profile")
+        A("")
+        for x in excluded:
+            A(f"- {x}.")
+        A("")
+    if use_case:
+        A(f"Stated use case: {use_case}")
+        A("")
+    return "\n".join(L)
 
 
 def openshell_posture_lines(active_controls: list[str], pages: list[dict],
