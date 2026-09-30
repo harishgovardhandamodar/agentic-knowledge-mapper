@@ -216,6 +216,27 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .main-content { flex: 1; min-height: 0; position: relative; }
 .view { display: none; height: 100%; }
 .view.visible { display: block; }
+/* executive summary sub-tab: a readable document column, not edge-to-edge.
+   (An earlier version borrowed .overlay-section/.rel-item here, but those are
+   scoped to .overlay-body and rendered unstyled -- hence the flat, broken
+   look. These classes are the tab's own.) */
+#summaryView.visible { overflow-y: auto; padding: 16px 20px 80px; }
+#summaryView .sum-head, #sumBody { max-width: 1000px; }
+.sum-section { margin-bottom: 20px; }
+.sum-section:last-child { margin-bottom: 0; }
+.sum-section h4 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text2); margin-bottom: 8px; font-weight: 600; }
+.sum-section h4 a { color: var(--text); }
+.sum-section h4 a:hover { color: var(--accent); }
+.sum-section p { font-size: 13px; line-height: 1.65; color: var(--text); margin: 4px 0 8px; }
+.sum-query-title { font-size: 14px; font-weight: 600; }
+.sum-query-sub { font-size: 11.5px; color: var(--text2); margin-top: 3px; }
+.sum-item { display: flex; gap: 8px; align-items: baseline; font-size: 12.5px; padding: 6px 0; border-bottom: 1px solid var(--border); }
+.sum-item:last-child { border-bottom: none; }
+.sum-item.clickable { cursor: pointer; }
+.sum-item.clickable:hover .sum-title { color: var(--accent); }
+.sum-type { font-size: 10px; padding: 1px 6px; border-radius: 8px; background: var(--bg3); color: var(--text2); white-space: nowrap; }
+.sum-review-accepted { font-size: 10.5px; color: var(--green); white-space: nowrap; }
+.sum-review-pending { font-size: 10.5px; color: var(--text2); white-space: nowrap; }
 #graphView { position: relative; }
 #graph { height: 100%; }
 .graph-controls { position: absolute; top: 12px; right: 12px; z-index: 10; display: flex; flex-direction: column; gap: 4px; }
@@ -945,7 +966,7 @@ body.pane-sec-top-collapsed .sec-topbar-sub { display: none; }
         <div id="explHistory"></div>
       </div>
       <div class="view" id="summaryView">
-        <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap;">
+        <div class="sum-head" style="display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap;">
           <h3 style="font-size:13px;margin:0;"><i class="fas fa-file-lines" style="color:var(--teal);"></i> Executive summary</h3>
           <span id="sumFlags" style="font-size:11px;color:var(--text2);"></span>
           <span style="flex:1"></span>
@@ -1688,39 +1709,39 @@ function renderSummaryTab(d) {
   let html = '';
   const q = d.query || {};
   if (q.title || q.keywords || q.description) {
-    html += `<div class="overlay-section"><h4><i class="fas fa-circle-question"></i> What you asked</h4>` +
-      (q.title ? `<div style="font-size:13px;font-weight:600;">${escHtml(q.title)}</div>` : '') +
-      (q.keywords ? `<div style="font-size:11.5px;color:var(--text2);margin-top:2px;">${escHtml(q.keywords)}</div>` : '') +
-      (q.description ? `<p style="font-size:12.5px;margin:6px 0 0;">${escHtml(q.description)}</p>` : '') + '</div>';
+    html += `<div class="sum-section"><h4><i class="fas fa-circle-question"></i> What you asked</h4>` +
+      (q.title ? `<div class="sum-query-title">${escHtml(q.title)}</div>` : '') +
+      (q.keywords ? `<div class="sum-query-sub">${escHtml(q.keywords)}</div>` : '') +
+      (q.description ? `<p>${escHtml(q.description)}</p>` : '') + '</div>';
   }
-  html += `<div class="overlay-section"><p style="font-size:13px;line-height:1.6;">${escHtml(d.executive_summary || '')}</p></div>`;
+  html += `<div class="sum-section"><p>${escHtml(d.executive_summary || '')}</p></div>`;
   if (d.diagram) {
-    html += `<div class="overlay-section"><h4><i class="fas fa-diagram-project"></i> Evidence map</h4>` +
+    html += `<div class="sum-section"><h4><i class="fas fa-diagram-project"></i> Evidence map</h4>` +
       `<div class="diagram-wrap"><pre class="mermaid">${escHtml(d.diagram)}</pre></div></div>`;
   }
   (d.answers || []).forEach(a => {
-    html += `<div class="overlay-section"><h4><a class="no-und" href="javascript:void(0)" onclick="openExplanation(${a.id})">${escHtml(a.question || '')}</a></h4>`;
-    if (a.excerpt) html += `<p style="font-size:12.5px;margin:4px 0 6px;">${escHtml(a.excerpt)}</p>`;
+    html += `<div class="sum-section"><h4><a class="no-und" href="javascript:void(0)" onclick="openExplanation(${a.id})">${escHtml(a.question || '')}</a></h4>`;
+    if (a.excerpt) html += `<p>${escHtml(a.excerpt)}</p>`;
     (a.supporting || []).forEach(s => {
-      html += `<div class="rel-item" style="cursor:pointer;" onclick="openDetailOverlay(${s.id})">` +
-        `<span class="rel-type">${escHtml(s.artifact_type || 'item')}</span><span>${escHtml(s.title || '')}</span></div>`;
+      html += `<div class="sum-item clickable" onclick="openDetailOverlay(${s.id})">` +
+        `<span class="sum-type">${escHtml(s.artifact_type || 'item')}</span><span class="sum-title">${escHtml(s.title || '')}</span></div>`;
     });
     html += '</div>';
   });
   const arts = d.top_artifacts || [];
   if (arts.length) {
-    html += `<div class="overlay-section"><h4><i class="fas fa-star"></i> Supporting artifacts</h4>` +
-      arts.map(a => `<div class="rel-item" style="cursor:pointer;" onclick="openDetailOverlay(${a.id})">` +
-        `<span class="rel-type">${escHtml(a.artifact_type || 'item')}</span><span>${escHtml(a.title || '')}</span>` +
-        `<span style="font-size:10px;color:${(a.review || '') === 'accepted' ? 'var(--green)' : 'var(--text2)'};">${escHtml(a.review || '')}</span></div>`).join('') + '</div>';
+    html += `<div class="sum-section"><h4><i class="fas fa-star"></i> Supporting artifacts</h4>` +
+      arts.map(a => `<div class="sum-item clickable" onclick="openDetailOverlay(${a.id})">` +
+        `<span class="sum-type">${escHtml(a.artifact_type || 'item')}</span><span class="sum-title">${escHtml(a.title || '')}</span>` +
+        `<span class="${(a.review || '') === 'accepted' ? 'sum-review-accepted' : 'sum-review-pending'}">${escHtml(a.review || '')}</span></div>`).join('') + '</div>';
   }
-  html += `<div class="overlay-section"><h4><i class="fas fa-chart-simple"></i> Coverage</h4>` +
+  html += `<div class="sum-section"><h4><i class="fas fa-chart-simple"></i> Coverage</h4>` +
     `<p style="font-size:12px;color:var(--text2);">${c.artifacts || 0} artifacts (${c.papers || 0} papers) · ${c.threats || 0} threats scored · ${c.explanations || 0} explanations · ${c.cves || 0} known issues</p></div>`;
   const threats = ((d.top_findings || {}).threats) || [];
   if (threats.length) {
-    html += `<div class="overlay-section"><h4><i class="fas fa-triangle-exclamation"></i> Top threats</h4>` +
-      threats.map(t => `<div style="font-size:12px;padding:3px 0;"><strong>${escHtml(t.id || '')}</strong> ${escHtml(t.title || '')} ` +
-        `<span style="color:var(--text2);">· ${escHtml(t.severity || '')}</span></div>`).join('') + '</div>';
+    html += `<div class="sum-section"><h4><i class="fas fa-triangle-exclamation"></i> Top threats</h4>` +
+      threats.map(t => `<div class="sum-item"><strong>${escHtml(t.id || '')}</strong><span class="sum-title">${escHtml(t.title || '')}</span> ` +
+        `<span style="color:var(--text2);font-size:11px;">· ${escHtml(t.severity || '')}</span></div>`).join('') + '</div>';
   }
   box.innerHTML = html;
   secEnsureMermaid(box);
