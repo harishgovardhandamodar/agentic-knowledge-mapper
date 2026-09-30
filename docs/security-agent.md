@@ -173,8 +173,20 @@ deterministic heuristic (`agents.heuristic_applicability`). Evidence and
 focus can only confirm relevance — lift toward 1.0, never acquit below
 what was proposed — so the 0.45 floor survives while real signals
 differentiate topics. The keyword table carries finance-domain bridges
-(payment, customer, ledger, PCI …); the LLM, when reachable, still gets
-the last word per threat.
+(payment, customer, ledger, PCI …) and model-data bridges (tabular,
+dataframe, csv; memorization, membership, inversion, extraction); the LLM,
+when reachable, still gets the last word per threat.
+
+When the subject is a model, the analyst first profiles it
+(`security.profile_model_subject`): nature, architecture, class, family,
+data processed, and interface kind, each reported only on explicit
+evidence. A model with no conversational surface has its chat-shaped
+threats (T01, T05) set below the 0.3 scoring floor — still reported, never
+scored, and never re-lifted by domain chatter in evidence — while
+personal-data training lifts leakage (T02). The control-analyst prompt
+names the actual product and profile instead of assuming a
+writing-assistant shape, and the report carries a subject-profile block
+plus a product-aware scope line.
 
 ## Report structure (§§)
 

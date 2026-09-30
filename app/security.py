@@ -446,6 +446,142 @@ _MIN_RESIDUAL_LIKELIHOOD = 0.35  # controls never take a threat below 35% of inh
 _MIN_APPLICABILITY = 0.3          # below this a threat is reported but not scored
 
 
+# Model subject profiler: what KIND of thing is being assessed.
+#
+# The catalog and most prompts were written for a conversational product, so
+# without this every subject reads as a chatbot: a tabular foundation model
+# gets "prompt injection into the assistant" scored against it. The profiler
+# is deterministic and conservative -- it reports a property only on explicit
+# evidence and says "unknown" otherwise -- and its output steers threat
+# applicability (agents.heuristic_applicability) and agent framing, never the
+# arithmetic directly.
+_MODEL_QUERY_TERMS = frozenset(
+    ("model", "models", "foundation model", "transformer", "llm",
+     "classifier", "regressor", "detector", "embedding", "embeddings",
+     "checkpoint", "weights", "fine-tun", "pre-train", "pretrain",
+     "distill", "diffusion", "tabpfn", "tabnet", "bert", "gpt", "llama",
+     "mistral", "xgboost", "lightgbm", "catboost", "whisper"))
+# "model" inside these phrases is not a machine-learning model.
+_MODEL_QUERY_EXCLUSIONS = (
+    re.compile(r"threat[\s-]?models?\b"),
+    re.compile(r"\brole model\b"),
+    re.compile(r"\bbusiness models?\b"),
+    re.compile(r"\boperating model\b"),
+)
+# Family fragment -> (family label, class, architecture). Only sure facts;
+# anything else stays unknown rather than guessed.
+_MODEL_FAMILIES: tuple[tuple[str, str, str, str], ...] = (
+    ("tabpfn", "TabPFN", "foundation", "transformer"),
+    ("tabnet", "TabNet", "task-specific", "attentive tabular network"),
+    ("ft-transformer", "FT-Transformer", "task-specific", "transformer"),
+    ("xgboost", "XGBoost", "task-specific", "gradient-boosted trees"),
+    ("lightgbm", "LightGBM", "task-specific", "gradient-boosted trees"),
+    ("catboost", "CatBoost", "task-specific", "gradient-boosted trees"),
+    ("whisper", "Whisper", "pretrained", "transformer"),
+    ("stable diffusion", "Stable Diffusion", "generative", "diffusion"),
+    ("bert", "BERT", "pretrained encoder", "transformer"),
+    ("t5", "T5", "pretrained encoder-decoder", "transformer"),
+)
+_MODEL_ARCH_TERMS: tuple[tuple[str, str], ...] = (
+    ("transformer", "transformer"), ("attention", "transformer"),
+    ("diffusion", "diffusion"), ("cnn", "convolutional"),
+    ("convolutional", "convolutional"), ("rnn", "recurrent"),
+    ("lstm", "recurrent"), ("gru", "recurrent"),
+    ("gradient-boosted", "gradient-boosted trees"),
+    ("random forest", "tree ensemble"),
+    ("graph neural", "graph neural network"), ("gnn", "graph neural network"),
+    ("tabular network", "tabular neural network"),
+    ("mlp", "multilayer perceptron"),
+)
+_MODEL_DATA_TERMS: tuple[tuple[str, str], ...] = (
+    ("tabular", "tabular records"), ("spreadsheet", "tabular records"),
+    ("csv", "tabular records"), ("dataframe", "tabular records"),
+    ("rows", "data rows"), ("columns", "data columns"),
+    ("text", "text"), ("image", "images"), ("audio", "audio"),
+)
+# Explicit denials ("no chat surface", "without dialog") name the concept to
+# exclude it. Strip those phrases before conversational matching, or a denial
+# reads as an endorsement.
+_CONVERSATIONAL_NEGATION = re.compile(
+    r"\b(?:no|without|non)[\s\-]+(?:chatbots?|assistants?|conversational|"
+    r"dialogues?|dialogs?|copilots?|prompts?)\b")
+_CONVERSATIONAL_TERMS = frozenset(
+    ("chat", "chatbot", "assistant", "conversational", "dialogue",
+     "dialog", "copilot"))
+_NON_CONVERSATIONAL_TERMS = frozenset(
+    ("api", "batch", "scoring", "classification", "embedding",
+     "inference endpoint", "scheduled", "tabular"))
+_PERSONAL_DATA_TERMS = frozenset(
+    ("customer", "personal", "pii", "patient", "client records",
+     "user data", "account holder"))
+
+
+def profile_model_subject(product: str, use_case: str = "",
+                          focus: list[str] | None = None) -> dict[str, Any]:
+    """Read what kind of subject an assessment is about.
+
+    Returns ``is_model_query`` plus, when true, family/architecture/class,
+    data traits, the interface kind, and a one-line ``summary`` for prompts
+    and reports. Every field defaults to unknown/empty: a vague brief yields
+    a vague profile, never a confident wrong one.
+    """
+    blob = f"{product or ''}\n{use_case or ''}\n{' '.join(focus or [])}".lower()
+    # "Threat model the payment flow" is not about a machine-learning model:
+    # strip the non-ML senses first, then look for what remains. A text that
+    # is genuinely about models ("threat model of our TabPFN deployment")
+    # still matches on the other terms it contains.
+    clean = blob
+    for p in _MODEL_QUERY_EXCLUSIONS:
+        clean = p.sub(" ", clean)
+    model_hit = any(t in clean for t in _MODEL_QUERY_TERMS)
+    profile: dict[str, Any] = {
+        "is_model_query": bool(model_hit),
+        "families": [], "architectures": [], "model_class": "unknown",
+        "data": [], "trains_on_data": False, "personal_data": False,
+        "interface": "unknown", "summary": "",
+    }
+    if not model_hit:
+        return profile
+    for frag, label, cls, arch in _MODEL_FAMILIES:
+        if frag in blob and label not in profile["families"]:
+            profile["families"].append(label)
+            if profile["model_class"] == "unknown":
+                profile["model_class"] = cls
+            if arch not in profile["architectures"]:
+                profile["architectures"].append(arch)
+    for frag, arch in _MODEL_ARCH_TERMS:
+        if frag in blob and arch not in profile["architectures"]:
+            profile["architectures"].append(arch)
+    if "foundation" in blob and profile["model_class"] == "unknown":
+        profile["model_class"] = "foundation"
+    elif "fine-tun" in blob:
+        profile["model_class"] = "fine-tuned"
+    for frag, label in _MODEL_DATA_TERMS:
+        if frag in blob and label not in profile["data"]:
+            profile["data"].append(label)
+    profile["trains_on_data"] = bool(
+        re.search(r"\btrain\w*\b|\bfit\b|\bfine-tun\w*\b|\bpre-train\w*\b|\bpretrain\w*\b", blob))
+    profile["personal_data"] = any(t in blob for t in _PERSONAL_DATA_TERMS)
+    if any(t in _CONVERSATIONAL_NEGATION.sub(" ", blob)
+            for t in _CONVERSATIONAL_TERMS):
+        profile["interface"] = "conversational"
+    elif any(t in blob for t in _NON_CONVERSATIONAL_TERMS):
+        profile["interface"] = "non_conversational"
+    bits = []
+    if profile["families"]:
+        bits.append("/".join(profile["families"]))
+    bits.append(profile["model_class"] + " model"
+                if profile["model_class"] != "unknown" else "model")
+    if profile["architectures"]:
+        bits.append("(" + ", ".join(profile["architectures"]) + ")")
+    if profile["data"]:
+        bits.append("over " + ", ".join(profile["data"]))
+    if profile["interface"] == "non_conversational":
+        bits.append("no conversational surface")
+    profile["summary"] = " ".join(bits)
+    return profile
+
+
 def control_catalog() -> list[dict[str, Any]]:
     """Control catalogue plus how many threats each control covers (for the GUI)."""
     out = []
@@ -1305,8 +1441,26 @@ def render_markdown(**ctx: Any) -> str:
           f"{t['coverage']:g}% covered by {', '.join(t['controls']) or 'no control'}){na}. "
           f"{t['mitigations'][0]}")
     A("")
-    A(f"Assessment scope: use of the product's AI writing-assistant/metadata feature with "
-      f"**{ctx['exposure_label']}** data. {ctx['exposure_blurb']}")
+    profile = profile_model_subject(ctx.get("product_name") or "",
+                                    ctx.get("use_case") or "",
+                                    ctx.get("focus") or [])
+    if profile["is_model_query"] and profile["summary"]:
+        scope_line = (f"Assessment scope: {ctx['product_name']} ({profile['summary']}) "
+                      f"with **{ctx['exposure_label']}** data. {ctx['exposure_blurb']}")
+    else:
+        scope_line = (f"Assessment scope: use of {ctx['product_name']} "
+                      f"with **{ctx['exposure_label']}** data. {ctx['exposure_blurb']}")
+    A(scope_line)
+    if profile["is_model_query"] and profile["summary"]:
+        A("")
+        bits = [f"Subject kind: model ({profile['summary']})."]
+        if profile["families"]:
+            bits.append("Family: " + ", ".join(profile["families"]) + ".")
+        if profile["data"]:
+            bits.append("Processes " + ", ".join(profile["data"]) + ".")
+        if profile["trains_on_data"]:
+            bits.append("Training/fine-tuning is in scope for data-leakage threats.")
+        A("Subject profile: " + " ".join(bits))
     if ctx.get("use_case"):
         A("")
         A(f"Stated use case: {ctx['use_case']}")

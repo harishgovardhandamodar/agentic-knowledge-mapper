@@ -11,18 +11,26 @@ investigation.
 ## Flow
 
 1. **Understand** (`POST /api/manager/parse`): the model splits the command
-   into `{domain, exposure, topics[], summary}`. If the model is
-   unreachable or its plan validates to nothing, a deterministic splitter
-   (slashes, semicolons, lines, numbered items; "especially X" scopes the
-   topics) takes over; the preview says which path served it. No side
-   effects.
+   into `{domain, exposure, topics[], summary}`, with each topic carrying
+   `subject` (the thing assessed — never the command verb phrase), `task`,
+   `focus` and `anti_focus` (directions the command rules out, e.g. after
+   "rather than"). A pasted-twice command collapses to one copy first. If
+   the model is unreachable or its plan validates to nothing, a
+   deterministic splitter (slashes, semicolons, lines, numbered items;
+   "especially X" scopes the topics) takes over; the preview says which
+   path served it. No side effects.
 2. **Run** (`POST /api/manager/run`): the confirmed plan (topics can be
    unchecked, exposure set per topic, launchers adjusted) creates N
    investigations plus the summary shell, then launches per topic. At most
    6 topics; duplicates dropped. Runs queue through the existing agent and
-   security workers. Each topic carries focus terms (from the parse, or
-   content words of its title) into the assessment so applicability
-   reflects the topic, not just the catalogue baseline.
+   security workers. Each topic's assessment is launched with
+   `product_name` = its subject (falling back to the title) and a use case
+   carrying the focus directives and explicit out-of-scope lines, so the
+   assessment reasons about the intent instead of echoing the command.
+   When the subject is a model, `security.profile_model_subject` further
+   profiles its nature, architecture, class, family and data processing
+   (see security-agent.md), and chat-surface threats drop below the
+   scoring floor for subjects with no conversational surface.
 3. **Track** (`GET /api/manager/runs`): per-topic research status and latest
    assessment score, polled while anything runs. Statuses derive live from
    the agent/security tables -- no background watcher, so restarts strand

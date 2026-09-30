@@ -647,5 +647,91 @@ class TestManagerRoutes(unittest.TestCase):
         self.assertEqual(r.status_code, 404)
 
 
+TABULAR_CMD = ("Run detailed security investigations on Tabular Foundation "
+               "Models. Focus on advancements on capabilities rather than "
+               "performance improvement in efficacy and efficiency — Run detailed "
+               "security investigations on Tabular Foundation Models. Focus on "
+               "advancements on capabilities rather than performance improvement "
+               "in efficacy and efficiency")
+
+
+class TestManagerIntent(unittest.TestCase):
+    """The manager must understand the prompt, not echo it.
+
+    Run #7 pasted its command twice and carried the verb phrase into every
+    field; the assessment then scored a command string as if it were a
+    chatbot. These pin: dedupe, subject extraction, clean focus terms with
+    explicit anti-focus, and product_name = subject at launch.
+    """
+
+    def test_duplicate_command_collapses(self):
+        plan = mgr.split_command(TABULAR_CMD)
+        self.assertEqual(len(plan["topics"]), 1)
+        t = plan["topics"][0]
+        self.assertEqual(t["description"].count("Tabular Foundation Models"), 1)
+        self.assertNotIn("—", t["title"])
+
+    def test_single_topic_title_is_subject_not_command(self):
+        plan = mgr.split_command(TABULAR_CMD)
+        t = plan["topics"][0]
+        self.assertEqual(t["title"], "Tabular Foundation Models")
+        self.assertEqual(t["subject"], "Tabular Foundation Models")
+        for verb in ("run detailed", "investigations on"):
+            self.assertNotIn(verb, t["title"].lower())
+
+    def test_focus_terms_are_content_anti_focus_is_exclusion(self):
+        plan = mgr.split_command(TABULAR_CMD)
+        t = plan["topics"][0]
+        for term in ("tabular", "foundation", "models", "advancements",
+                     "capabilities"):
+            self.assertIn(term, t["focus"])
+        for junk in ("security", "investigations", "focus", "rather",
+                     "than", "run", "detailed"):
+            self.assertNotIn(junk, t["focus"])
+        for out in ("performance", "efficacy", "efficiency"):
+            self.assertIn(out, t["anti_focus"])
+            self.assertNotIn(out, t["focus"])
+        self.assertIn("Explicitly out of scope", t["description"])
+
+    def test_run_plan_assesses_subject_with_directives(self):
+        db = SessionLocal()
+        try:
+            plan = mgr.split_command(TABULAR_CMD)
+            with mock.patch.object(mgr, "launch_run"), \
+                 mock.patch.object(mgr, "launch_security_assessment") as la:
+                mgr.run_plan(db, plan, {"research": False, "assessment": True},
+                             TABULAR_CMD)
+            self.assertEqual(la.call_count, 1)
+            params = la.call_args[0][1]
+            self.assertEqual(params["product_name"], "Tabular Foundation Models")
+            self.assertIn("Explicitly out of scope", params["use_case"])
+            self.assertIn("performance", params["use_case"])
+        finally:
+            db.close()
+
+    def test_llm_parse_asks_for_subject_and_exclusions(self):
+        seen = {}
+
+        def fake_chat(messages, **kw):
+            seen["system"] = messages[0]["content"]
+            return {"domain": "d", "topics": [
+                {"title": "T", "description": "x", "subject": "S",
+                 "anti_focus": ["z"]}], "summary": {}}
+
+        with mock.patch.object(mgr.llm, "chat_json", side_effect=fake_chat):
+            plan = mgr.parse_command("anything at all")
+        self.assertIn("subject", seen["system"])
+        self.assertIn("anti_focus", seen["system"])
+        self.assertEqual(plan["topics"][0]["subject"], "S")
+        self.assertEqual(plan["topics"][0]["anti_focus"], ["z"])
+
+    def test_verb_lead_stripping_still_works(self):
+        for cmd, want in [
+                ("Run detailed security investigations on Tabular", "Tabular"),
+                ("Please run research on X", "X"),
+                ("Execute a security study of payments", "payments")]:
+            self.assertEqual(mgr.split_command(cmd)["topics"][0]["title"], want)
+
+
 if __name__ == "__main__":
     unittest.main()

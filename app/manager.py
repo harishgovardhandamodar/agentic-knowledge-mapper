@@ -31,18 +31,95 @@ SYNTH_TAG = "manager-synthesis"
 COMPILE_TRUNC = 1500
 
 _LEAD = re.compile(
-    r"^(run|start|launch|do|please\s+)?(a\s+|an\s+)?(detailed\s+)?(new\s+)?"
-    r"(security\s+)?(investigations?|investigational|research|study|studies|"
-    r"analysis|analyses)\s+(on|about|into|for|of)?\s*",
+    r"^(?:please\s+)?(?:run|start|launch|do|execute|perform)?\s*"
+    r"(?:a\s+|an\s+)?(?:detailed\s+)?(?:new\s+)?"
+    r"(?:security\s+)?(?:investigations?|investigational|research|stud(?:y|ies)|"
+    r"analys(?:is|es))\s+(?:on|about|into|for|of)?\s*",
     re.IGNORECASE)
 _SPLIT = re.compile(r"\s*/\s*|\s*;\s*|\n+|\s*\d+[.)]\s+")
 
 _FOCUS_STOP = frozenset(
     ("agents agent ai data system systems platform application app service "
-     "services tool tools new detailed run investigation research study studies "
-     "group team the and for with from that this these those its are was were "
+     "services tool tools new detailed run runs running investigation "
+     "investigations research study studies security focus focused focusing "
+     "rather than instead except group team the and for with from that this these those its are was were "
      "has have had will would can not all any per via into over under "
      "on about of to in a an").split())
+
+# Focus-directive clauses: "focus on X", "with emphasis on Y" add focus;
+# "rather than Z", "instead of W" mark anti-focus -- directions the user
+# explicitly ruled out. Anti-focus travels into the use case text so the
+# assessment reads it, and stays out of the focus terms so it can never
+# lift a threat the user excluded.
+_FOCUS_CLAUSE = re.compile(
+    r"\b(?:focus(?:sing|ed)?|with\s+(?:a\s+)?focus|with\s+emphasis|centered|concentrat\w+)\s+on\b",
+    re.IGNORECASE)
+_ANTI_CLAUSE = re.compile(
+    r"\b(?:rather\s+than|instead\s+of|excluding|except(?:\s+for)?)\b",
+    re.IGNORECASE)
+
+
+def _same_text(a: str, b: str) -> bool:
+    """Near-identical ignoring case, punctuation and whitespace -- for the
+    pasted-twice command ("X — X"), where the second half adds nothing."""
+    norm = lambda s: re.sub(r"[^a-z0-9]+", "", (s or "").lower())
+    return bool(norm(a)) and norm(a) == norm(b)
+
+
+def _dedupe_command(text: str) -> str:
+    """Collapse a command pasted twice ("X — X", "X. X", "X: X") to X.
+
+    Run #7 arrived as the same sentence twice joined by an em dash; without
+    this the topic title is the duplication truncated mid-word and the
+    description repeats itself, and every downstream field inherits the mess.
+    """
+    t = re.sub(r"\s+", " ", (text or "")).strip()
+    m = re.match(r"^(.+?)\s+[—–\-:]\s+(.+)$", t)
+    if m and _same_text(m.group(1), m.group(2)):
+        return m.group(1).strip()
+    sents = [s.strip() for s in re.split(r"(?<=[.!?])\s+", t) if s.strip()]
+    if len(sents) == 2 and _same_text(sents[0], sents[1]):
+        return sents[0]
+    return t
+
+
+def _extract_intent(text: str) -> dict[str, Any]:
+    """Split a cleaned command into subject, focus and anti-focus.
+
+    "Tabular Foundation Models. Focus on advancements on capabilities rather
+    than performance improvement" -> subject "Tabular Foundation Models",
+    focus [advancements, capabilities], anti-focus [performance, ...].
+    The subject names the thing assessed; the focus clause names what about
+    it matters; the anti clause names what the user ruled out. All three
+    travel into the plan so product_name, use_case and focus terms describe
+    the intent instead of echoing the raw command.
+    """
+    focus_extra: list[str] = []
+    anti_focus: list[str] = []
+    rest = text
+    m = _FOCUS_CLAUSE.search(rest)
+    if m:
+        rest, focus_part = rest[:m.start()].strip(), rest[m.end():].strip()
+        am = _ANTI_CLAUSE.search(focus_part)
+        if am:
+            focus_part, anti_part = (focus_part[:am.start()].strip(),
+                                     focus_part[am.end():].strip())
+            anti_focus = _focus_terms(anti_part)
+        else:
+            am = _ANTI_CLAUSE.search(rest)
+            if am:
+                anti_part = rest[am.end():].strip()
+                rest = rest[:am.start()].strip()
+                anti_focus = _focus_terms(anti_part)
+        focus_extra = _focus_terms(focus_part)
+    else:
+        am = _ANTI_CLAUSE.search(rest)
+        if am:
+            anti_part = rest[am.end():].strip()
+            rest = rest[:am.start()].strip()
+            anti_focus = _focus_terms(anti_part)
+    subject = re.sub(r"\s+", " ", rest).strip().rstrip(".")[:120]
+    return {"subject": subject, "focus": focus_extra, "anti_focus": anti_focus}
 
 
 def _focus_terms(title: str) -> list[str]:
@@ -61,8 +138,10 @@ def split_command(command: str) -> dict[str, Any]:
     "… finance domain, especially A / B / C" yields domain "… finance
     domain" and topics A, B, C; without "especially" the whole (de-verbed)
     command is split. Same shape as the LLM parse, flagged heuristic.
+    A pasted-twice command collapses first; a single part keeps its subject
+    as the title so the product assessed is named, not the command string.
     """
-    text = (command or "").strip()
+    text = _dedupe_command(command)
     domain, rest = "", text
     m = re.search(r"\bespecially\b", text, re.IGNORECASE)
     if m:
@@ -71,10 +150,31 @@ def split_command(command: str) -> dict[str, Any]:
     if not domain:
         domain = _LEAD.sub("", text).strip().rstrip(".")
     parts = [p.strip().rstrip(".") for p in _SPLIT.split(rest) if p.strip()]
-    topics = [{"title": p[:120],
-               "description": (f"{p} — {domain}" if domain else p),
-               "keywords": p, "focus": _focus_terms(p), "exposure": None}
-              for p in parts if p]
+    intent = _extract_intent(rest)
+    topics = []
+    for p in parts:
+        if not p:
+            continue
+        # Part focus excludes any anti-focus tail ("... rather than X"): the
+        # exclusion belongs to anti_focus, never to focus, or a ruled-out
+        # direction would lift the very threats it should sink.
+        p_focus_src = _ANTI_CLAUSE.split(p, maxsplit=1)[0]
+        focus = _focus_terms(p_focus_src) + [f for f in intent["focus"]
+                                             if f not in _focus_terms(p_focus_src)]
+        if len(parts) == 1 and intent["subject"]:
+            title, subject = intent["subject"], intent["subject"]
+            description = p
+        else:
+            title, subject = p[:120], p[:120]
+            description = (f"{p} — {domain}" if domain else p)
+        if intent["anti_focus"]:
+            description += ("\nExplicitly out of scope: "
+                            + ", ".join(intent["anti_focus"]))
+        topics.append({"title": title[:120], "subject": subject[:120],
+                       "description": description,
+                       "keywords": p, "focus": focus[:8],
+                       "anti_focus": intent["anti_focus"][:8],
+                       "exposure": None})
     domain = re.sub(r"\s+", " ", domain).strip().rstrip(".")[:200]
     return {"domain": domain, "exposure": "confidential_data",
             "topics": topics,
@@ -89,12 +189,20 @@ def _llm_parse(command: str) -> dict[str, Any]:
          "content": ("You split a research command into scoped investigations. "
                      "Reply JSON only: {\"domain\": str, "
                      "\"exposure\": one of restricted_data|confidential_data|internal|public, "
-                         "\"topics\": [{\"title\": str (<=120 chars), \"description\": str, "
-                         "\"keywords\": str, \"focus\": [str], "
-                         "\"exposure\": one of restricted_data|confidential_data|internal|public|null (null = plan default)}, "
+                     "\"topics\": [{\"title\": str (<=120 chars, name the SUBJECT "
+                     "being investigated, never the command verb phrase), "
+                     "\"subject\": str (the thing assessed, e.g. a model family, "
+                     "product, or dataset -- no verbs like 'run' or 'investigate'), "
+                     "\"task\": str (what to do with it, e.g. security investigation), "
+                     "\"description\": str, "
+                     "\"keywords\": str, \"focus\": [str], "
+                     "\"anti_focus\": [str] (directions the command explicitly "
+                     "rules out, e.g. after 'rather than' -- empty when none), "
+                     "\"exposure\": one of restricted_data|confidential_data|internal|public|null (null = plan default)}, "
                      "\"summary\": {\"title\": str, \"description\": str}}. "
+                     "If the command repeats itself, use it once. "
                      "Cover each named sub-topic as its own topic; no filler topics.")},
-        {"role": "user", "content": command[:2000]}],
+        {"role": "user", "content": _dedupe_command(command)[:2000]}],
         max_tokens=1200, temperature=0.2)
     if not isinstance(out, dict):
         raise ValueError("model did not return a plan object")
@@ -105,9 +213,12 @@ def _llm_parse(command: str) -> dict[str, Any]:
             continue
         exp = t.get("exposure")
         norm.append({"title": str(t.get("title") or "")[:120],
+                     "subject": str(t.get("subject") or "")[:120],
+                     "task": str(t.get("task") or "")[:200],
                      "description": str(t.get("description") or ""),
                      "keywords": str(t.get("keywords") or "")[:1000],
                      "focus": [str(f) for f in (t.get("focus") or [])][:8],
+                     "anti_focus": [str(f) for f in (t.get("anti_focus") or [])][:8],
                      "exposure": (exp if exp in EXPOSURE_META else None)})
     summary = out.get("summary") or {}
     return {"domain": str(out.get("domain") or "")[:200],
@@ -149,9 +260,12 @@ def validate_plan(plan: dict[str, Any]) -> dict[str, Any]:
         seen.add(title.lower())
         exp = t.get("exposure")
         topics.append({"title": title[:120],
+                       "subject": str(t.get("subject") or "")[:120],
+                       "task": str(t.get("task") or "")[:200],
                        "description": str(t.get("description") or title),
                        "keywords": str(t.get("keywords") or title)[:1000],
                        "focus": [str(f) for f in (t.get("focus") or [])][:8],
+                       "anti_focus": [str(f) for f in (t.get("anti_focus") or [])][:8],
                        "exposure": (exp if exp in EXPOSURE_META else None)})
     if not topics:
         raise ValueError("no usable topics in command")
@@ -249,10 +363,20 @@ def run_plan(db, plan: dict[str, Any], options: dict[str, Any] | None = None,
     db.refresh(run)
     footer = f"\n\nPart of manager run #{run.id}."
     for t in plan["topics"]:
+        subject = (t.get("subject") or "").strip() or t["title"][:120]
+        use_case = t.get("description", "")
+        directives = []
+        if t.get("focus"):
+            directives.append("Focus areas: " + ", ".join(t["focus"]))
+        if t.get("anti_focus"):
+            directives.append("Explicitly out of scope: "
+                              + ", ".join(t["anti_focus"]))
+        if directives:
+            use_case = (use_case + "\n" + "\n".join(directives)).strip()
         inv = Investigation(
             title=t["title"][:300],
             keywords=t.get("keywords", "")[:1000],
-            description=(t.get("description", "") + footer),
+            description=(use_case + footer),
             status="draft")
         db.add(inv)
         db.commit()
@@ -263,8 +387,8 @@ def run_plan(db, plan: dict[str, Any], options: dict[str, Any] | None = None,
         if options.get("assessment"):
             launch_security_assessment(
                 inv.id,
-                {"product_name": t["title"][:120],
-                 "use_case": t.get("description", ""),
+                {"product_name": subject[:120],
+                 "use_case": use_case,
                  "exposure": (t.get("exposure") or plan["exposure"]),
                  "declared_controls": [],
                  "doc_urls": [],

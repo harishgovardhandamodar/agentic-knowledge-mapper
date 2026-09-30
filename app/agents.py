@@ -163,10 +163,11 @@ APPLICABILITY_KEYWORDS: dict[str, tuple[str, ...]] = {
     "T01": ("paste", "prompt", "free text", "user", "employee", "assistant",
             "customer", "client", "pii"),
     "T02": ("retain", "train", "logging", "debug", "vendor",
-            "transaction", "financial"),
+            "transaction", "financial", "memoriz", "membership", "inversion",
+            "extract"),
     "T03": ("classif", "label", "metadata", "catalog", "ledger"),
     "T04": ("schema", "description", "semantic", "field", "column",
-            "balance", "ledger", "account"),
+            "balance", "ledger", "account", "tabular", "dataframe", "csv"),
     "T05": ("import", "inject", "instruction", "external", "linked doc",
             "payment", "transfer", "transaction"),
     "T06": ("insider", "export", "share", "exfil", "abuse",
@@ -185,14 +186,27 @@ APPLICABILITY_KEYWORDS: dict[str, tuple[str, ...]] = {
 
 APPLICABILITY_FLOOR = 0.45
 APPLICABILITY_HIT = 0.18
+# Deliberately below security._MIN_APPLICABILITY (0.3): a threat set here is
+# reported with its rationale but excluded from the aggregate score.
+APPLICABILITY_EXCLUDED = 0.25
 
 
 def heuristic_applicability(product: str, use_case: str = "",
                             evidence: list[dict[str, Any]] | None = None,
-                            focus: list[str] | None = None) -> dict[str, float]:
+                            focus: list[str] | None = None,
+                            model_profile: dict[str, Any] | None = None) -> dict[str, float]:
     """Keyword-driven applicability: a threat counts when the product, use
     case, focus areas or evidence plausibly exercise it. The floor keeps
-    catalog-inherent threats visible; keyword hits lift toward 1.0."""
+    catalog-inherent threats visible; keyword hits lift toward 1.0.
+
+    ``model_profile`` (from security.profile_model_subject) adjusts for what
+    kind of subject this is: a model with no conversational surface cannot
+    exercise chat-shaped threats, so T01/T05 drop below the scoring floor
+    (still reported, never silently gone). The exclusion stands through the
+    evidence re-judge too: collected artifacts describe the domain, and domain
+    chatter must not re-animate a threat the assessment's own charter
+    excludes. Without a profile the numbers are exactly as before.
+    """
     ev_blob = " ".join(
         f"{e.get('title', '')} {e.get('tags', '')} {e.get('snippet', '')}"
         for e in (evidence or []) if isinstance(e, dict))
@@ -203,6 +217,17 @@ def heuristic_applicability(product: str, use_case: str = "",
         hits = sum(1 for t in terms if t in blob)
         # base floor keeps catalog-inherent threats visible; keywords lift them
         app[tid] = round(min(1.0, APPLICABILITY_FLOOR + APPLICABILITY_HIT * hits), 2)
+    if model_profile and model_profile.get("is_model_query"):
+        if model_profile.get("interface") == "non_conversational":
+            # No prompt box, no pasted-into-assistant: the chat-surface
+            # threats below score nothing here. They stay in the report,
+            # marked below the scoring floor -- exclusion survives the
+            # evidence re-judge by design (see below).
+            for tid in ("T01", "T05"):
+                app[tid] = min(app.get(tid, APPLICABILITY_FLOOR),
+                               APPLICABILITY_EXCLUDED)
+        if model_profile.get("trains_on_data") and model_profile.get("personal_data"):
+            app["T02"] = round(min(1.0, app.get("T02", APPLICABILITY_FLOOR) + 0.2), 2)
     return app
 
 
@@ -221,8 +246,13 @@ def control_analyst_handle(env: dict[str, Any]) -> dict[str, Any]:
     declared = [str(c).strip().upper() for c in (payload.get("declared_controls") or [])]
     declared = [c for c in declared if c in sec._CONTROL_BY_ID]
     evidence = payload.get("evidence", []) or []
+    focus = payload.get("focus") or []
+    ev_blob = " ".join(
+        f"{e.get('title', '')} {e.get('tags', '')} {e.get('snippet', '')}"
+        for e in evidence if isinstance(e, dict))
+    profile = sec.profile_model_subject(product, use_case, focus)
     applicability = heuristic_applicability(
-        product, use_case, evidence, payload.get("focus") or [])
+        product, use_case, evidence, focus, model_profile=profile)
     proposed_extra: list[dict[str, Any]] = []
     confidence = 0.5
     source = "deterministic heuristic (no LLM)"
@@ -235,12 +265,18 @@ def control_analyst_handle(env: dict[str, Any]) -> dict[str, Any]:
             f"- {tid}: {dict(sec._THREAT_BY_ID[tid])}" for tid in sec._THREAT_IDS
             if tid in getattr(sec, "_THREAT_BY_ID", {}))
         sys_p = (
-            "You are a security controls analyst. Judge, for an AI writing-assistant "
-            "feature, how applicable each threat is (0.0-1.0) and which additional "
-            "controls from the catalogue should be enabled. Reply with STRICT JSON only."
+            "You are a security controls analyst. Judge, for the product "
+            "described below"
+            f"{' (' + profile['summary'] + ')' if profile.get('summary') else ''}, "
+            "how applicable each threat is (0.0-1.0) and which additional "
+            "controls from the catalogue should be enabled. Judge what is in "
+            "front of you -- a model, a dataset and an interface each carry "
+            "different threats than a conversational assistant. "
+            "Reply with STRICT JSON only."
         )
         user_p = (
             f"Product: {product}\nUse case: {use_case}\nExposure tier: {exposure}\n"
+            f"Subject profile: {profile['summary'] or 'no model-specific signals; assess as described'}\n"
             f"Declared controls already in place: {', '.join(declared) or 'none'}\n"
             f"Evidence snippets: {ev_blob[:1500] or 'none'}\n\n"
             f"Control catalogue:\n{cat_lines}\n\n"
@@ -618,10 +654,18 @@ def threat_intel_handle(env: dict[str, Any]) -> dict[str, Any]:
     # Deterministic evidence re-judge: the analyst judged before any evidence
     # existed. Evidence (and focus) can only confirm relevance -- lift toward
     # 1.0, never acquit below what was proposed -- so the floor philosophy
-    # stays intact while real signals differentiate the threats.
+    # stays intact while real signals differentiate the threats. The re-judge
+    # uses the same model profile: a profile-excluded chat threat stays
+    # excluded (domain chatter in evidence must not re-animate what the
+    # charter rules out), while every other threat lifts normally.
+    from . import security as _sec
+    _profile = _sec.profile_model_subject(payload.get("product_name", ""),
+                                          payload.get("use_case", ""),
+                                          payload.get("focus") or [])
     rej = heuristic_applicability(payload.get("product_name", ""),
                                   payload.get("use_case", ""),
-                                  evidence, payload.get("focus") or [])
+                                  evidence, payload.get("focus") or [],
+                                  model_profile=_profile)
     for tid in threat_ids:
         if tid in rej:
             try:
