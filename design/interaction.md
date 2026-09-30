@@ -182,7 +182,21 @@ sequenceDiagram
     JQ->>SA: run_security_assessment(run_id, params)
     SA->>L: run.start (mandate hashed)
     SA->>ORC: plan_assessment (a2a/1.0 envelope)
-    ORC->>CA: analyse_controls + judge_applicability
+    alt subject profiles as a model
+        ORC->>MP as model-profiler: profile_model
+        MP-->>ORC: nature · architecture · class · family · data
+        ORC->>MI as model-internals: review_internals
+        MI-->>ORC: findings M01… + ruled-out list
+        ORC->>COL: collect_research (finding titles as queries)
+        COL-->>ORC: ranked evidence
+        ORC->>MPR as model-privacy: assess_model_privacy
+        MPR-->>ORC: privacy findings P01…
+        ORC->>SEC: score_model_assessment (dimension weights,<br/>no standards mapping)
+        SEC-->>ORC: model aggregate (residual = inherent in v1)
+        ORC->>MR as model-reporter: write_model_report
+        MR-->>ORC: model sections + grounded exec paragraph
+    else catalog product
+        ORC->>CA: analyse_controls + judge_applicability
     CA-->>ORC: control plan + applicability 0..1 per threat
     ORC->>COL: collect_research
     loop per doc URL
@@ -200,6 +214,7 @@ sequenceDiagram
     ORC->>SEC: score_assessment(threats, controls, exposure, applicability)
     SEC-->>ORC: inherent, residual, posture, distribution (pure function)
     ORC->>SEC: build_report + diagrams
+    end
     SA->>DB: SecurityAssessment row (markdown, JSON blobs, pack fingerprint)
     SA->>L: run.end + stats.assessment_id
     SA->>JQ: complete(job)
@@ -222,10 +237,10 @@ sequenceDiagram
     participant DB as SQLite
     R->>UI: "run security investigations on AI agents in finance, especially payments / DeFi / crypto"
     UI->>API: POST /api/manager/parse {command}
-    API->>MGR: parse_command
-    MGR->>LLM: split into {domain, exposure, topics[], summary}
+    API->>MGR: parse_command (dedupe repeats, extract subject/task/focus/anti-focus)
+    MGR->>LLM: split into {domain, exposure, topics[subject, focus, anti_focus], summary}
     alt model unavailable or plan invalid
-        MGR->>MGR: deterministic splitter<br/>(slashes, semicolons, lines,<br/>"especially X")
+        MGR->>MGR: deterministic splitter<br/>(slashes, semicolons, lines,<br/>"especially X", verb-lead strip)
     end
     MGR-->>UI: plan + which path served it (no side effects)
     R->>UI: uncheck a topic, set per-topic exposure, adjust launchers
@@ -235,7 +250,7 @@ sequenceDiagram
     MGR->>DB: ManagerRun(command, plan_json, status=running)
     loop per topic
         MGR->>AG: launch_run(inv) with focus terms
-        MGR->>SA: launch_security_assessment(inv) with the same focus
+        MGR->>SA: launch_security_assessment(inv,<br/>product=subject, focus directives)
     end
     MGR-->>UI: {run_id, children}
     loop poll while anything runs

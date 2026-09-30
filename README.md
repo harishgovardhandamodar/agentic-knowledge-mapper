@@ -24,7 +24,7 @@ control catalogue.
 | [docs/architecture.md](docs/architecture.md) | System context, containers, UML component/class diagrams, runtime flows |
 | [docs/agent-loop.md](docs/agent-loop.md) | Collection loop state machine, activity flow, stage protocol, guards |
 | [docs/explainer.md](docs/explainer.md) | Q&A pipeline, graph-first routing, grounding, write guard, threads/quiz/watch |
-| [docs/security-agent.md](docs/security-agent.md) | A2A envelope protocol, five agent cards, threat model, report structure |
+| [docs/security-agent.md](docs/security-agent.md) | A2A envelope protocol, nine agent cards (catalog + model paths), threat model, report structure |
 | [docs/threatpack.md](docs/threatpack.md) | The versioned scoring catalog: 12 threats, 15 controls, exposure tiers, evalkit |
 | [docs/agentic-manager.md](docs/agentic-manager.md) | Command parsing, fan-out, timeline, summary compilation, nesting |
 | [docs/standards-coverage.md](docs/standards-coverage.md) | 34 frameworks × 10 pillars, score matrix, Findings grading, dashboard |
@@ -531,7 +531,7 @@ agentic-knowledge-mapper/
 │   ├── agent.py           # plan→search→analyze→map loop (background thread)
 │   ├── explainer.py       # Q&A pipeline: research→compose→ground→critique→diagram
 │   ├── security_agent.py  # security runs (job queue, approval gate, A2A dispatch)
-│   ├── agents.py          # A2A envelope protocol + the five agent cards
+│   ├── agents.py          # A2A envelope protocol + nine agent cards (catalog + model paths)
 │   ├── security.py        # threat/control catalog, scoring, report engine
 │   ├── threatpack.py      # version, fingerprint, CVSS mapping
 │   ├── evalkit.py         # pinned scoring cases + invariants (CI gate)

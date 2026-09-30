@@ -309,7 +309,9 @@ Envelope shape, verbatim, as `agents.new_envelope` builds it:
 ```
 
 The five agent cards discoverable at `GET /api/agents/cards` and
-`GET /.well-known/agents`:
+`GET /.well-known/agents`, plus the four model-path cards taken by model
+subjects (see security-agent.md — same bus, separate workflow, no standards
+mapping):
 
 | Agent | Skills | Envelope intents it answers |
 |---|---|---|
@@ -318,6 +320,10 @@ The five agent cards discoverable at `GET /api/agents/cards` and
 | `research-collector` | `agentic_search`, `rank_evidence` | `collect_research` |
 | `threat-intel` | `map_attacks`, `cite_evidence`, `score_evidence_confidence` | `map_attacks` |
 | `report-writer` | `write_exploits_section`, `write_exec_bullets` | `write_section` |
+| `model-profiler` | `profile_model` | `profile_model` |
+| `model-internals` | `review_internals` | `review_internals` |
+| `model-privacy` | `assess_model_privacy` | `assess_model_privacy` |
+| `model-reporter` | `write_model_report` | `write_model_report` |
 
 ## Related
 

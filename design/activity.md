@@ -118,7 +118,10 @@ flowchart TB
 
 ```mermaid
 flowchart TB
-    S(["product + exposure + focus"]) --> PLAN["control-analyst proposes<br/>a control plan and applicability 0..1 per threat"]
+    S(["product + exposure + focus"]) --> PROF{"subject profiles<br/>as a model?"}
+    PROF -- yes, non-conversational --> MEX["T01/T05 → 0.25<br/>(reported, not scored)<br/>tabular/memoriz bridges lift T02/T04"]
+    PROF -- otherwise --> PLAN["control-analyst proposes<br/>a control plan and applicability 0..1 per threat"]
+    MEX --> REJ
     PLAN --> J{"model reachable?"}
     J -- no --> HEUR["heuristic applicability:<br/>keyword table, finance-domain bridges<br/>(payment, customer, ledger, PCI …)"]
     J -- yes --> LLM["LLM proposes applicability per threat"]
