@@ -23,7 +23,7 @@ from app import security as sec  # noqa: E402
 from app import database  # noqa: E402
 from app.database import SessionLocal  # noqa: E402
 from app.dossier import (investigation_dossier, dossier_markdown,  # noqa: E402
-                         artifact_actor, artifact_purpose)
+                         dossier_bundle, artifact_actor, artifact_purpose)
 from app.models import (Investigation, AgentRun, Artifact, Explanation,  # noqa: E402
                         SecurityAssessment, CveFinding)
 
@@ -782,6 +782,73 @@ class TestReportShape(unittest.TestCase):
             self.assertIn("the payload leaves unfiltered", md)
             self.assertIn("Trigger", md)
             self.assertIn("flowchart LR", md)
+        finally:
+            inv.close()
+
+
+class TestDossierBundle(unittest.TestCase):
+    """The zip carries the markdown plus every diagram as a picture file."""
+
+    FLOW = ("flowchart TD\n"
+            "    A[User] --> B[Assistant]")
+
+    def _bundled_inv(self):
+        inv = _Inv()
+        out = _run("standard", inv.db, inv.id)
+        rec = _store(inv.db, inv.id, out)
+        rec.markdown = ("report text\n```mermaid\n" + self.FLOW + "\n```\n"
+                        "```mermaid\n" + self.FLOW + "\n```\n")
+        inv.db.commit()
+        return inv
+
+    def _fake_png(self):
+        import io as _io
+        from PIL import Image
+        buf = _io.BytesIO()
+        Image.new("RGB", (120, 60), (180, 30, 30)).save(buf, format="PNG")
+        return buf.getvalue()
+
+    def test_bundle_has_markdown_pictures_and_fences(self):
+        import io as _io
+        import zipfile as _zf
+        from app import mermaid_png
+        inv = self._bundled_inv()
+        try:
+            with mock.patch.object(mermaid_png, "render_sources",
+                                   return_value={self.FLOW: self._fake_png()}):
+                raw = dossier_bundle(inv.db, inv.id)
+            zf = _zf.ZipFile(_io.BytesIO(raw))
+            names = zf.namelist()
+            self.assertIn("dossier.md", names)
+            pics = sorted(n for n in names if n.startswith("images/"))
+            # The same figure twice still ships one picture file.
+            self.assertEqual(len(pics), 1)
+            md = zf.read("dossier.md").decode("utf-8")
+            # Picture link for viewers without a diagram plugin...
+            self.assertIn(f"]({pics[0]})", md)
+            self.assertIn("![Figure", md)
+            # ...and the fence itself, which renders natively on GitHub.
+            self.assertIn("```mermaid", md)
+            self.assertIn(self.FLOW, md)
+            from PIL import Image
+            Image.open(_io.BytesIO(zf.read(pics[0]))).verify()
+        finally:
+            inv.close()
+
+    def test_bundle_without_pictures_is_plain_markdown(self):
+        import io as _io
+        import zipfile as _zf
+        from app import mermaid_png
+        inv = self._bundled_inv()
+        try:
+            with mock.patch.object(mermaid_png, "render_sources",
+                                   return_value={}):
+                raw = dossier_bundle(inv.db, inv.id)
+            zf = _zf.ZipFile(_io.BytesIO(raw))
+            self.assertEqual(zf.namelist(), ["dossier.md"])
+            md = zf.read("dossier.md").decode("utf-8")
+            self.assertNotIn("images/", md)
+            self.assertIn("```mermaid", md)
         finally:
             inv.close()
 

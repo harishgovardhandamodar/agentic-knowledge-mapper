@@ -3146,8 +3146,8 @@ def build_pdf(markdown_text: str, title: str = "AI Security Assessment",
         from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
         from reportlab.lib.units import cm
         from reportlab.platypus import (SimpleDocTemplate, Paragraph, Spacer,
-                                        Table, TableStyle, PageBreak,
-                                        KeepTogether)
+                                         Table, TableStyle, PageBreak,
+                                         KeepTogether, Image as RLImage)
         from reportlab.platypus.tableofcontents import TableOfContents
         from reportlab.lib import colors
         from reportlab.lib.enums import TA_LEFT
@@ -3326,6 +3326,34 @@ def build_pdf(markdown_text: str, title: str = "AI Security Assessment",
     story.append(PageBreak())
 
     # ---- body ----
+    # Arbitrary mermaid figures (explainer flowcharts, sequence diagrams,
+    # mindmaps) are drawn to PNG once per document, up front, so every fence
+    # below prints a picture. Whatever cannot be rendered stays source text:
+    # a missing picture must never break the export.
+    _mermaid_pngs: dict[str, bytes] = {}
+    try:
+        from .mermaid_png import collect_sources, render_sources
+        _mm_srcs = collect_sources(markdown_text, skip_labels=set(_FIGURE_SPECS))
+        if _mm_srcs:
+            _mermaid_pngs = render_sources(_mm_srcs)
+    except Exception:
+        _mermaid_pngs = {}
+
+    def _mermaid_image(png: bytes):
+        """Fit a rendered figure to the frame, preserving aspect ratio."""
+        from PIL import Image as _PILImage
+        with _PILImage.open(io.BytesIO(png)) as im:
+            iw, ih = im.size
+        if not iw or not ih:
+            return None
+        w = FRAME_W
+        h = FRAME_W * ih / iw
+        max_h = PAGE_H - 2 * MARGIN - 60
+        if h > max_h:
+            h = max_h
+            w = max_h * iw / ih
+        return RLImage(io.BytesIO(png), width=w, height=h)
+
     in_table = False
     table_rows: list[list] = []
     table_rows_raw: list[list] = []
@@ -3555,16 +3583,31 @@ def build_pdf(markdown_text: str, title: str = "AI Security Assessment",
                     # mermaid fence is shown as an ordinary code block -- it is
                     # not a diagram and must not be numbered as one.
                     head = next((l.strip() for l in pending_code
-                                 if l.strip()), "")
+                                   if l.strip()), "")
                     if src_is_mermaid:
                         fig_no += 1
-                        cap = Paragraph(_inline(
-                            f"Figure {fig_no}: {head} (mermaid source)"),
-                            caption_style)
+                        _png = _mermaid_pngs.get("\n".join(pending_code).strip())
+                        _fig = None
+                        if _png is not None:
+                            try:
+                                _fig = _mermaid_image(_png)
+                            except Exception:
+                                _fig = None
+                        if _fig is not None:
+                            cap = Paragraph(_inline(
+                                f"Figure {fig_no}: {head}"), caption_style)
+                            story.append(KeepTogether([cap, _fig]))
+                        else:
+                            cap = Paragraph(_inline(
+                                f"Figure {fig_no}: {head} (mermaid source)"),
+                                caption_style)
+                            story.append(KeepTogether(
+                                [cap, _code_block(pending_code)]))
                     else:
                         cap = Paragraph(_inline(
                             f"{pending_lang or 'code'} block"), caption_style)
-                    story.append(KeepTogether([cap, _code_block(pending_code)]))
+                        story.append(KeepTogether(
+                            [cap, _code_block(pending_code)]))
                     story.append(Spacer(1, 0.3 * cm))
                 pending_fig = ""
                 pending_lang = ""

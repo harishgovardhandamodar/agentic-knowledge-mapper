@@ -1350,3 +1350,72 @@ def dossier_markdown(db, inv_id: int, dossier: dict | None = None) -> str:
       "recomputed or estimated at render time. Re-running an assessment writes "
       "a new row and leaves the superseded one above._")
     return "\n".join(L)
+
+
+def dossier_bundle(db, inv_id: int, dossier: dict | None = None) -> bytes:
+    """A ZIP: ``dossier.md`` plus every diagram as ``images/*.png``.
+
+    Each mermaid fence keeps its source -- it renders natively on GitHub and
+    keeps the report reproducible -- and gains a picture link above it, so
+    the same file also shows figures in viewers with no diagram plugin. A
+    fence with no rendered picture stays exactly as the plain Markdown
+    export has it.
+    """
+    import io as _io
+    import zipfile as _zf
+    from .mermaid_png import collect_sources, render_sources
+    md = dossier_markdown(db, inv_id, dossier=dossier)
+    try:
+        pngs = render_sources(collect_sources(md))
+    except Exception:
+        pngs = {}
+    numbering: dict[str, tuple[int, str]] = {}
+    files: dict[str, bytes] = {}
+    out: list[str] = []
+    buf: list[str] = []
+    in_fence = False
+    code: list[str] = []
+
+    def _flush_fence() -> None:
+        src = "\n".join(code).strip()
+        blob = pngs.get(src)
+        if blob:
+            if src not in numbering:
+                head = next((l.strip() for l in code if l.strip()),
+                            "diagram")
+                slug = re.sub(r"[^a-z0-9]+", "-", head.lower()
+                              ).strip("-")[:40] or "diagram"
+                n = len(numbering) + 1
+                numbering[src] = (n, f"images/fig-{n:02d}-{slug}.png")
+                files[numbering[src][1]] = blob
+            n, arc = numbering[src]
+            head = next((l.strip() for l in code if l.strip()),
+                        "diagram")[:80].replace("[", "(").replace("]", ")")
+            out.append(f"![Figure {n}: {head}]({arc})")
+            out.append("")
+        out.extend(buf)
+
+    for raw in md.splitlines():
+        line = raw.rstrip()
+        if line.strip().startswith("```"):
+            if not in_fence:
+                buf = [line]
+                code = []
+            else:
+                buf.append(line)
+                _flush_fence()
+                buf = []
+                code = []
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            buf.append(line)
+            code.append(line)
+        else:
+            out.append(line)
+    bundle = _io.BytesIO()
+    with _zf.ZipFile(bundle, "w", _zf.ZIP_DEFLATED) as zf:
+        zf.writestr("dossier.md", "\n".join(out) + "\n")
+        for arc, blob in files.items():
+            zf.writestr(arc, blob)
+    return bundle.getvalue()

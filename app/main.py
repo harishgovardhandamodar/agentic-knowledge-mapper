@@ -1325,6 +1325,19 @@ def get_dossier_markdown(inv_id: int, db: Session = Depends(get_db)):
                  f'attachment; filename="investigation-{inv_id}-dossier.md"'})
 
 
+@app.get("/api/investigations/{inv_id}/dossier/bundle")
+def get_dossier_bundle(inv_id: int, db: Session = Depends(get_db)):
+    from .dossier import dossier_bundle
+    try:
+        bundle = dossier_bundle(db, inv_id)
+    except LookupError:
+        raise HTTPException(404, "Investigation not found")
+    return Response(
+        content=bundle, media_type="application/zip",
+        headers={"Content-Disposition":
+                 f'attachment; filename="investigation-{inv_id}-dossier.zip"'})
+
+
 @app.get("/api/investigations/{inv_id}/dossier/pdf")
 def get_dossier_pdf(inv_id: int, db: Session = Depends(get_db)):
     from .dossier import dossier_markdown, investigation_dossier

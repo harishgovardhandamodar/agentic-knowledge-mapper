@@ -1832,6 +1832,7 @@ function secDossierSectionHtml() {
     `<button class="btn btn-sm" onclick="loadDossier()"><i class="fas fa-eye"></i> Preview</button>` +
     `<button class="btn btn-sm" onclick="downloadDossier('pdf')"><i class="fas fa-file-pdf"></i> Write to PDF</button>` +
     `<button class="btn btn-sm" onclick="downloadDossier('md')"><i class="fas fa-file-lines"></i> Markdown</button>` +
+    `<button class="btn btn-sm" onclick="downloadDossier('zip')"><i class="fas fa-file-archive"></i> Bundle (.zip)</button>` +
     `<button class="btn btn-ghost btn-sm" onclick="printDossier()"><i class="fas fa-print"></i> Print</button>` +
     `</div><div id="dosPreview"></div></div>`;
 }
@@ -2098,23 +2099,25 @@ function secDossierRender() {
 
 async function downloadDossier(kind) {
   if (!currentInv) { showNotif('Select an investigation first', 'error'); return; }
-  // Same download path for both formats: the endpoints send
+  // Same download path for every format: the endpoints send
   // Content-Disposition, and a blob keeps the filename right instead of
   // handing the browser a URL it has to guess a name from.
-  const isMd = kind === 'md';
-  const url = `${API}/investigations/${currentInv}/dossier/${isMd ? 'markdown' : 'pdf'}`;
-  if (!isMd) showNotif('Building PDF…');
+  const conf = {md: ['Markdown', 'markdown', 'md'],
+                pdf: ['PDF', 'pdf', 'pdf'],
+                zip: ['Bundle', 'bundle', 'zip']}[kind] || ['PDF', 'pdf', 'pdf'];
+  const url = `${API}/investigations/${currentInv}/dossier/${conf[1]}`;
+  if (kind !== 'md') showNotif(`Building ${conf[0]}…`);
   try {
     const res = await fetch(url);
     if (res.status === 501) { showNotif('Server PDF needs reportlab — use Print → Save as PDF', 'error'); window.print(); return; }
-    if (!res.ok) { showNotif(`${isMd ? 'Markdown' : 'PDF'} export failed`, 'error'); return; }
+    if (!res.ok) { showNotif(`${conf[0]} export failed`, 'error'); return; }
     const blob = await res.blob();
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = `investigation-${currentInv}-dossier.${isMd ? 'md' : 'pdf'}`;
+    a.download = `investigation-${currentInv}-dossier.${conf[2]}`;
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 5000);
-    showNotif(`Dossier ${isMd ? 'Markdown' : 'PDF'} downloaded`, 'success');
+    showNotif(`Dossier ${conf[0]} downloaded`, 'success');
   } catch (e) { showNotif(`Export failed: ${e.message}`, 'error'); }
 }
 
