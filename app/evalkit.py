@@ -190,14 +190,169 @@ def invariants() -> list[dict[str, Any]]:
     return out
 
 
+def model_cases() -> list[dict[str, Any]]:
+    """Pinned W1/W2 cases. Rebaseline deliberately, not accidentally."""
+    from . import model_eval as _me
+    return [
+        {"name": "w1-open-weights-diffusion-with-extraction-literature",
+         "kind": "w1",
+         "findings": [
+             {"attack_class": "extraction", "applies_to": "model_specific",
+              "confidence": 0.8},
+             {"attack_class": "membership_inference", "applies_to": "family",
+              "confidence": 0.6}],
+         "expect": {"overall_pct": 46.6, "coverage_pct": 25.0},
+         "note": "model-specific extraction dominates; family evidence counts less"},
+        {"name": "w1-api-only-model-no-public-attacks",
+         "kind": "w1",
+         "findings": [],
+         "expect": {"overall_pct": None, "coverage_pct": 0.0},
+         "note": "no evidence is no score, never a low one"},
+        {"name": "w2-sensitive-tabular-high-memorization",
+         "kind": "w2",
+         "dimensions": [
+             {"dimension": "memorization", "rating": "high"},
+             {"dimension": "data_processing", "rating": "high"},
+             {"dimension": "governance_documentation", "rating": "low"}],
+         "expect": {"overall_pct": 60.0, "uncertainty_pct": 50.0},
+         "note": "two rated dimensions carry the score; six unknown raise uncertainty"},
+        {"name": "w2-documented-api-model-with-zdr",
+         "kind": "w2",
+         "dimensions": [{"dimension": d[0], "rating": "low"}
+                         for d in _me.ADOPTION_DIMENSIONS],
+         "expect": {"overall_pct": 25.0, "uncertainty_pct": 0.0},
+         "note": "fully rated low is genuinely low"},
+        {"name": "w3-tabular-open-prioritizes-dp-canaries",
+         "kind": "mit",
+         "meta": {"model_family": "tabular_fm",
+                  "weights_source": "open_weights"},
+         "attacks": [{"attack_class": "extraction",
+                      "applies_to": "model_specific", "confidence": 0.8}],
+         "dimensions": [{"dimension": "memorization", "rating": "high"}],
+         "expect": {"top_contains": ["MM05"],
+                    "proposed_contains": ["MM01", "MM03"],
+                    "deferred_contains": ["MM04"]},
+         "note": "high memorization + training access: canaries first, DP "
+                 "and unlearning proposed; output watermarking deferred "
+                 "for tabular"},
+        {"name": "w3-api-only-generative-no-weight-controls",
+         "kind": "mit",
+         "meta": {"model_family": "diffusion",
+                  "weights_source": "api_only"},
+         "attacks": [{"attack_class": "extraction",
+                      "applies_to": "family", "confidence": 0.6}],
+         "dimensions": [{"dimension": "memorization", "rating": "medium"}],
+         "expect": {"proposed_excludes": ["MM01", "MM10"],
+                    "deferred_contains": ["MM01", "MM10"]},
+         "note": "API-only customers cannot operate training or weight "
+                 "controls: API-side measures only"},
+    ]
+
+
+def _run_model_case(case: dict[str, Any]) -> dict[str, Any]:
+    from . import model_eval as _me
+    if case["kind"] == "mit":
+        applicable, deferred = _me.prefilter_mitigations(case["meta"])
+        plan = _me.rank_mitigations(case["meta"], case.get("attacks", []),
+                                    case.get("dimensions", []))
+        exp = case.get("expect", {})
+        failures = []
+        top = [p["control_id"] for p in plan[:5]]
+        proposed = {p["control_id"] for p in plan}
+        deferred_ids = {d["control_id"] for d in deferred}
+        for cid in exp.get("top_contains", []):
+            if cid not in top:
+                failures.append({"field": f"top5 contains {cid}",
+                                 "expected": True, "actual": top})
+        for cid in exp.get("proposed_contains", []):
+            if cid not in proposed:
+                failures.append({"field": f"proposed contains {cid}",
+                                 "expected": True,
+                                 "actual": sorted(proposed)})
+        for cid in exp.get("proposed_excludes", []):
+            if cid in proposed:
+                failures.append({"field": f"proposed excludes {cid}",
+                                 "expected": True, "actual": sorted(proposed)})
+        for cid in exp.get("deferred_contains", []):
+            if cid not in deferred_ids:
+                failures.append({"field": f"deferred contains {cid}",
+                                 "expected": True,
+                                 "actual": sorted(deferred_ids)})
+        return {"name": case["name"], "note": case.get("note", ""),
+                "ok": not failures, "failures": failures,
+                "result": {"top5": top,
+                           "deferred": sorted(deferred_ids)}}
+    if case["kind"] == "w1":
+        result = _me.score_adversarial(case["findings"])
+    else:
+        result = _me.score_adoption(case["dimensions"])
+    exp = case.get("expect", {})
+    failures = []
+    for field in ("overall_pct", "coverage_pct", "uncertainty_pct"):
+        if field in exp:
+            actual, expected = result.get(field), exp[field]
+            if expected is None:
+                if actual is not None:
+                    failures.append({"field": field, "expected": None,
+                                     "actual": actual})
+            elif actual is None or abs(float(actual) - float(expected)) > TOLERANCE:
+                failures.append({"field": field, "expected": expected,
+                                 "actual": actual})
+    return {"name": case["name"], "note": case.get("note", ""),
+            "ok": not failures, "failures": failures,
+            "result": {k: result.get(k) for k in
+                       ("overall_pct", "coverage_pct", "uncertainty_pct")}}
+
+
+def model_invariants() -> list[dict[str, Any]]:
+    """Properties the model methods must hold whatever the evidence is."""
+    from . import model_eval as _me
+    out = []
+    base = [{"dimension": "memorization", "rating": "high"}]
+    scored = _me.score_adoption(base)["overall_pct"]
+    plus_unknown = _me.score_adoption(
+        base + [{"dimension": "cascade", "rating": "unknown"}])["overall_pct"]
+    out.append({
+        "name": "unknown-never-lowers-risk",
+        "ok": abs((plus_unknown or 0) - (scored or 0)) <= TOLERANCE,
+        "detail": {"without": scored, "with_unknown": plus_unknown},
+    })
+    same = {"attack_class": "extraction", "confidence": 0.8}
+    fam = _me.score_adversarial([{**same, "applies_to": "family"}])["overall_pct"]
+    own = _me.score_adversarial(
+        [{**same, "applies_to": "model_specific"}])["overall_pct"]
+    out.append({
+        "name": "model-specific-outranks-family",
+        "ok": (own or 0) > (fam or 0),
+        "detail": {"family": fam, "model_specific": own},
+    })
+    out.append({
+        "name": "empty-w1-has-no-score",
+        "ok": _me.score_adversarial([])["overall_pct"] is None,
+        "detail": {},
+    })
+    out.append({
+        "name": "all-unknown-w2-has-no-score",
+        "ok": _me.score_adoption([])["overall_pct"] is None
+        and _me.score_adoption([])["uncertainty_pct"] == 100.0,
+        "detail": {},
+    })
+    return out
+
+
 def run_eval() -> dict[str, Any]:
     """Run every case and invariant. ``ok`` is the gate."""
     results = [_run_case(c) for c in cases()]
     invs = invariants()
+    model_results = [_run_model_case(c) for c in model_cases()]
+    model_invs = model_invariants()
     failed = [r for r in results if not r["ok"]]
     failed_inv = [i for i in invs if not i["ok"]]
+    failed_model = [r for r in model_results if not r["ok"]]
+    failed_model_inv = [i for i in model_invs if not i["ok"]]
     return {
-        "ok": not failed and not failed_inv,
+        "ok": not failed and not failed_inv and not failed_model
+        and not failed_model_inv,
         "pack": tp.pack_manifest(),
         "cases_run": len(results),
         "cases_failed": len(failed),
@@ -205,9 +360,19 @@ def run_eval() -> dict[str, Any]:
         "invariants_failed": len(failed_inv),
         "cases": results,
         "invariants": invs,
+        "model_cases_run": len(model_results),
+        "model_cases_failed": len(failed_model),
+        "model_invariants_run": len(model_invs),
+        "model_invariants_failed": len(failed_model_inv),
+        "model_cases": model_results,
+        "model_invariants": model_invs,
         "failures": [{"case": r["name"], "why": r["failures"]} for r in failed]
                    + [{"invariant": i["name"], "detail": i["detail"]}
-                      for i in failed_inv],
+                      for i in failed_inv]
+                   + [{"model_case": r["name"], "why": r["failures"]}
+                      for r in failed_model]
+                   + [{"model_invariant": i["name"], "detail": i["detail"]}
+                      for i in failed_model_inv],
     }
 
 
@@ -248,9 +413,19 @@ def render(report: dict[str, Any]) -> str:
     for i in report["invariants"]:
         mark = "ok  " if i["ok"] else "FAIL"
         lines.append(f"  [{mark}] invariant: {i['name']}")
+    for r in report.get("model_cases", []):
+        mark = "ok  " if r["ok"] else "FAIL"
+        lines.append(f"  [{mark}] model: {r['name']}")
+        for f in r["failures"]:
+            lines.append(f"         {f['field']}: expected {f['expected']}, "
+                         f"got {f['actual']}")
+    for i in report.get("model_invariants", []):
+        mark = "ok  " if i["ok"] else "FAIL"
+        lines.append(f"  [{mark}] model invariant: {i['name']}")
     lines.append(f"{'PASS' if report['ok'] else 'FAIL'}: "
                  f"{report['cases_run']} cases, {report['invariants_run']} "
-                 f"invariants")
+                 f"invariants, {report.get('model_cases_run', 0)} model cases, "
+                 f"{report.get('model_invariants_run', 0)} model invariants")
     return "\n".join(lines)
 
 

@@ -73,6 +73,7 @@ _MIGRATIONS = [
     ("artifacts", "drift", "INTEGER NOT NULL DEFAULT 0"),
     ("security_assessments", "inherent_pct", "FLOAT"),
     ("security_assessments", "residual_pct", "FLOAT"),
+    ("security_assessments", "model_json", "TEXT"),
     ("security_assessments", "controls_json", "TEXT"),
     ("security_assessments", "scoring_json", "TEXT"),
     ("security_assessments", "workflow_text", "TEXT"),
