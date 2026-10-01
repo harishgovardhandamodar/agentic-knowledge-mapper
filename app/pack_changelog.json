@@ -1,0 +1,26 @@
+{
+  "entries": [
+    {
+      "catalog": "all",
+      "version": "baseline",
+      "date": "2026-10-01",
+      "adopted_versions": {
+        "akm-threat-pack": "2.1.0",
+        "akm-model-adversarial": "1.0.0",
+        "akm-adoption-risk": "1.0.0",
+        "akm-model-mitigations": "1.0.0",
+        "akm-experiment-plan": "1.0.0"
+      },
+      "changes": [
+        "baseline as inventoried: threat pack 2.1.0, model catalogs 1.0.0, experiment template 1.0.0"
+      ],
+      "evalkit_cases": [
+        "no-controls-baseline",
+        "all-controls",
+        "w1-open-weights-diffusion-with-extraction-literature",
+        "w2-sensitive-tabular-high-memorization",
+        "w3-tabular-open-prioritizes-dp-canaries"
+      ]
+    }
+  ]
+}

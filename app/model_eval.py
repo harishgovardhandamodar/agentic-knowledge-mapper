@@ -65,9 +65,6 @@ ADOPTION_DIMENSIONS: list[tuple[str, str, float]] = [
 RATING_SCORES = {"low": 25.0, "medium": 50.0, "high": 75.0, "critical": 95.0}
 
 
-MITIGATION_ID = "akm-model-mitigations"
-MITIGATION_VERSION = "1.0.0"
-
 #: Burden levels: compute, latency, UX and legal cost of deploying the control.
 _BURDENS = ("low", "medium", "high")
 
@@ -255,7 +252,8 @@ MITIGATION_CATALOG: list[dict[str, Any]] = [
 def mitigation_fingerprint() -> str:
     """Fingerprint of the mitigation catalog W3 plans against."""
     return _fingerprint({"id": MITIGATION_ID, "version": MITIGATION_VERSION,
-                         "controls": MITIGATION_CATALOG})
+                         "controls": MITIGATION_CATALOG,
+                         "deprecated": DEPRECATED["mitigations"]})
 
 
 def prefilter_mitigations(meta: dict[str, Any]
@@ -271,6 +269,8 @@ def prefilter_mitigations(meta: dict[str, Any]
     applicable: list[dict[str, Any]] = []
     deferred: list[dict[str, str]] = []
     for c in MITIGATION_CATALOG:
+        if c.get("id") in DEPRECATED["mitigations"]:
+            continue
         fams = c.get("applies_to_families") or ["*"]
         if "*" not in fams and family not in fams:
             deferred.append({"control_id": c["id"],
@@ -293,6 +293,20 @@ def prefilter_mitigations(meta: dict[str, Any]
     return applicable, deferred
 
 
+def plan_or_empty(meta: dict[str, Any], attacks: list[dict],
+                  dimensions: list[dict], evidence: list) -> list[dict[str, Any]]:
+    """The ranked plan, or an explicit empty list when there is zero risk
+    context (no findings, no rated dimensions, no evidence). An empty plan
+    is a reportable outcome -- insufficient evidence -- never a silent
+    success, so callers must render the empty case rather than skip it."""
+    rated = [d for d in (dimensions or [])
+             if isinstance(d, dict)
+             and str(d.get("rating") or "unknown").lower() != "unknown"]
+    if not (attacks or rated or evidence):
+        return []
+    return rank_mitigations(meta, attacks, dimensions)
+
+
 def rank_mitigations(meta: dict[str, Any], attacks: list[dict],
                      dimensions: list[dict]) -> list[dict[str, Any]]:
     """Rank applicable controls by driver pressure, minus burden.
@@ -309,7 +323,7 @@ def rank_mitigations(meta: dict[str, Any], attacks: list[dict],
         if not isinstance(f, dict):
             continue
         cls = str(f.get("attack_class") or "")
-        if not cls:
+        if not cls or cls in DEPRECATED["attack_classes"]:
             continue
         sev = ATTACK_CLASSES.get(cls, ATTACK_CLASSES["other"])["severity"]
         scope = _SCOPE_WEIGHTS.get(str(f.get("applies_to") or ""), 0.4)
@@ -396,7 +410,8 @@ def score_mitigation_residual(attacks: list[dict], dimensions: list[dict],
         if not isinstance(f, dict):
             continue
         cls = str(f.get("attack_class") or "")
-        if not cls or cls in per_class:
+        if not cls or cls in per_class \
+                or cls in DEPRECATED["attack_classes"]:
             continue
         sev = ATTACK_CLASSES.get(cls, ATTACK_CLASSES["other"])["severity"]
         scope = _SCOPE_WEIGHTS.get(str(f.get("applies_to") or ""), 0.4)
@@ -428,6 +443,219 @@ def score_mitigation_residual(attacks: list[dict], dimensions: list[dict],
                     "not measurements"}
 
 
+EXPERIMENT_ID = "akm-experiment-plan"
+EXPERIMENT_VERSION = "1.0.0"
+EXPERIMENT_METHOD = "experiment_plan_v1"
+
+EXPERIMENT_METHOD_TYPES = (
+    "membership_inference", "extraction_probe", "canary",
+    "unlearning_check", "watermark_detect", "robustness_grid",
+    "privacy_accounting", "doc_audit",
+)
+EXPERIMENT_EFFORTS = ("low", "medium", "high")
+EXPERIMENT_PREREQUISITES = ("weights_access", "query_api",
+                            "training_data_sample", "vendor_coop")
+
+#: Which experiment types target which open question. Deterministic mapping
+#: so the plan is never a generic MLOps checklist.
+_DIMENSION_EXPERIMENTS: dict[str, list[str]] = {
+    "family_nature": ["doc_audit"],
+    "data_processing": ["extraction_probe", "doc_audit"],
+    "memorization": ["canary", "extraction_probe", "privacy_accounting"],
+    "adversarial_transfer": ["robustness_grid"],
+    "cascade": ["robustness_grid"],
+    "known_issues": ["doc_audit"],
+    "ops_monitoring": ["canary", "robustness_grid"],
+    "governance_documentation": ["doc_audit"],
+}
+_CLASS_EXPERIMENTS: dict[str, list[str]] = {
+    "membership_inference": ["membership_inference", "privacy_accounting"],
+    "extraction": ["extraction_probe", "canary"],
+    "inversion": ["extraction_probe"],
+    "evasion": ["robustness_grid"],
+    "poisoning": ["robustness_grid", "canary"],
+    "injection": ["robustness_grid"],
+    "theft": ["watermark_detect"],
+    "cascade": ["robustness_grid"],
+    "other": ["doc_audit"],
+}
+_MITIGATION_EXPERIMENTS: dict[str, str] = {
+    "MM01": "privacy_accounting", "MM02": "privacy_accounting",
+    "MM03": "unlearning_check", "MM04": "watermark_detect",
+    "MM05": "canary", "MM06": "robustness_grid",
+    "MM07": "robustness_grid", "MM08": "extraction_probe",
+    "MM09": "extraction_probe", "MM10": "watermark_detect",
+    "MM11": "robustness_grid", "MM12": "robustness_grid",
+    "MM13": "canary", "MM14": "extraction_probe",
+    "MM15": "doc_audit",
+}
+_FALSIFIER_METHODS: tuple[tuple[str, str], ...] = (
+    ("retention", "unlearning_check"),
+    ("retain", "unlearning_check"),
+    ("delet", "unlearning_check"),
+    ("watermark", "watermark_detect"),
+    ("membership", "membership_inference"),
+    ("memoriz", "canary"),
+    ("extract", "extraction_probe"),
+    ("leak", "extraction_probe"),
+    ("robust", "robustness_grid"),
+    ("adversarial", "robustness_grid"),
+    ("phish", "robustness_grid"),
+    ("audit", "doc_audit"),
+    ("document", "doc_audit"),
+    ("log", "doc_audit"),
+)
+
+
+def experiment_fingerprint() -> str:
+    """Fingerprint of the experiment method catalogue."""
+    return _fingerprint({"id": EXPERIMENT_ID, "version": EXPERIMENT_VERSION,
+                         "method_types": EXPERIMENT_METHOD_TYPES,
+                         "dimension_map": _DIMENSION_EXPERIMENTS,
+                         "class_map": _CLASS_EXPERIMENTS,
+                         "mitigation_map": _MITIGATION_EXPERIMENTS})
+
+
+def _experiment_prereqs(meta: dict[str, Any]) -> list[str]:
+    weights = (meta or {}).get("weights_source") or "unknown"
+    prereqs = ["query_api"]
+    if weights in ("open_weights", "hybrid"):
+        prereqs.append("weights_access")
+    return prereqs
+
+
+def plan_experiments(meta: dict[str, Any], attacks: list[dict],
+                     dimensions: list[dict], hypotheses: list[dict],
+                     mitigation_plan: list[dict]) -> dict[str, Any]:
+    """Deterministic experiment plan: every open question gets a probe.
+
+    Ranked by information gain proxies, not effort: unknown dimensions and
+    open falsifiers first, MM validation second, already-covered ground
+    never repeated. Weight-only methods require weights access; without it
+    the experiment carries a ``vendor_coop`` prerequisite instead of being
+    silently dropped. A plan with nothing to target is an explicit empty
+    list, never a padded one.
+    """
+    prereqs = _experiment_prereqs(meta)
+    has_weights = "weights_access" in prereqs
+    exps: list[dict[str, Any]] = []
+
+    def _add(method_type: str, title: str, targets: dict,
+             rationale: str, effort: str, extra_prereqs: list[str] | None = None,
+             evidence: list | None = None):
+        need = list(extra_prereqs or [])
+        if method_type in ("membership_inference", "extraction_probe",
+                           "canary", "unlearning_check", "watermark_detect",
+                           "robustness_grid") and not has_weights \
+                and "query_api" not in need:
+            need = ["query_api"] + need
+        if method_type in ("unlearning_check", "watermark_detect") \
+                and not has_weights:
+            if "vendor_coop" not in need:
+                need = need + ["vendor_coop"]
+        for e in exps:
+            if e["method_type"] == method_type and e["targets"] == targets:
+                return
+        exps.append({
+            "id": f"EX-{len(exps) + 1:02d}", "title": title,
+            "targets": targets, "method_type": method_type,
+            "data_requirements": ("checkpoint + query API" if has_weights
+                                  else "query API access"),
+            "metrics": ["success rate", "false-positive rate"],
+            "success_criteria": "pre-registered threshold met",
+            "fail_criteria": "threshold missed on two independent runs",
+            "effort": effort, "prerequisites": need,
+            "linked_evidence_ids": list(evidence or []),
+            "status": "proposed", "rationale": rationale})
+
+    for d in dimensions or []:
+        if not isinstance(d, dict):
+            continue
+        if str(d.get("rating") or "unknown").lower() != "unknown":
+            continue
+        d_id = str(d.get("dimension") or "")
+        for m in _DIMENSION_EXPERIMENTS.get(d_id, ["doc_audit"]):
+            _add(m, f"{m.replace('_', ' ')} for unknown {d_id}",
+                 {"attack_classes": [], "adoption_dimensions": [d_id],
+                  "hypothesis_ids": [], "mitigation_ids": []},
+                 f"{d_id} is unknown: measure it instead of assuming it",
+                 "low" if m == "doc_audit" else "medium")
+    for f in attacks or []:
+        if not isinstance(f, dict):
+            continue
+        cls = str(f.get("attack_class") or "")
+        if not cls:
+            continue
+        try:
+            conf = max(0.0, min(1.0, float(f.get("confidence", 0.5))))
+        except (TypeError, ValueError):
+            conf = 0.5
+        if conf < 0.4:
+            continue
+        for m in _CLASS_EXPERIMENTS.get(cls, ["doc_audit"]):
+            _add(m, f"{m.replace('_', ' ')} for {cls}",
+                 {"attack_classes": [cls], "adoption_dimensions": [],
+                  "hypothesis_ids": [], "mitigation_ids": []},
+                 f"validate published {cls} against this deployment",
+                 "medium",
+                 evidence=[a for a in (f.get("evidence_artifact_ids") or [])
+                           if isinstance(a, int)][:8])
+    for h in hypotheses or []:
+        if not isinstance(h, dict):
+            continue
+        if str(h.get("status") or "untested").lower() not in (
+                "untested", "contested"):
+            continue
+        fals = [str(x) for x in (h.get("falsifiers") or [])
+                if str(x).strip()]
+        if not fals:
+            _add("doc_audit",
+                 f"make {(h.get('hypothesis_id') or h.get('id') or '')} testable",
+                 {"attack_classes": [], "adoption_dimensions": [],
+                  "hypothesis_ids": [h.get("hypothesis_id") or h.get("id")],
+                  "mitigation_ids": []},
+                 "open falsifier with no test: write the test first",
+                 "low")
+            continue
+        method = "doc_audit"
+        blob = " ".join(fals).lower()
+        for kw, m in _FALSIFIER_METHODS:
+            if kw in blob:
+                method = m
+                break
+        _add(method, f"{method.replace('_', ' ')} for "
+                     f"{h.get('hypothesis_id') or h.get('id') or ''}",
+             {"attack_classes": [], "adoption_dimensions": [],
+              "hypothesis_ids": [h.get("hypothesis_id") or h.get("id")],
+              "mitigation_ids": []},
+             f"settle falsifier: {fals[0][:120]}",
+             "medium" if method != "doc_audit" else "low")
+    rank = {"MM01": 0, "MM03": 1, "MM05": 2, "MM04": 3, "MM09": 4}
+    top_mm = sorted(
+        [p for p in (mitigation_plan or []) if isinstance(p, dict)],
+        key=lambda p: (rank.get(str(p.get("control_id")), 9),
+                       p.get("priority", 99)))[:5]
+    for p in top_mm:
+        cid = str(p.get("control_id") or "")
+        method = _MITIGATION_EXPERIMENTS.get(cid, "doc_audit")
+        _add(method, f"validate {cid}",
+             {"attack_classes": [], "adoption_dimensions": [],
+              "hypothesis_ids": [], "mitigation_ids": [cid]},
+             f"check {cid} does what its efficacy prior claims "
+             f"({(p.get('residual_limitations') or '')[:100]})",
+             "medium",
+             evidence=[a for a in (p.get("evidence_artifact_ids") or [])
+                       if isinstance(a, int)][:8])
+    roadmap = {"30d": [], "60d": [], "90d": []}
+    for e in exps:
+        bucket = {"low": "30d", "medium": "60d"}.get(e["effort"], "90d")
+        roadmap[bucket].append(f"{e['id']}: {e['title']}")
+    return {"method": EXPERIMENT_METHOD, "method_version": EXPERIMENT_VERSION,
+            "method_fingerprint": experiment_fingerprint(),
+            "experiments": exps, "roadmap": roadmap,
+            "note": "plan only: execution is out of band"}
+
+
 def posture_for(score: float | None) -> str:
     """Same four bands as the product residual scale, so a model number
     reads the same way. ``None`` (no evidence) is not LOW -- it is unknown.
@@ -447,22 +675,69 @@ MODEL_ADV_VERSION = "1.0.0"
 ADOPTION_ID = "akm-adoption-risk"
 ADOPTION_VERSION = "1.0.0"
 
+MITIGATION_ID = "akm-model-mitigations"
+MITIGATION_VERSION = "1.0.0"
+
+#: Change policy per catalog, enforced by tests/test_versioning.py. Same
+#: rule as the product pack: fingerprint moves without a version bump, or
+#: numbers move without an evalkit update, and CI fails.
+CHANGE_POLICY = {
+    "akm-model-adversarial": {
+        "major": "add/remove/rename an attack class; change a severity",
+        "minor": "re-weight scope weights",
+        "patch": "wording or label only — no number may move",
+        "version": MODEL_ADV_VERSION,
+    },
+    "akm-adoption-risk": {
+        "major": "add/remove/rename a dimension",
+        "minor": "re-weight dimensions or rating scores",
+        "patch": "wording or label only — no number may move",
+        "version": ADOPTION_VERSION,
+    },
+    "akm-model-mitigations": {
+        "major": "add/remove/rename a control; change applicability rules",
+        "minor": "re-tune efficacy hints, burden levels or rank penalties",
+        "patch": "wording or references only — no number may move",
+        "version": MITIGATION_VERSION,
+    },
+    "akm-experiment-plan": {
+        "major": "add/remove a method type or target axis",
+        "minor": "re-tune mapping tables or effort buckets",
+        "patch": "wording or rationale templates only",
+        "version": EXPERIMENT_VERSION,
+    },
+}
+
+
 
 def _fingerprint(payload: Any) -> str:
     canon = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha1(canon.encode("utf-8")).hexdigest()[:12]
 
 
+#: Deprecated ids stay listed (never deleted) so old assessments remain
+#: interpretable. New assessments ignore them; old rows render from stored
+#: JSON. Empty today; entries look like {"MM99": {"replaced_by": "MM09",
+#: "reason": "..."}}.
+DEPRECATED: dict[str, dict[str, dict[str, str]]] = {
+    "attack_classes": {},
+    "dimensions": {},
+    "mitigations": {},
+}
+
+
 def model_adv_fingerprint() -> str:
     """Fingerprint of the attack taxonomy W1 scores against."""
     return _fingerprint({"id": MODEL_ADV_ID, "version": MODEL_ADV_VERSION,
-                         "classes": ATTACK_CLASSES})
+                         "classes": ATTACK_CLASSES,
+                         "deprecated": DEPRECATED["attack_classes"]})
 
 
 def adoption_fingerprint() -> str:
     """Fingerprint of the dimension list + weights W2 scores against."""
     return _fingerprint({"id": ADOPTION_ID, "version": ADOPTION_VERSION,
-                         "dimensions": ADOPTION_DIMENSIONS})
+                         "dimensions": ADOPTION_DIMENSIONS,
+                         "deprecated": DEPRECATED["dimensions"]})
 
 
 def normalize_model_meta(raw: dict | None) -> dict[str, Any]:
@@ -478,7 +753,8 @@ def normalize_model_meta(raw: dict | None) -> dict[str, Any]:
         return v if v in allowed else fallback
 
     family = _enum(raw.get("model_family"), MODEL_FAMILIES, "other")
-    workflows = [w for w in (raw.get("workflows") or []) if w in WORKFLOWS]
+    workflows = [w for w in (raw.get("workflows") or [])
+                 if w in WORKFLOWS + ("experiment_plan",)]
     return {
         "model_name": str(raw.get("model_name") or "").strip(),
         "model_family": family,
@@ -518,6 +794,8 @@ def score_adversarial(findings: list[dict],
         if not isinstance(f, dict):
             continue
         cls = str(f.get("attack_class") or "other")
+        if cls in DEPRECATED["attack_classes"]:
+            continue
         sev = ATTACK_CLASSES.get(cls, ATTACK_CLASSES["other"])["severity"]
         scope = _SCOPE_WEIGHTS.get(str(f.get("applies_to") or ""), 0.4)
         conf = _clamp01(f.get("confidence", 0.5))
@@ -532,7 +810,9 @@ def score_adversarial(findings: list[dict],
                 "note": "no adversarial evidence found as of this run"}
     top = sorted((c["contribution"] for c in contribs), reverse=True)[:3]
     overall = sum(top) / len(top) * float(exposure_weight or 1.0)
-    named_classes = {c for c in ATTACK_CLASSES if c != "other"}
+    named_classes = {c for c in ATTACK_CLASSES
+                     if c != "other"
+                     and c not in DEPRECATED["attack_classes"]}
     covered = {str((f or {}).get("attack_class"))
                for f in (findings or []) if isinstance(f, dict)}
     covered &= named_classes
@@ -561,6 +841,10 @@ def score_adoption(dimensions: list[dict],
     unknown_w = 0.0
     rated: list[dict[str, Any]] = []
     for d_id in weights:
+        if d_id in DEPRECATED["dimensions"]:
+            unknown_w += weights[d_id]
+            rated.append({"dimension": d_id, "rating": "unknown"})
+            continue
         rating = str((by_id.get(d_id) or {}).get("rating")
                      or "unknown").lower()
         if rating in RATING_SCORES:

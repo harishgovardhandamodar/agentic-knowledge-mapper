@@ -235,6 +235,44 @@ def model_cases() -> list[dict[str, Any]]:
          "note": "high memorization + training access: canaries first, DP "
                  "and unlearning proposed; output watermarking deferred "
                  "for tabular"},
+        {"name": "w4-high-memorization-plans-canary-probes",
+         "kind": "exp",
+         "meta": {"model_family": "tabular_fm",
+                  "weights_source": "open_weights"},
+         "attacks": [],
+         "dimensions": [{"dimension": "memorization", "rating": "unknown"}],
+         "hypotheses": [],
+         "mitigation_plan": [],
+         "expect": {"contains_methods": ["canary"], "non_empty": True},
+         "note": "unknown memorization must produce privacy probes"},
+        {"name": "w4-api-only-generative-no-weight-experiments",
+         "kind": "exp",
+         "meta": {"model_family": "diffusion",
+                  "weights_source": "api_only"},
+         "attacks": [{"attack_class": "extraction",
+                      "applies_to": "family", "confidence": 0.6}],
+         "dimensions": [],
+         "hypotheses": [],
+         "mitigation_plan": [],
+         "expect": {"non_empty": True},
+         "note": "API-only plans carry query_api, never bare weight access"},
+        {"name": "w4-falsifier-maps-to-targeted-experiment",
+         "kind": "exp",
+         "meta": {"model_family": "llm", "weights_source": "api_only"},
+         "attacks": [],
+         "dimensions": [],
+         "hypotheses": [{"hypothesis_id": "H01", "status": "untested",
+                         "falsifiers": ["vendor retains prompts for training"]}],
+         "mitigation_plan": [],
+         "expect": {"covers_hypotheses": ["H01"], "non_empty": True},
+         "note": "every open falsifier maps to an experiment or is explicit"},
+        {"name": "w3-empty-context-empty-plan",
+         "kind": "mitempty",
+         "meta": {"model_family": "tabular_fm",
+                  "weights_source": "open_weights"},
+         "attacks": [], "dimensions": [], "evidence": [],
+         "expect": {"empty": True},
+         "note": "zero risk context is an explicit empty plan, never silent"},
         {"name": "w3-api-only-generative-no-weight-controls",
          "kind": "mit",
          "meta": {"model_family": "diffusion",
@@ -251,6 +289,47 @@ def model_cases() -> list[dict[str, Any]]:
 
 def _run_model_case(case: dict[str, Any]) -> dict[str, Any]:
     from . import model_eval as _me
+    if case["kind"] == "exp":
+        plan = _me.plan_experiments(
+            case["meta"], case.get("attacks", []),
+            case.get("dimensions", []), case.get("hypotheses", []),
+            case.get("mitigation_plan", []))
+        exp = case.get("expect", {})
+        failures = []
+        got_ids = [e["id"] for e in plan["experiments"]]
+        for mid in exp.get("contains_methods", []):
+            if mid not in {e["method_type"] for e in plan["experiments"]}:
+                failures.append({"field": f"contains method {mid}",
+                                 "expected": True,
+                                 "actual": [e["method_type"]
+                                            for e in plan["experiments"]]})
+        for hid in exp.get("covers_hypotheses", []):
+            targets = [t for e in plan["experiments"]
+                       for t in e["targets"].get("hypothesis_ids", [])]
+            if hid not in targets:
+                failures.append({"field": f"covers hypothesis {hid}",
+                                 "expected": True, "actual": targets})
+        if exp.get("non_empty") and not plan["experiments"]:
+            failures.append({"field": "non_empty", "expected": True,
+                             "actual": []})
+        return {"name": case["name"], "note": case.get("note", ""),
+                "ok": not failures, "failures": failures,
+                "result": {"experiments": got_ids}}
+    if case["kind"] == "mitempty":
+        plan = _me.plan_or_empty(case["meta"], case.get("attacks", []),
+                                 case.get("dimensions", []),
+                                 case.get("evidence", []))
+        exp = case.get("expect", {})
+        failures = []
+        if exp.get("empty") and plan:
+            failures.append({"field": "empty plan", "expected": True,
+                             "actual": [p["control_id"] for p in plan]})
+        if exp.get("non_empty") and not plan:
+            failures.append({"field": "non-empty plan", "expected": True,
+                             "actual": []})
+        return {"name": case["name"], "note": case.get("note", ""),
+                "ok": not failures, "failures": failures,
+                "result": {"plan": [p["control_id"] for p in plan]}}
     if case["kind"] == "mit":
         applicable, deferred = _me.prefilter_mitigations(case["meta"])
         plan = _me.rank_mitigations(case["meta"], case.get("attacks", []),

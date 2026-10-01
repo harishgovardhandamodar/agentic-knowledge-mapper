@@ -27,6 +27,7 @@ and this module owns "which numbers are we scoring".
 """
 import hashlib
 import json
+import re
 from typing import Any
 
 from . import security as sec
@@ -36,6 +37,24 @@ from . import security as sec
 #: major for adding or removing threats or controls.
 PACK_ID = "akm-threat-pack"
 PACK_VERSION = "2.1.0"
+
+#: Deprecated ids stay listed (never deleted) so old assessments remain
+#: interpretable. Canonical maps live in security.py (threatpack cannot own
+#: them: it already imports security, so defining them here would cycle).
+#: New assessments ignore deprecated ids; old rows render from stored JSON.
+DEPRECATED_THREATS = sec.DEPRECATED_THREATS
+DEPRECATED_CONTROLS = sec.DEPRECATED_CONTROLS
+
+#: Change policy, enforced by tests/test_versioning.py: a fingerprint change
+#: without a version bump fails CI, because a silent catalog edit would
+#: otherwise re-score nothing yet invalidate every pinned number.
+CHANGE_POLICY = {
+    "major": "add, remove or rename a threat/control id; change a severity "
+             "band boundary",
+    "minor": "re-weight efficacy, applicability or engine weights; add a "
+             "framework reference",
+    "patch": "wording only — no number may move",
+}
 
 #: The external references the catalog encodes. Recorded so an assessment can be
 #: read against the revision it was scored with, and so re-basing the catalog
@@ -162,6 +181,8 @@ def pack_fingerprint() -> str:
         "controls": [[c["id"], c.get("name"), c.get("efficacy"),
                       sorted(c.get("threats", {}).items())]
                      for c in sec._CONTROL_CATALOG],
+        "deprecated": {"threats": DEPRECATED_THREATS,
+                       "controls": DEPRECATED_CONTROLS},
         "exposures": {k: v.get("weight") for k, v in sec.EXPOSURE_META.items()},
         "scoring": [sec._WORST_WEIGHT, sec._BREADTH_WEIGHT, sec._TOP_N,
                     RESIDUAL_FLOOR, MIN_APPLICABILITY, "applicability-weighted-v1"],
@@ -181,6 +202,46 @@ def threat_rows() -> list[dict[str, Any]]:
         }
         row.update(cvss_for(t[0]))
         out.append(row)
+    return out
+
+
+def pack_changelog() -> list[dict[str, Any]]:
+    """The version history as data. Newest first; each entry names the
+    catalog versions it adopts so a reader can see what changed between any
+    two rows' stamps without diffing code."""
+    import os as _os
+    path = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)),
+                         "pack_changelog.json")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except Exception:
+        return []
+    entries = data.get("entries") if isinstance(data, dict) else None
+    return [e for e in (entries or []) if isinstance(e, dict)]
+
+
+def changelog_excerpt(catalog_id: str, row_version: str | None,
+                      limit: int = 3) -> list[str]:
+    """Changelog lines newer than the row's stamp, newest first, capped.
+
+    For the dossier's superseded badge: what changed since this row was
+    scored, in one line per version, so the reader need not diff code.
+    """
+    def _tuple(v: Any) -> tuple:
+        return tuple(int(x) for x in re.findall(r"\d+", str(v or "")))
+    if not row_version:
+        return []
+    out = []
+    for e in pack_changelog():
+        adopted = (e.get("adopted_versions") or {})
+        ev = adopted.get(catalog_id)
+        if not ev or _tuple(ev) <= _tuple(row_version):
+            continue
+        out.append(f"{catalog_id} {ev} ({e.get('date', '')}): "
+                   + "; ".join(e.get("changes", []))[:160])
+        if len(out) >= limit:
+            break
     return out
 
 
