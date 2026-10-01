@@ -74,6 +74,8 @@ _MIGRATIONS = [
     ("security_assessments", "inherent_pct", "FLOAT"),
     ("security_assessments", "residual_pct", "FLOAT"),
     ("security_assessments", "model_json", "TEXT"),
+    ("security_assessments", "supersedes_id", "INTEGER"),
+    ("security_assessments", "hypothesis_json", "TEXT"),
     ("security_assessments", "controls_json", "TEXT"),
     ("security_assessments", "scoring_json", "TEXT"),
     ("security_assessments", "workflow_text", "TEXT"),

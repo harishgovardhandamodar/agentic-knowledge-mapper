@@ -211,6 +211,9 @@ class SecurityAssessRequest(BaseModel):
     # wording -- and never means hypothesis, which is only ever asked for
     # explicitly because it needs the other two to have run.
     assessment_mode: str = ""
+    # Hypothesis synthesis reads the target + adversarial rows: refuse to
+    # launch on partial priors unless the caller explicitly allows it.
+    allow_partial: bool = True
     # Model-engineering assessments target a model, not a product workflow.
     # Ignored unless assessment_mode == "model_engineering".
     model_name: Optional[str] = ""
@@ -1482,6 +1485,14 @@ def _security_json(rec: SecurityAssessment) -> dict:
         _model = {}
     if not isinstance(_model, dict):
         _model = {}
+    try:
+        _hypjs = _load(getattr(rec, "hypothesis_json", None), {}) or {}
+    except Exception:
+        _hypjs = {}
+    if not isinstance(_hypjs, dict):
+        _hypjs = {}
+    if not _model.get("experiments") and _hypjs.get("experiments"):
+        _model = dict(_model, experiments=_hypjs.get("experiments"))
     return {
         "id": rec.id,
         "investigation_id": rec.investigation_id,
@@ -1489,6 +1500,7 @@ def _security_json(rec: SecurityAssessment) -> dict:
         "product_name": rec.product_name,
         "model": _model.get("meta") or {},
         "adoption_dimensions": _model.get("dimensions") or [],
+        "experiments": _model.get("experiments") or [],
         "mitigation": {**{k: (_model.get("mitigation") or {}).get(k)
                               for k in ("plan", "deferred", "uncovered_risks",
                                         "roadmap")
@@ -1653,6 +1665,7 @@ def design_doc(doc_id: str):
 
 @app.post("/api/security/assessments/{assessment_id}/rescore")
 def rescore_security_assessment(assessment_id: int, data: SecurityRescoreRequest,
+                                request: Request,
                                 db: Session = Depends(get_db)):
     """What-if re-score: pure deterministic function, no LLM, no research.
 
@@ -1700,7 +1713,7 @@ def rescore_security_assessment(assessment_id: int, data: SecurityRescoreRequest
     inherent = [{"id": t[0], "title": t[1], "stride": t[2], "owasp": t[3],
                  "likelihood": float(_scale_likelihood(t[4], weight)),
                  "impact": float(t[5]), "description": t[6], "mitigations": t[7]}
-                for t in _THREAT_CATALOG]
+                for t in _THREAT_CATALOG if t[0] not in sec_engine.DEPRECATED_THREATS]
 
     ctl = {}
     try:
@@ -1717,36 +1730,71 @@ def rescore_security_assessment(assessment_id: int, data: SecurityRescoreRequest
         applicability=data.applicability,
     )
     prev_residual = getattr(rec, "residual_pct", None)
+    new_id = None
     if data.persist:
+        # History is immutable: persist writes a NEW row pointing back, never
+        # edits this one. The dossier then shows both (current + change log)
+        # instead of one row quietly becoming different numbers.
         prior = _security_json(rec)
-        rec.controls_json = json.dumps({
-            "active_controls": result["active_controls"],
-            "control_plan": ctl.get("control_plan", {}),
-            "openshell": ctl.get("openshell", {}),
-        })
-        rec.scoring_json = json.dumps(result)
-        rec.threats_json = json.dumps(result["threats"])
-        rec.residual_pct = result["residual_pct"]
-        rec.inherent_pct = result["inherent_pct"]
-        rec.overall_pct = result["residual_pct"]
-        rec.posture = result["posture"]
-        rec.perspectives_json = json.dumps(sec_engine._perspective_views({
-            "threats": result["threats"],
-            "scoring": result,
-            "control_plan": ctl.get("control_plan", {}),
-            "evidence": prior.get("evidence", []),
-            "known_exploits": prior.get("known_exploits", []),
-            "artifacts": sec_engine._load_investigation_artifacts(
-                db, getattr(rec, "investigation_id", None)),
-            "exposure": exposure,
-            "product_name": rec.product_name,
-            "inherent_pct": result["inherent_pct"],
-            "residual_pct": result["residual_pct"],
-            "posture": result["posture"],
-        }))
+        from . import threatpack as _tp
+        new_rec = SecurityAssessment(
+            investigation_id=rec.investigation_id,
+            run_id=rec.run_id,
+            product_name=rec.product_name,
+            product_url=rec.product_url,
+            exposure=rec.exposure,
+            use_case=rec.use_case,
+            workflow_text=rec.workflow_text,
+            doc_urls_json=rec.doc_urls_json,
+            focus_json=rec.focus_json,
+            require_approval=rec.require_approval,
+            overall_pct=result["residual_pct"],
+            inherent_pct=result["inherent_pct"],
+            residual_pct=result["residual_pct"],
+            controls_json=json.dumps({
+                "active_controls": result["active_controls"],
+                "control_plan": ctl.get("control_plan", {}),
+                "openshell": ctl.get("openshell", {}),
+            }),
+            scoring_json=json.dumps(result),
+            perspectives_json=json.dumps(sec_engine._perspective_views({
+                "threats": result["threats"],
+                "scoring": result,
+                "control_plan": ctl.get("control_plan", {}),
+                "evidence": prior.get("evidence", []),
+                "known_exploits": prior.get("known_exploits", []),
+                "artifacts": sec_engine._load_investigation_artifacts(
+                    db, getattr(rec, "investigation_id", None)),
+                "exposure": exposure,
+                "product_name": rec.product_name,
+                "inherent_pct": result["inherent_pct"],
+                "residual_pct": result["residual_pct"],
+                "posture": result["posture"],
+            })),
+            posture=result["posture"],
+            markdown=rec.markdown,
+            diagrams_json=rec.diagrams_json,
+            threats_json=json.dumps(result["threats"]),
+            evidence_json=rec.evidence_json,
+            a2a_trace_json=rec.a2a_trace_json,
+            threat_pack_version=_tp.PACK_VERSION,
+            threat_pack_fingerprint=_tp.pack_fingerprint(),
+            supersedes_id=rec.id,
+        )
+        db.add(new_rec)
         db.commit()
+        db.refresh(new_rec)
+        new_id = new_rec.id
+        ledger_api.human_action(request, "rescored_assessment", {
+            "previous_assessment_id": rec.id, "assessment_id": new_id,
+            "previous_residual_pct": prev_residual,
+            "residual_pct": result["residual_pct"],
+            "previous_pack_version": rec.threat_pack_version,
+            "pack_version": _tp.PACK_VERSION,
+            "pack_fingerprint": _tp.pack_fingerprint(),
+        })
     return {
-        "assessment_id": assessment_id,
+        "assessment_id": new_id if new_id is not None else assessment_id,
         "inherent_pct": result["inherent_pct"],
         "residual_pct": result["residual_pct"],
         "previous_residual_pct": prev_residual,
@@ -1812,6 +1860,24 @@ def start_security_assessment(inv_id: int, data: SecurityAssessRequest,
     _path = {"target": "model", "adversarial": "model_adversarial",
              "hypothesis": "model_hypothesis",
              "model_engineering": "model_engineering"}.get(_mode, "standard")
+    if _mode == "hypothesis" and not data.allow_partial:
+        # A hypothesis over missing priors synthesizes gap claims instead of
+        # verdicts. Allowed on explicit request (the gap claims are the
+        # point then), refused by default when the caller asked for strictness.
+        have = set()
+        for r in db.query(SecurityAssessment).filter(
+                SecurityAssessment.investigation_id == inv_id).all():
+            try:
+                have.add((json.loads(r.scoring_json or "{}") or {})
+                         .get("assessment_path"))
+            except Exception:
+                pass
+        missing = [p for p in ("model", "model_adversarial") if p not in have]
+        if missing:
+            raise HTTPException(
+                409, "Hypothesis needs terminal target + adversarial rows; "
+                f"missing: {', '.join(missing)}. Re-run with "
+                "allow_partial=true to synthesize gap claims instead.")
     ledger_api.human_action(request, "started_security_assessment",
                             {"investigation": inv.id, "title": inv.title,
                              "product": data.product_name or "Target product",
@@ -1943,8 +2009,99 @@ def list_security_assessments(inv_id: int, db: Session = Depends(get_db)):
         d["stats_complete"] = bool(
             isinstance(st, dict) and st.get("assessment_id") is not None
             and st.get("residual_pct") is not None)
+        # ...and when the row was scored on older catalogs than today's.
+        # Old numbers stand; the badge says so instead of re-arithmeticking.
+        try:
+            _pack = d.get("threat_pack") or {}
+            d["pack_stale"] = dossier.pack_staleness(
+                d.get("scoring") or {}, _pack.get("version"),
+                _pack.get("fingerprint"))
+        except Exception:
+            d["pack_stale"] = False
         items.append(d)
     return {"items": items}
+
+
+@app.get("/api/packs/changelog")
+def get_pack_changelog():
+    """The catalog version history as data (newest first)."""
+    from . import threatpack as _tp
+    return {"entries": _tp.pack_changelog()}
+
+
+@app.get("/api/security/assessments/{assessment_id}/compare/{other_id}")
+def compare_assessments(assessment_id: int, other_id: int,
+                        db: Session = Depends(get_db)):
+    """Side-by-side numbers for two assessments, same method only.
+
+    Product rows compare inherent/residual; model rows compare W1/W2 (and
+    W3 when both ran it). Different score meanings are refused with 422:
+    a confidence next to a residual is two answers wearing one table, the
+    same averaging the system refuses everywhere else. A pack change
+    between the rows is reported, not hidden — that is the pack-diff
+    use case (old row vs re-scored row).
+    """
+    recs = {r.id: r for r in db.query(SecurityAssessment).filter(
+        SecurityAssessment.id.in_([assessment_id, other_id])).all()}
+    if len(recs) < 2:
+        raise HTTPException(404, "Both assessments must exist")
+    a, b = (recs[assessment_id], recs[other_id])
+    if a.investigation_id != b.investigation_id:
+        raise HTTPException(422, "Assessments are from different "
+                                 "investigations")
+    def _scoring(r):
+        try:
+            return json.loads(r.scoring_json or "{}") or {}
+        except Exception:
+            return {}
+    sa, sb = _scoring(a), _scoring(b)
+    pa = sa.get("assessment_path") or "standard"
+    pb = sb.get("assessment_path") or "standard"
+    if pa != pb:
+        raise HTTPException(422, f"Incomparable methods: {pa} vs {pb}. "
+                                 "Only same-path assessments compare.")
+    def _num(x):
+        try:
+            return float(x)
+        except (TypeError, ValueError):
+            return None
+    out = {
+        "a": {"id": a.id, "path": pa,
+              "pack_version": a.threat_pack_version,
+              "pack_fingerprint": a.threat_pack_fingerprint,
+              "created_at": a.created_at.isoformat() if a.created_at else None,
+              "supersedes_id": getattr(a, "supersedes_id", None)},
+        "b": {"id": b.id, "path": pb,
+              "pack_version": b.threat_pack_version,
+              "pack_fingerprint": b.threat_pack_fingerprint,
+              "created_at": b.created_at.isoformat() if b.created_at else None,
+              "supersedes_id": getattr(b, "supersedes_id", None)},
+        "same_pack": (a.threat_pack_version == b.threat_pack_version
+                      and (a.threat_pack_fingerprint or None) ==
+                      (b.threat_pack_fingerprint or None)),
+    }
+    if pa == "model_engineering":
+        for key in ("w1", "w2"):
+            va = (sa.get(key) or {}).get("overall_pct")
+            vb = (sb.get(key) or {}).get("overall_pct")
+            out[key] = {"a": va, "b": vb,
+                        "delta": (round(vb - va, 1)
+                                  if va is not None and vb is not None
+                                  else None)}
+        w3a, w3b = sa.get("w3"), sb.get("w3")
+        if w3a is not None or w3b is not None:
+            out["w3_present"] = {"a": w3a is not None, "b": w3b is not None}
+    elif pa == "model_hypothesis":
+        out["confidence"] = {"a": sa.get("overall_pct"),
+                             "b": sb.get("overall_pct")}
+    else:
+        for key in ("inherent_pct", "residual_pct"):
+            va, vb = _num(getattr(a, key, None)), _num(getattr(b, key, None))
+            out[key] = {"a": va, "b": vb,
+                        "delta": (round(vb - va, 1)
+                                  if va is not None and vb is not None
+                                  else None)}
+    return out
 
 
 @app.get("/api/security/assessments/{assessment_id}")
@@ -1954,6 +2111,216 @@ def get_security_assessment(assessment_id: int, db: Session = Depends(get_db)):
     if not rec:
         raise HTTPException(404, "Assessment not found")
     return _security_json(rec)
+
+
+def _hypothesis_rec(assessment_id: int, db: Session):
+    from . import dossier as _dossier
+    rec = db.query(SecurityAssessment).filter(
+        SecurityAssessment.id == assessment_id).first()
+    if not rec:
+        raise HTTPException(404, "Assessment not found")
+    try:
+        scoring = json.loads(rec.scoring_json or "{}") or {}
+    except Exception:
+        scoring = {}
+    if _assessment_path_fields(rec, scoring).get("assessment_path") != \
+            "model_hypothesis":
+        raise HTTPException(422, "Hypothesis builder needs a hypothesis-path "
+                                 "assessment")
+    return rec
+
+
+@app.get("/api/security/assessments/{assessment_id}/hypotheses")
+def get_hypothesis_register(assessment_id: int,
+                            db: Session = Depends(get_db)):
+    """The claim register: scored claims overlaid with builder edits."""
+    from . import dossier as _dossier
+    return {"assessment_id": assessment_id,
+            "claims": _dossier.hypothesis_register(
+                _hypothesis_rec(assessment_id, db))}
+
+
+class HypothesisPatchRequest(BaseModel):
+    claims: list[dict] = []
+    note: str = ""
+
+
+class ExperimentBuildRequest(BaseModel):
+    hypothesis_ids: Optional[list[str]] = []
+
+
+@app.post("/api/security/assessments/{assessment_id}/experiments/build")
+def build_experiments(assessment_id: int, data: ExperimentBuildRequest,
+                      request: Request, db: Session = Depends(get_db)):
+    """Plan ranked experiments for what is still open. Plan only: nothing
+    here executes anything. Reads stored rows (W1/W2/MM, hypothesis claims);
+    never touches scores. May run without a full W3 when hypothesis or W2
+    gaps exist."""
+    from . import model_eval as _me
+    rec = db.query(SecurityAssessment).filter(
+        SecurityAssessment.id == assessment_id).first()
+    if not rec:
+        raise HTTPException(404, "Assessment not found")
+    try:
+        scoring = json.loads(rec.scoring_json or "{}") or {}
+    except Exception:
+        scoring = {}
+    path = _assessment_path_fields(rec, scoring).get("assessment_path")
+    if path not in ("model_engineering", "model_hypothesis"):
+        raise HTTPException(422, "Experiment planning needs a model_engineering "
+                                 "or model_hypothesis assessment")
+    try:
+        model_json = json.loads(getattr(rec, "model_json", None) or "{}") or {}
+    except Exception:
+        model_json = {}
+    if not isinstance(model_json, dict):
+        model_json = {}
+    meta = model_json.get("meta") or {}
+    findings = model_json.get("attacks") or []
+    dimensions = model_json.get("dimensions") or []
+    mitigation = model_json.get("mitigation") or {}
+    hyps: list[dict] = []
+    if path == "model_hypothesis":
+        from . import dossier as _dossier
+        hyps = [h for h in _dossier.hypothesis_register(rec)
+                if not data.hypothesis_ids
+                or (h.get("hypothesis_id") or h.get("id"))
+                in data.hypothesis_ids]
+    else:
+        inv_id = rec.investigation_id
+        for r in db.query(SecurityAssessment).filter(
+                SecurityAssessment.investigation_id == inv_id).all():
+            try:
+                s = json.loads(r.scoring_json or "{}") or {}
+            except Exception:
+                continue
+            if s.get("assessment_path") == "model_hypothesis":
+                from . import dossier as _dossier
+                hyps.extend(_dossier.hypothesis_register(r))
+    from . import agents as _agents
+    env = _agents.new_envelope(
+        "security-orchestrator", "experiment-planner", "plan_experiments",
+        {"model_meta": meta, "findings": findings, "dimensions": dimensions,
+         "hypotheses": hyps,
+         "mitigation_plan": (mitigation.get("plan") or [])})
+    planned = _agents.experiment_planner_handle(env, None)["payload"]
+    plan = {"experiments": planned.get("experiments", []),
+            "roadmap": planned.get("roadmap",
+                                   {"30d": [], "60d": [], "90d": []}),
+            "method": planned.get("method", _me.EXPERIMENT_METHOD),
+            "method_version": planned.get(
+                "method_version", _me.EXPERIMENT_VERSION),
+            "method_fingerprint": planned.get(
+                "method_fingerprint", _me.experiment_fingerprint()),
+            "note": planned.get("note", "")}
+    # Model rows keep experiments with the model payload; hypothesis rows
+    # keep them with the builder register both sides already read.
+    if path == "model_hypothesis":
+        try:
+            hjs = json.loads(rec.hypothesis_json or "{}") or {}
+        except Exception:
+            hjs = {}
+        if not isinstance(hjs, dict):
+            hjs = {}
+        hjs["experiments"] = plan["experiments"]
+        hjs["experiments_roadmap"] = plan["roadmap"]
+        hjs["experiment_method"] = plan["method"]
+        rec.hypothesis_json = json.dumps(hjs)
+    else:
+        model_json["experiments"] = plan["experiments"]
+    model_json["experiments_roadmap"] = plan["roadmap"]
+    model_json["experiment_method"] = plan["method"]
+    model_json["experiment_method_version"] = plan["method_version"]
+    model_json["experiment_method_fingerprint"] = plan["method_fingerprint"]
+    rec.model_json = json.dumps(model_json)
+    db.commit()
+    ledger_api.human_action(request, "built_experiment_plan", {
+        "assessment_id": assessment_id,
+        "experiments": len(plan["experiments"])})
+    return {"assessment_id": assessment_id,
+            "experiments": plan["experiments"],
+            "roadmap": plan["roadmap"], "method": plan["method"],
+            "note": plan["note"]}
+
+
+@app.patch("/api/security/assessments/{assessment_id}/hypotheses")
+def patch_hypothesis_register(assessment_id: int, data: HypothesisPatchRequest,
+                              request: Request,
+                              db: Session = Depends(get_db)):
+    """Edit falsifiers/status/evidence links on the register.
+
+    Writes only `hypothesis_json`: scoring and threats stay byte-identical,
+    so the scored confidence cannot move under an edit. Returns 422 for
+    unknown claim ids or bad statuses rather than silently dropping them.
+    """
+    from . import dossier as _dossier
+    rec = _hypothesis_rec(assessment_id, db)
+    register = _dossier.hypothesis_register(rec)
+    known = {c.get("hypothesis_id") or c.get("id") for c in register}
+    try:
+        stored = json.loads(rec.hypothesis_json or "{}") or {}
+    except Exception:
+        stored = {}
+    if not isinstance(stored, dict):
+        stored = {}
+    claims = [c for c in stored.get("claims", [])
+              if isinstance(c, dict)]
+    by_id = {c.get("hypothesis_id") or c.get("id"): c for c in claims}
+    for patch in data.claims or []:
+        hid = patch.get("hypothesis_id") or patch.get("id")
+        if hid not in known:
+            raise HTTPException(422, f"Unknown hypothesis id: {hid!r}")
+        entry = by_id.setdefault(hid, {"hypothesis_id": hid})
+        if "status" in patch:
+            if patch["status"] not in _dossier.HYPOTHESIS_STATUSES:
+                raise HTTPException(
+                    422, "status must be one of: "
+                    + ", ".join(_dossier.HYPOTHESIS_STATUSES))
+            entry["status"] = patch["status"]
+        if "falsifiers" in patch:
+            fals = [str(f).strip() for f in (patch["falsifiers"] or [])
+                    if str(f).strip()]
+            if not fals:
+                raise HTTPException(422, "falsifiers must not empty the list")
+            entry["falsifiers"] = fals[:8]
+        if "add_evidence" in patch:
+            aids = [a for a in (patch["add_evidence"] or [])
+                    if isinstance(a, int) and not isinstance(a, bool)]
+            entry["add_evidence"] = sorted(
+                set(entry.get("add_evidence", [])) | set(aids))[:16]
+        if data.note:
+            entry["note"] = data.note[:300]
+    stored["claims"] = list(by_id.values())
+    stored["updated_at"] = datetime.now(timezone.utc).isoformat()
+    rec.hypothesis_json = json.dumps(stored)
+    db.commit()
+    ledger_api.human_action(request, "edited_hypothesis_register", {
+        "assessment_id": assessment_id,
+        "claims": sorted(by_id)})
+    return {"assessment_id": assessment_id,
+            "claims": _dossier.hypothesis_register(rec)}
+
+
+@app.post("/api/security/assessments/{assessment_id}/hypotheses/{hypothesis_id}/collect-evidence")
+def collect_hypothesis_evidence(assessment_id: int, hypothesis_id: str,
+                                db: Session = Depends(get_db)):
+    """Enqueue a collection run for one claim's falsifiers."""
+    from . import dossier as _dossier
+    rec = _hypothesis_rec(assessment_id, db)
+    register = _dossier.hypothesis_register(rec)
+    claim = next((c for c in register
+                  if (c.get("hypothesis_id") or c.get("id")) == hypothesis_id),
+                 None)
+    if claim is None:
+        raise HTTPException(404, "Hypothesis not found on this assessment")
+    fals = claim.get("falsifiers") or []
+    goal = (f"Collect evidence for hypothesis {hypothesis_id}: "
+            f"{str(claim.get('claim') or '')[:160]}"
+            + (f" — test falsifiers: {'; '.join(fals[:3])}" if fals else ""))
+    run_id = launch_run_with_goal(rec.investigation_id, goal,
+                                  max_items=12, max_rounds=1,
+                                  trigger="explainer_gap")
+    return {"run_id": run_id, "status": "running", "goal": goal}
 
 
 class ManagerParseRequest(BaseModel):

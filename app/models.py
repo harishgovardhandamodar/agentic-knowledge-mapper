@@ -239,6 +239,13 @@ class SecurityAssessment(Base):
     # Model-engineering assessments: subject metadata + method versions.
     # Product assessments leave this NULL; mode lives in the scoring payload.
     model_json = Column(Text, nullable=True)
+    # Re-score lineage: a persisted re-score creates a NEW row pointing here,
+    # never edits this one. History stays immutable; the dossier shows both.
+    supersedes_id = Column(Integer, nullable=True)
+    # Hypothesis-builder state: operator edits to the claim register
+    # (falsifiers, status, evidence links). Separate from threats_json and
+    # scoring_json so builder edits can never move the scored confidence.
+    hypothesis_json = Column(Text, nullable=True)
     created_at = Column(DateTime, default=_now)
 
 

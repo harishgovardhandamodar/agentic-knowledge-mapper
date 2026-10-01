@@ -53,6 +53,96 @@ def _score_text(v: Any) -> str:
         return "— (no evidence)"
 
 
+def pack_staleness(scoring: dict, threat_version: str | None = None,
+                   threat_fp: str | None = None) -> bool:
+    """True when the row was scored on older catalogs than today's.
+
+    Compares every stamped method (product pack or model catalogs) against
+    current versions. Rows that predate versioning carry no stamp and read
+    as unknown, not stale: crying wolf on legacy rows would train readers
+    to ignore the badge. Never re-scores; the badge only describes.
+    """
+    try:
+        from . import threatpack as _tp
+    except Exception:
+        return False
+    scoring = scoring or {}
+    path = scoring.get("assessment_path") or ""
+    if path == "model_engineering":
+        pairs = [
+            (scoring.get("model_adv_version"),
+             scoring.get("model_adv_fingerprint"),
+             _model_eval.MODEL_ADV_VERSION,
+             _model_eval.model_adv_fingerprint()),
+            (scoring.get("adoption_version"),
+             scoring.get("adoption_fingerprint"),
+             _model_eval.ADOPTION_VERSION,
+             _model_eval.adoption_fingerprint()),
+        ]
+        if scoring.get("w3") is not None:
+            pairs.append(
+                (scoring.get("mitigation_version"),
+                 scoring.get("mitigation_fingerprint"),
+                 _model_eval.MITIGATION_VERSION,
+                 _model_eval.mitigation_fingerprint()))
+        stamped = [(v, f, cv, cf) for v, f, cv, cf in pairs if v]
+        if not stamped:
+            return False
+        return any(v != cv or (f and f != cf) for v, f, cv, cf in stamped)
+    if not threat_version:
+        return False
+    if threat_version != _tp.PACK_VERSION:
+        return True
+    return bool(threat_fp) and threat_fp != _tp.pack_fingerprint()
+
+
+def _control_evidence_status(declared: list,
+                             artifacts: list) -> dict[str, str]:
+    """Per-control evidence standing: evidenced, declared, or unknown.
+
+    `evidenced` needs an *accepted* artifact naming the control id; a
+    pending vendor PDF is not evidence yet. Unknown ids (outside the
+    catalog) are `unknown`, never silently `declared`.
+    """
+    try:
+        from .security import _CONTROL_CATALOG
+        known = {c.get("id") for c in _CONTROL_CATALOG}
+    except Exception:
+        known = set()
+    out: dict[str, str] = {}
+    for cid in declared or []:
+        cid = str(cid)
+        if cid not in known:
+            out[cid] = "unknown"
+            continue
+        hit = False
+        for a in artifacts or []:
+            if not isinstance(a, dict) or a.get("review") != "accepted":
+                continue
+            blob = " ".join(str(a.get(k) or "") for k in
+                            ("title", "description", "tags", "url")).lower()
+            if cid.lower() in blob:
+                hit = True
+                break
+        out[cid] = "evidenced" if hit else "declared"
+    return out
+
+
+def _duration_text(ms: Any) -> str:
+    """Milliseconds to a short human span: 12s, 3m41s, 2h05m."""
+    try:
+        total = int(float(ms) // 1000)
+    except (TypeError, ValueError):
+        return ""
+    if total < 0:
+        return ""
+    if total < 60:
+        return f"{total}s"
+    if total < 3600:
+        return f"{total // 60}m{total % 60:02d}s"
+    return f"{total // 3600}h{(total % 3600) // 60:02d}m"
+
+
 def _delta_vs_current(cur: dict | None, row: dict, short: bool = False) -> str:
     """Score delta for change logs: no-evidence rows get a dash, not math."""
     if cur is None:
@@ -358,6 +448,19 @@ def _runs_section(db, inv_id: int) -> list[dict[str, Any]]:
         events = (db.query(AgentEvent).filter(AgentEvent.run_id == r.id)
                   .order_by(AgentEvent.id).all())
         by_stage = Counter(e.stage for e in events)
+        try:
+            from datetime import datetime as _dt
+            _ts: dict[str, list] = {}
+            for e in events:
+                try:
+                    _ts.setdefault(e.stage, []).append(
+                        _dt.fromisoformat(e.created_at.isoformat()))
+                except Exception:
+                    pass
+            stage_ms = {k: int((max(v) - min(v)).total_seconds() * 1000)
+                        if len(v) > 1 else 0 for k, v in _ts.items()}
+        except Exception:
+            stage_ms = {}
         out.append({
             "id": r.id,
             "trigger": r.trigger or "manual",
@@ -371,8 +474,9 @@ def _runs_section(db, inv_id: int) -> list[dict[str, Any]]:
             "stats": stats if isinstance(stats, dict) else {},
             "events": [{"stage": e.stage, "message": _short(e.message, 200),
                         "at": _iso(e.created_at)} for e in events],
-            "stages": [{"stage": k, "count": v}
-                       for k, v in sorted(by_stage.items())],
+            "stages": [{"stage": k, "count": v,
+                          "ms": stage_ms.get(k)}
+                         for k, v in sorted(by_stage.items())],
             "error": _short(r.error or "", 400),
             "started_at": _iso(r.started_at),
             "finished_at": _iso(r.finished_at),
@@ -661,6 +765,11 @@ def _model_engineering_scoring(scoring: dict, items: list[dict],
         "adoption_version": scoring.get("adoption_version") or "",
         "adoption_fingerprint": scoring.get("adoption_fingerprint") or "",
         "w3": w3,
+        "experiments": (model_meta or {}).get("experiments") or [],
+        "experiments_roadmap": (model_meta or {}).get("experiments_roadmap")
+        or {},
+        "experiment_method": (model_meta or {}).get("experiment_method")
+        or "",
         "mitigation_plan": mit.get("plan") or [],
         "mitigation_deferred": mit.get("deferred") or [],
         "mitigation_uncovered": mit.get("uncovered_risks") or [],
@@ -670,6 +779,68 @@ def _model_engineering_scoring(scoring: dict, items: list[dict],
         "posture": scoring.get("posture") or "",
         "items": attacks,
     }
+
+
+HYPOTHESIS_STATUSES = ("untested", "supported", "refuted", "contested")
+
+
+def hypothesis_register(rec) -> list[dict[str, Any]]:
+    """The merged claim register: builder edits over scored rows.
+
+    Builder state (`hypothesis_json`) overlays — never replaces — the scored
+    claims, and lives in its own column: `scoring_json`/`threats_json` are
+    never touched, so editing falsifiers or status cannot move the scored
+    confidence. Claims the builder never touched render with pipeline
+    defaults (untested, single falsifier).
+    """
+    try:
+        stored = _load(getattr(rec, "hypothesis_json", None), {}) or {}
+    except Exception:
+        stored = {}
+    if not isinstance(stored, dict):
+        stored = {}
+    try:
+        threats = _load(getattr(rec, "threats_json", None), []) or []
+    except Exception:
+        threats = []
+    if isinstance(threats, dict):
+        threats = threats.get("threats") or []
+    edited = {}
+    for c in stored.get("claims") or []:
+        if isinstance(c, dict) and (c.get("hypothesis_id") or c.get("id")):
+            edited[c.get("hypothesis_id") or c.get("id")] = c
+    out = []
+    for t in threats:
+        if not isinstance(t, dict):
+            continue
+        hid = t.get("hypothesis_id") or t.get("id") or ""
+        claim = dict(t)
+        claim["hypothesis_id"] = hid
+        claim.setdefault("status", "untested")
+        fals = [str(f).strip() for f in (claim.get("falsifiers") or [])
+                if str(f).strip()]
+        if claim.get("falsifier") and str(claim["falsifier"]).strip() not in fals:
+            fals = [str(claim["falsifier"]).strip()] + fals
+        claim["falsifiers"] = fals
+        claim.setdefault("source_flows", [])
+        e = edited.get(hid)
+        if e:
+            if e.get("status") in HYPOTHESIS_STATUSES:
+                claim["status"] = e["status"]
+            if isinstance(e.get("falsifiers"), list):
+                extra = [str(f).strip() for f in e["falsifiers"]
+                         if str(f).strip()]
+                claim["falsifiers"] = fals + [f for f in extra if f not in fals]
+            if isinstance(e.get("add_evidence"), list):
+                have = list(claim.get("supporting_artifacts") or [])
+                for a in e["add_evidence"]:
+                    if isinstance(a, int) and a not in have:
+                        have.append(a)
+                claim["supporting_artifacts"] = have
+            if e.get("note"):
+                claim["builder_note"] = str(e["note"])[:300]
+        out.append(claim)
+    return out
 
 
 def _hypothesis_scoring(scoring: dict, items: list[dict]) -> dict[str, Any]:
@@ -822,8 +993,31 @@ def _score_audit(db, inv_id: int) -> dict[str, Any]:
             latest.add(rec.id)
         if path == "standard":
             detail = _catalog_scoring(scoring, items)
+            # Evidence standing travels in the payload so preview, PDF and
+            # Markdown read the same verdicts.
+            try:
+                from .models import Artifact as _Artifact
+                _arts = [{"title": a.title or "",
+                          "description": a.description or "",
+                          "tags": a.tags or "", "url": a.url or "",
+                          "review": a.review or "pending"}
+                         for a in db.query(_Artifact).filter(
+                             _Artifact.investigation_id == inv_id).all()]
+            except Exception:
+                _arts = []
+            detail["control_evidence"] = _control_evidence_status(
+                detail.get("active_controls"), _arts)
         elif path == "model_hypothesis":
             detail = _hypothesis_scoring(scoring, items)
+            detail["register"] = hypothesis_register(rec)
+            try:
+                _hjs = _load(getattr(rec, "hypothesis_json", None), {}) or {}
+            except Exception:
+                _hjs = {}
+            detail["experiments"] = (_hjs.get("experiments") or []
+                                     if isinstance(_hjs, dict) else [])
+            detail["experiment_method"] = (_hjs.get("experiment_method")
+                                           if isinstance(_hjs, dict) else "")
         elif path == "model_engineering":
             try:
                 model_meta = _load(getattr(rec, "model_json", None), {}) or {}
@@ -851,6 +1045,9 @@ def _score_audit(db, inv_id: int) -> dict[str, Any]:
             "is_latest": is_latest,
             "threat_pack_version": rec.threat_pack_version,
             "threat_pack_fingerprint": rec.threat_pack_fingerprint,
+            "pack_stale": pack_staleness(
+                scoring, rec.threat_pack_version,
+                rec.threat_pack_fingerprint),
             "inputs": _model_inputs(rec, scoring),
             # The stored report, verbatim. Section 4 explains how the numbers
             # were reached; this is the report the user actually read, kept
@@ -1161,13 +1358,20 @@ def dossier_markdown(db, inv_id: int, dossier: dict | None = None) -> str:
                     abits.append(f"{float(stats['duration_ms']) / 1000:.0f}s")
                 except (TypeError, ValueError):
                     pass
+            if stats.get("pack_version"):
+                abits.append(f"pack {stats['pack_version']}"
+                             + (f" (fp {stats['pack_fingerprint']})"
+                                if stats.get("pack_fingerprint") else ""))
             if stats.get("failed"):
                 abits.append(f"failed: {_short(str(stats['failed']), 120)}")
             A("**Assessment.** " + " · ".join(abits) + ".")
             A("")
         if r["stages"]:
-            A("**Stages.** " + " · ".join(f"{s['stage']} ×{s['count']}"
-                                           for s in r["stages"]))
+            A("**Stages.** " + " · ".join(
+                f"{s['stage']} ×{s['count']}"
+                + (f" ({_duration_text(s.get('ms'))})"
+                   if _duration_text(s.get("ms")) else "")
+                for s in r["stages"]))
             A("")
         if r.get("error"):
             # A past run's failure is a historical record, not a live fault:
@@ -1333,12 +1537,25 @@ def dossier_markdown(db, inv_id: int, dossier: dict | None = None) -> str:
             # is the single most load-bearing input on the catalog path, since
             # it is why residual equals inherent on a fresh assessment.
             ctl = det.get("active_controls") or []
+            _status = det.get("control_evidence") or {}
             A(f"**Controls applied.** "
-              + (", ".join(ctl) + ". " if ctl
+              + (", ".join(f"{c} ({_status.get(c, 'declared')})"
+                           for c in ctl) + ". " if ctl
                  else "None declared. ")
               + "Controls reduce likelihood by coverage, never below the "
-                "residual floor.")
+                "residual floor. `evidenced` means an accepted artifact "
+                "names the control; `declared` means the reduction below "
+                "rests on say-so until tested.")
             A("")
+            _declared_only = sorted({
+                t.get("id") for t in (det.get("items") or [])
+                if t.get("coverage")
+                and not any(_status.get(c) == "evidenced"
+                            for c in (t.get("controls") or []))})
+            if _declared_only:
+                A(f"Reductions resting on declared-only controls: "
+                  f"{', '.join(_declared_only)}.")
+                A("")
             A("| Threat | Likelihood | Impact | Inherent | Coverage | "
               "Residual likelihood | Residual | Severity |")
             A("|---|---|---|---|---|---|---|---|")
@@ -1503,13 +1720,37 @@ def dossier_markdown(db, inv_id: int, dossier: dict | None = None) -> str:
                     A("**Still uncovered.** "
                       + "; ".join(det["mitigation_uncovered"]) + ".")
                     A("")
-                roadmap = det.get("mitigation_roadmap") or {}
-                if any(roadmap.get(k) for k in ("30d", "60d", "90d")):
+            roadmap = det.get("mitigation_roadmap") or {}
+            if any(roadmap.get(k) for k in ("30d", "60d", "90d")):
+                for k in ("30d", "60d", "90d"):
+                    for item in roadmap.get(k) or []:
+                        A(f"- **{k}:** {item}")
+                A("")
+            exps = det.get("experiments") or []
+            if exps:
+                A(f"**Experiments — plan only "
+                  f"({det.get('experiment_method') or 'experiment_plan_v1'}).** "
+                  f"Ranked probes for what is still open. Nothing here "
+                  f"executes anything: execution is out of band.")
+                A("")
+                A("| Experiment | Method | Effort | Targets |")
+                A("|---|---|---|---|")
+                for e in exps:
+                    tg = ((e.get("targets") or {}).get("attack_classes", [])
+                          + (e.get("targets") or {}).get("adoption_dimensions", [])
+                          + (e.get("targets") or {}).get("hypothesis_ids", [])
+                          + (e.get("targets") or {}).get("mitigation_ids", []))
+                    A(f"| {e.get('id')} {_short(str(e.get('title') or ''), 60)} "
+                      f"| {e.get('method_type')} | {e.get('effort')} "
+                      f"| {', '.join(tg[:4])} |")
+                A("")
+                xrm = det.get("experiments_roadmap") or {}
+                if any(xrm.get(k) for k in ("30d", "60d", "90d")):
                     for k in ("30d", "60d", "90d"):
-                        for item in roadmap.get(k) or []:
+                        for item in xrm.get(k) or []:
                             A(f"- **{k}:** {item}")
                     A("")
-                if det.get("mitigation_approved_by"):
+            if det.get("mitigation_approved_by"):
                     A(f"**Approved plan.** Approved by "
                       f"{det['mitigation_approved_by']}.")
                     A("")
@@ -1523,8 +1764,26 @@ def dossier_markdown(db, inv_id: int, dossier: dict | None = None) -> str:
                      f"{w3.get('mitigation_version') or '—'} "
                      f"({w3.get('mitigation_fingerprint') or 'no fingerprint'})"
                      if w3.get("method") else "")
-                  + ".")
+                  + "."
+                  + (" **Superseded catalogs**: newer versions exist; these "
+                     "numbers stand as scored — re-running writes a new row."
+                     if row.get("pack_stale") else ""))
                 A("")
+            if row.get("pack_stale"):
+                try:
+                    from . import threatpack as _tp
+                    _catalog_versions = (
+                        ("akm-model-adversarial",
+                         det.get("model_adv_version")),
+                        ("akm-adoption-risk", det.get("adoption_version")),
+                        ("akm-model-mitigations",
+                         (det.get("w3") or {}).get("mitigation_version")))
+                    for _cid, _ver in _catalog_versions:
+                        for line in _tp.changelog_excerpt(_cid, _ver):
+                            A(f"- {line}")
+                    A("")
+                except Exception:
+                    pass
         elif det["kind"] == "hypothesis":
             A(f"**Method.** {_short(det['method'], 120)}. "
               f"{det['score_meaning']}. Higher is better-evidenced, not more "
@@ -1536,19 +1795,41 @@ def dossier_markdown(db, inv_id: int, dossier: dict | None = None) -> str:
                 A(f"| {d_['id']} | {_pct(d_['weight'], 1.0)} | {d_['score']:.0f}/100 "
                   f"| {d_['contribution']:.2f} |")
             A("")
-            A("**Every claim.**")
+            A("**Claim register.** Status is corroboration state, not truth: "
+              "`untested` means no verdict yet, `refuted` is set explicitly "
+              "with evidence, never inferred.")
             A("")
-            for c in det["claims"]:
+            A("| Claim | Status | Confidence | Falsifiers | Tensions |")
+            A("|---|---|---|---|---|")
+            for c in det.get("register") or det["claims"]:
                 contra = c.get("contradicted_by") or []
-                A(f"- **{c.get('id')} {_short(c.get('claim', ''), 90)}** "
-                  f"— confidence {_f(c.get('confidence')):.0f}/100, impact "
-                  f"{c.get('impact', '—')}/5"
-                  + (f"; corroborated by both flows" if c.get("cross_flow") else "")
-                  + (f"; counter-evidence: {', '.join(c.get('counter_evidence', []))}"
-                     if c.get("counter_evidence") else "")
-                  + (f"; in tension with flow 1: {', '.join(contra)}"
-                     if contra else "")
-                  + f". Refuted by: {_short(c.get('falsifier', ''), 100)}")
+                fals = c.get("falsifiers") or (
+                    [c["falsifier"]] if c.get("falsifier") else [])
+                A(f"| {c.get('hypothesis_id') or c.get('id')} "
+                  f"{_short(c.get('claim', ''), 60)} "
+                  f"| {c.get('status', 'untested')} "
+                  f"| {_f(c.get('confidence')):.0f}/100 "
+                  f"| {'; '.join(_short(f, 60) for f in fals[:2]) or '—'} "
+                  f"| {', '.join(contra) or '—'} |")
+            A("")
+            hexps = det.get("experiments") or []
+            if hexps:
+                A(f"**Experiments — plan only "
+                  f"({det.get('experiment_method') or 'experiment_plan_v1'}).** "
+                  f"Ranked probes for open falsifiers. Nothing here executes "
+                  f"anything: execution is out of band.")
+                A("")
+                A("| Experiment | Method | Effort | Targets |")
+                A("|---|---|---|---|")
+                for e in hexps:
+                    tg = ((e.get("targets") or {}).get("hypothesis_ids", [])
+                          + (e.get("targets") or {}).get("attack_classes", [])
+                          + (e.get("targets") or {}).get("adoption_dimensions", [])
+                          + (e.get("targets") or {}).get("mitigation_ids", []))
+                    A(f"| {e.get('id')} {_short(str(e.get('title') or ''), 60)} "
+                      f"| {e.get('method_type')} | {e.get('effort')} "
+                      f"| {', '.join(tg[:4])} |")
+                A("")
             A("")
         prov = row.get("provenance") or {}
         if prov.get("scope") or prov.get("queries") or prov.get("evidence"):
@@ -1575,8 +1856,20 @@ def dossier_markdown(db, inv_id: int, dossier: dict | None = None) -> str:
         if row.get("threat_pack_version"):
             A(f"**Threat pack.** {row['threat_pack_version']} "
               f"({row.get('threat_pack_fingerprint') or 'no fingerprint'}) — "
-              "the exact catalogue these numbers were computed against.")
+              "the exact catalogue these numbers were computed against."
+              + (" **Superseded pack**: a newer catalogue exists; these "
+                 "numbers stand as scored — re-running writes a new row."
+                 if row.get("pack_stale") else ""))
             A("")
+            if row.get("pack_stale"):
+                try:
+                    from . import threatpack as _tp
+                    for line in _tp.changelog_excerpt(
+                            "akm-threat-pack", row.get("threat_pack_version")):
+                        A(f"- {line}")
+                    A("")
+                except Exception:
+                    pass
         if prov.get("a2a_task_id") or prov.get("hops"):
             A("**Agent chain.** "
               + (f"task {prov['a2a_task_id']}" if prov.get("a2a_task_id")

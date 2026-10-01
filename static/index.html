@@ -2028,10 +2028,21 @@ function secDossierRender() {
       [['threats', 'threats'], ['evidence', 'evidence items'], ['control_count', 'controls'], ['known_exploits', 'known exploits']]
         .forEach(([k, label]) => { if (st[k] != null) abits.push(`${st[k]} ${label}`); });
       if (st.duration_ms != null && !isNaN(Number(st.duration_ms))) abits.push(`${Math.round(Number(st.duration_ms) / 1000)}s`);
+      if (st.pack_version) abits.push(`pack ${st.pack_version}${st.pack_fingerprint ? ` (fp ${st.pack_fingerprint})` : ''}`);
       if (st.failed) abits.push(`failed: ${String(st.failed).slice(0, 120)}`);
       h += `<p><b>Assessment.</b> ${escHtml(abits.join(' · '))}.</p>`;
     }
     if (r.error) h += `<p style="color:var(--text2)"><b>Outcome.</b> ${escHtml(r.status || 'error')}: ${escHtml(r.error)} — a past run's record, not a live fault; what it left missing is tracked in section 8.</p>`;
+    if ((r.stages || []).length) {
+      const dur = ms => {
+        if (ms == null || isNaN(Number(ms))) return '';
+        const t = Math.floor(Number(ms) / 1000);
+        if (t < 60) return `${t}s`;
+        if (t < 3600) return `${Math.floor(t / 60)}m${String(t % 60).padStart(2, '0')}s`;
+        return `${Math.floor(t / 3600)}h${String(Math.floor((t % 3600) / 60)).padStart(2, '0')}m`;
+      };
+      h += `<p style="color:var(--text2);font-size:11px"><b>Stages.</b> ${escHtml((r.stages || []).map(s => `${s.stage} ×${s.count}${dur(s.ms) ? ` (${dur(s.ms)})` : ''}`).join(' · '))}</p>`;
+    }
   });
   const shapes = d.query_shapes || [];
   if (shapes.length) {
@@ -2113,7 +2124,14 @@ function secDossierRender() {
       `</p>`;
     if (det.kind === 'catalog') {
       h += `<p><b>Method.</b> ${escHtml(det.aggregate_note || det.method)}</p>`;
-      h += `<p style="color:var(--text2);font-size:11px"><b>Controls applied.</b> ${escHtml((det.active_controls || []).join(', ') || 'None declared')} — controls reduce likelihood by coverage, never below the residual floor.</p>`;
+      {
+        const ctl0 = det.active_controls || [];
+        const ev0 = det.control_evidence || {};
+        const ctlText = ctl0.length ? ctl0.map(c => `${c} (${ev0[c] || 'declared'})`).join(', ') : 'None declared';
+        const declOnly = [...new Set((det.items || []).filter(t => (t.coverage || 0) > 0 && ((t.controls || []).every(c => (ev0[c] || 'declared') !== 'evidenced'))).map(t => t.id))];
+        h += `<p style="color:var(--text2);font-size:11px"><b>Controls applied.</b> ${escHtml(ctlText)} — controls reduce likelihood by coverage, never below the residual floor. <i>evidenced</i> means an accepted artifact names the control; <i>declared</i> means the reduction rests on say-so until tested.</p>`;
+        if (declOnly.length) h += `<p style="color:var(--orange);font-size:11px">Reductions resting on declared-only controls: ${declOnly.map(escHtml).join(', ')}.</p>`;
+      }
       h += `<div class="dos-table-wrap"><table class="dos-table"><thead><tr><th>Threat</th><th>L</th><th>I</th><th>Inherent</th><th>Coverage</th><th>Resid. L</th><th>Residual</th><th>Severity</th></tr></thead><tbody>` +
         (det.items || []).map(t => `<tr><td class="dos-wrap">${escHtml(t.id)} ${escHtml(t.title || '')}</td><td>${Number(t.likelihood || 0).toFixed(1)}</td><td>${Number(t.impact || 0).toFixed(1)}</td><td>${Number(t.inherent_score || 0).toFixed(1)}</td><td>${Math.round(Number(t.coverage || 0))}%</td><td>${Number(t.residual_likelihood || 0).toFixed(1)}</td><td>${Number(t.residual_score || 0).toFixed(1)}</td><td><span class="sev-${escHtml(t.residual_severity || 'unknown')}">${escHtml(t.residual_severity || '—')}</span></td></tr>`).join('') +
         `</tbody></table></div>`;
@@ -2146,7 +2164,7 @@ function secDossierRender() {
         (det.dimensions || []).map(dm => `<tr><td>${escHtml(dm.id)}</td><td>${escHtml(dm.rating || 'unknown')}</td><td class="dos-wrap">${escHtml(dm.rationale || '')}</td></tr>`).join('') +
         `</tbody></table></div>`;
       if (det.model_adv_version || det.adoption_version)
-        h += `<p style="color:var(--text2);font-size:11px"><b>Method versions.</b> model-adversarial ${escHtml(det.model_adv_version || '—')} (${escHtml(det.model_adv_fingerprint || 'no fingerprint')}) · adoption-risk ${escHtml(det.adoption_version || '—')} (${escHtml(det.adoption_fingerprint || 'no fingerprint')})${(det.w3 || {}).method ? ` · mitigation-residual ${escHtml(det.w3.mitigation_version || '—')} (${escHtml(det.w3.mitigation_fingerprint || 'no fingerprint')})` : ''}.</p>`;
+        h += `<p style="color:var(--text2);font-size:11px"><b>Method versions.</b> model-adversarial ${escHtml(det.model_adv_version || '—')} (${escHtml(det.model_adv_fingerprint || 'no fingerprint')}) · adoption-risk ${escHtml(det.adoption_version || '—')} (${escHtml(det.adoption_fingerprint || 'no fingerprint')})${(det.w3 || {}).method ? ` · mitigation-residual ${escHtml(det.w3.mitigation_version || '—')} (${escHtml(det.w3.mitigation_fingerprint || 'no fingerprint')})` : ''}.${row.pack_stale ? ' <b style="color:var(--orange)">Superseded catalogs</b>: newer versions exist; these numbers stand as scored.' : ''}</p>`;
       {
         const w3 = det.w3 || {};
         const plan0 = det.mitigation_plan || [];
@@ -2171,6 +2189,12 @@ function secDossierRender() {
           }));
           if (det.mitigation_approved_by)
             h += `<p><b>Approved plan.</b> Approved by ${escHtml(det.mitigation_approved_by)}.</p>`;
+          if ((det.experiments || []).length) {
+            h += `<p><b>Experiments — plan only.</b> Ranked probes for what is still open; execution is out of band.</p>` +
+              `<div class="dos-table-wrap"><table class="dos-table"><thead><tr><th>Experiment</th><th>Method</th><th>Effort</th><th>Targets</th></tr></thead><tbody>` +
+              det.experiments.map(e => `<tr><td><b>${escHtml(e.id)}</b> ${escHtml((e.title || '').slice(0, 80))}</td><td>${escHtml(e.method_type || '')}</td><td>${escHtml(e.effort || '')}</td><td class="dos-wrap">${escHtml([...((e.targets || {}).attack_classes || []), ...((e.targets || {}).adoption_dimensions || []), ...((e.targets || {}).hypothesis_ids || []), ...((e.targets || {}).mitigation_ids || [])].join(', '))}</td></tr>`).join('') +
+              `</tbody></table></div>`;
+          }
         }
       }
     } else if (det.kind === 'hypothesis') {
@@ -2182,9 +2206,14 @@ function secDossierRender() {
           `${(c.contradicted_by || []).length ? `; <span style="color:var(--orange)">in tension with flow 1: ${escHtml(c.contradicted_by.join(', '))}</span>` : ''}` +
           `. Refuted by: ${escHtml(c.falsifier || '')}</li>`).join('') +
         `</ul>`;
+      if ((det.experiments || []).length) {
+        h += `<p><b>Experiments — plan only.</b> Ranked probes for open falsifiers; execution is out of band.</p><ul>` +
+          det.experiments.map(e => `<li><b>${escHtml(e.id)}</b> ${escHtml((e.title || '').slice(0, 100))} [${escHtml(e.method_type || '')}, ${escHtml(e.effort || '')}]</li>`).join('') +
+          `</ul>`;
+      }
     }
     if (row.threat_pack_version) {
-      h += `<p style="color:var(--text2);font-size:11px"><b>Threat pack.</b> ${escHtml(row.threat_pack_version)} (${escHtml(row.threat_pack_fingerprint || 'no fingerprint')}) — the exact catalogue these numbers were computed against.</p>`;
+      h += `<p style="color:var(--text2);font-size:11px"><b>Threat pack.</b> ${escHtml(row.threat_pack_version)} (${escHtml(row.threat_pack_fingerprint || 'no fingerprint')}) — the exact catalogue these numbers were computed against.${row.pack_stale ? ' <b style="color:var(--orange)">Superseded pack</b>: newer catalogues exist; these numbers stand as scored.' : ''}</p>`;
     }
   });
   // --- 5. the assessment reports, as written: the full text behind section 4 ---
@@ -5814,8 +5843,12 @@ async function secPersistWhatIf() {
       body: JSON.stringify({ active_controls: active, persist: true }),
     });
     if (!res.ok) throw new Error('HTTP ' + res.status);
-    showNotif('Baseline updated', 'success');
-    loadSecurityById(secAssessmentId);
+    const r = await res.json();
+    // Persist writes a NEW row (history is immutable): open the new baseline,
+    // not the row it supersedes.
+    showNotif(`Saved as new baseline #${r.assessment_id}`, 'success');
+    loadSecurityById(r.assessment_id);
+    loadSecurityHistory();
   } catch (e) { showNotif('Failed to save baseline', 'error'); }
 }
 
@@ -6938,17 +6971,50 @@ function renderSecurityReport(data) {
       <p style="font-size:11px;color:var(--text2);">Method ${escHtml(w3.method || 'mitigation_residual_v1')} · catalog ${escHtml(w3v)} (${escHtml(w3.mitigation_fingerprint || 'no fingerprint')}).</p>
       </div>`;
     })()}` : '';
+  // ---- hypothesis builder: edit the register without touching the score ----
+  const paneBuilder = _isHyp ? `
+    <div class="sec-card"><h3><i class="fas fa-flask"></i> Hypothesis builder</h3>
+      <p style="font-size:12px;color:var(--text2);">Falsifiers, status and evidence links are editable. The scored confidence never moves under an edit — it only changes when a full re-verify job runs.</p>
+      ${(threats || []).map((t, ix) => {
+        const hid = t.hypothesis_id || t.id || ('H' + (ix + 1));
+        const fals = t.falsifiers || (t.falsifier ? [t.falsifier] : []);
+        return `<div style="padding:8px 0;border-top:1px solid var(--border);">
+          <div style="font-size:12.5px;"><strong>${escHtml(hid)}</strong> ${escHtml((t.claim || t.title || '').slice(0, 140))}</div>
+          <div style="font-size:12px;color:var(--text2);">status: <strong>${escHtml(t.status || 'untested')}</strong>${(t.supporting_artifacts || []).length ? ` · evidence: ${t.supporting_artifacts.map(a => '#' + escHtml(String(a))).join(', ')}` : ''}</div>
+          ${fals.length ? `<div style="font-size:12px;">Falsifiers: ${fals.map(f => `<span style="background:rgba(88,166,255,0.12);padding:1px 6px;border-radius:8px;">${escHtml(String(f).slice(0, 90))}</span>`).join(' ')}</div>` : ''}
+          <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px;align-items:center;">
+            <select id="hyp-status-${ix}" style="font-size:11.5px;">
+              ${['untested', 'supported', 'refuted', 'contested'].map(s => `<option value="${s}"${(t.status || 'untested') === s ? ' selected' : ''}>${s}</option>`).join('')}
+            </select>
+            <input id="hyp-fals-${ix}" placeholder="add falsifier…" style="font-size:11.5px;flex:1;min-width:140px;" />
+            <input id="hyp-ev-${ix}" placeholder="evidence ids, e.g. 12, 30" style="font-size:11.5px;width:150px;" />
+            <button class="btn btn-ghost btn-sm" onclick="secSaveHypothesis(${data.id}, ${escHtml(JSON.stringify(hid))}, ${ix})">Save</button>
+            <button class="btn btn-ghost btn-sm" onclick="secCollectHypothesis(${data.id}, ${escHtml(JSON.stringify(hid))})">Collect evidence</button>
+            <button class="btn btn-ghost btn-sm" onclick="secBuildExperiments(${data.id})"><i class="fas fa-vial"></i> Propose experiments</button>
+          </div>
+        </div>`;
+      }).join('')}
+    </div>` : '';
+  // ---- experiments card: plan only, works for model + hypothesis rows ----
+  const _exps = data.experiments || [];
+  const paneExperiments = _exps.length ? `
+    <div class="sec-card"><h3><i class="fas fa-vial"></i> Experiments — plan only</h3>
+      <div class="sec-aud-role">Ranked probes for what is still open. Nothing here executes anything: execution is out of band.</div>
+      <div style="overflow-x:auto;"><table class="sec-table"><tr><th>ID</th><th>Experiment</th><th>Method</th><th>Effort</th><th>Targets</th><th>Status</th></tr>${_exps.map(e => `<tr><td><strong>${escHtml(e.id)}</strong></td><td>${escHtml((e.title || '').slice(0, 120))}</td><td>${escHtml(e.method_type || '')}</td><td>${escHtml(e.effort || '')}</td><td>${escHtml([...((e.targets || {}).attack_classes || []), ...((e.targets || {}).adoption_dimensions || []), ...((e.targets || {}).hypothesis_ids || []), ...((e.targets || {}).mitigation_ids || [])].join(', '))}</td><td>${escHtml(e.status || 'proposed')}</td></tr>`).join('')}</table></div>
+    </div>` : '';
   const paneThreats = _isModelEng ? paneModelEng + `
     <div class="sec-card"><h3><i class="fas fa-triangle-exclamation"></i> Attack findings in detail</h3>
       ${details}
-    </div>` : `
+    </div>` + paneExperiments : `
     <div class="sec-card"><h3><i class="fas fa-triangle-exclamation"></i> ${_isHyp ? 'Hypothesis register' : _isAdv ? 'Misuse scenario register' : 'Threat &amp; risk register'}</h3>
       ${_isHyp ? `<div class="sec-aud-role">Each row is a claim someone could test and be wrong about. The <strong>refuted by</strong> column is the actionable one: it is the observation that would settle the question.</div>` : ''}
       ${_isAdv ? `<div class="sec-aud-role">These are scenarios an attacker could chain <em>with</em> this model. The prerequisite column is the one to act on — it is what you can actually close.</div>` : ''}
       ${secRoleThreats().length ? `<div class="sec-aud-role">Rows highlighted are the ones this role owns — switch audience above to change the lens.</div>` : ''}
       <div style="overflow-x:auto;"><table class="sec-table"><tr><th>ID</th><th>${_isHyp ? 'Claim' : _isAdv ? 'Scenario &amp; attacker goal' : 'Threat'}</th><th>${_isHyp ? 'Confidence' : _isAdv ? 'Reach × impact' : 'L×I (inherent)'}</th><th>${_isHyp ? 'Refuted by' : _isAdv ? 'Prerequisites' : 'Coverage'}</th><th>${_isHyp ? 'Stakes' : _isAdv ? 'Value' : 'Residual'}</th><th>${_isHyp ? 'Status' : 'Severity'}</th></tr>${rows}</table></div>
     </div>
-    ${details}`;
+    ${details}
+    ${paneBuilder}
+    ${paneExperiments}`;
 
   const paneControls = `
     <div class="sec-card"><h3><i class="fas fa-shield-halved"></i> Security controls in scope</h3>
@@ -7106,7 +7172,10 @@ async function loadSecurityHistory() {
       const statChip = (i.stats_complete === false)
         ? ' <span style="font-size:9.5px;border:1px solid var(--red);color:var(--red);border-radius:3px;padding:0 4px;" title="The run behind this assessment left no measurable stats">incomplete stats</span>'
         : '';
-      return `<div style="padding:6px 0;border-bottom:1px solid var(--border);"><a href="#" onclick="loadSecurityById(${i.id});return false;" style="color:var(--accent);">#${i.id} ${escHtml(i.product_name)}</a>${badge}${statChip} <span style="color:var(--text2)">· ${escHtml(i.exposure)} · ${i.overall_pct}/100 · ${count}</span></div>`;
+      const staleChip = i.pack_stale
+        ? ' <span style="font-size:9.5px;border:1px solid var(--orange);color:var(--orange);border-radius:3px;padding:0 4px;" title="Scored on older catalogs than today&#39;s; numbers stand as scored">superseded pack</span>'
+        : '';
+      return `<div style="padding:6px 0;border-bottom:1px solid var(--border);"><a href="#" onclick="loadSecurityById(${i.id});return false;" style="color:var(--accent);">#${i.id} ${escHtml(i.product_name)}</a>${badge}${statChip}${staleChip} <span style="color:var(--text2)">· ${escHtml(i.exposure)} · ${i.overall_pct}/100 · ${count}</span></div>`;
     }).join('');
   } catch (e) { el.innerHTML = '<span style="color:var(--red)">Failed to load history</span>'; }
 }
@@ -7155,6 +7224,50 @@ function secClassifySubject() {
       }
     } catch (_) { /* offline: the run still classifies server-side */ }
   }, 400);
+}
+
+async function secSaveHypothesis(assessmentId, hid, ix) {
+  const status = (document.getElementById(`hyp-status-${ix}`) || {}).value || 'untested';
+  const fals = ((document.getElementById(`hyp-fals-${ix}`) || {}).value || '').trim();
+  const evRaw = ((document.getElementById(`hyp-ev-${ix}`) || {}).value || '').trim();
+  const body = { claims: [{ hypothesis_id: hid, status }] };
+  if (fals) {
+    try {
+      const cur = await (await fetch(`${API}/security/assessments/${assessmentId}/hypotheses`)).json();
+      const mine = (cur.claims || []).find(c => (c.hypothesis_id || c.id) === hid) || {};
+      const have = mine.falsifiers || (mine.falsifier ? [mine.falsifier] : []);
+      body.claims[0].falsifiers = [...have, fals].slice(0, 8);
+    } catch (e) { body.claims[0].falsifiers = [fals]; }
+  }
+  if (evRaw) body.claims[0].add_evidence = evRaw.split(/[,\s]+/).map(Number).filter(n => !isNaN(n));
+  try {
+    const res = await fetch(`${API}/security/assessments/${assessmentId}/hypotheses`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) { const j = await res.json().catch(() => ({})); throw new Error(j.detail || ('HTTP ' + res.status)); }
+    showNotif('Register updated — scored confidence untouched', 'success');
+    loadSecurityById(assessmentId);
+  } catch (e) { showNotif(`Save failed: ${e.message}`, 'error'); }
+}
+
+async function secBuildExperiments(assessmentId) {
+  try {
+    const res = await fetch(`${API}/security/assessments/${assessmentId}/experiments/build`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    if (!res.ok) { const j = await res.json().catch(() => ({})); throw new Error(j.detail || ('HTTP ' + res.status)); }
+    const r = await res.json();
+    showNotif(`Experiment plan built (${(r.experiments || []).length} probes — plan only)`, 'success');
+    loadSecurityById(assessmentId);
+  } catch (e) { showNotif(`Plan failed: ${e.message}`, 'error'); }
+}
+
+async function secCollectHypothesis(assessmentId, hid) {
+  try {
+    const res = await fetch(`${API}/security/assessments/${assessmentId}/hypotheses/${encodeURIComponent(hid)}/collect-evidence`, { method: 'POST' });
+    if (!res.ok) { const j = await res.json().catch(() => ({})); throw new Error(j.detail || ('HTTP ' + res.status)); }
+    const r = await res.json();
+    showNotif(`Evidence collection started (run #${r.run_id})`, 'success');
+  } catch (e) { showNotif(`Collect failed: ${e.message}`, 'error'); }
 }
 
 function secPopulateForm(d) {
