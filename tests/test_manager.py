@@ -898,12 +898,22 @@ class TestVendorDocQuery(unittest.TestCase):
         self.assertEqual(len(got), 1)
 
     def test_generic_brief_is_untouched(self):
+        inv = self._inv("payment fraud review",
+                        keywords="payments, fraud")
+        got = self._planned(inv, [
+            {"text": "payment fraud review", "sources": ["rss"]}])
+        self.assertEqual([q["text"] for q in got],
+                         ["payment fraud review"])
+
+    def test_diffusion_brief_is_a_model_brief(self):
+        # Diffusion models are a first-class target family, so the
+        # adversarial/model-card families apply here too.
         inv = self._inv("diffusion models capability review",
                         keywords="diffusion, capability")
         got = self._planned(inv, [
             {"text": "diffusion models capability", "sources": ["arxiv"]}])
-        self.assertEqual([q["text"] for q in got],
-                         ["diffusion models capability"])
+        texts = [q["text"] for q in got]
+        self.assertTrue(any("memorization" in t for t in texts), texts)
 
 
 if __name__ == "__main__":

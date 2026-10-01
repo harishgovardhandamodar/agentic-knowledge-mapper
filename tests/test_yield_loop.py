@@ -81,7 +81,7 @@ class LoopHarness:
                 return list(self.rounds_found[idx])
             return []
 
-        def analyze(inv, batch, existing):
+        def analyze(inv, batch, existing, model_subject=False):
             if self.analyze is not None:
                 return self.analyze(inv, batch, existing)
             return [{"index": i, "keep": self.keep_relevance > 0,

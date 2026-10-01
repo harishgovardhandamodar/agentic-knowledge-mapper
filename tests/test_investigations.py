@@ -21,7 +21,7 @@ from app import main as main_mod  # noqa: E402
 # Keep the product path offline: these tests are about visibility plumbing.
 agent_mod._plan_queries = lambda inv: {"rationale": "s", "queries": []}
 agent_mod._run_searches = lambda q, s: []
-agent_mod._analyze_batch = lambda i, b, e: []
+agent_mod._analyze_batch = lambda i, b, e, *a, **k: []
 agent_mod._map_relationships = lambda *a, **k: 0
 main_mod.launch_run = lambda *a, **k: None
 database.init_db()

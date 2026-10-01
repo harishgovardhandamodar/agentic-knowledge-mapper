@@ -971,7 +971,7 @@ class TestDossierQuality(unittest.TestCase):
             md = dossier_markdown(inv.db, inv.id)
             row = [r for r in investigation_dossier(inv.db, inv.id)
                    ["scores"]["rows"] if r["is_latest"]][0]
-            self.assertIn(f"{row['residual']}/100", md)
+            self.assertIn(f"{row['residual']:g}/100", md)
             self.assertIn(row["detail"].get("posture", "").split()[0], md)
             # Pack identity rides with the numbers whenever the assessment
             # recorded it (offline fixtures may predate versioned packs).

@@ -1362,7 +1362,7 @@ class TestSessionApi(unittest.TestCase):
         # Keep the product path offline: this suite is about audit plumbing.
         agent._plan_queries = lambda inv: {"rationale": "s", "queries": []}
         agent._run_searches = lambda q, s: []
-        agent._analyze_batch = lambda i, b, e: []
+        agent._analyze_batch = lambda i, b, e, *a, **k: []
         agent._map_relationships = lambda *a, **k: 0
         main.launch_run = lambda *a, **k: None
         # The module-level init_db() above ran before app.models was imported,

@@ -163,6 +163,100 @@ class _QueueCase(unittest.TestCase):
             db.close()
 
 
+class TestMitigationGate(_QueueCase):
+    """The same gate discipline for model mitigation plans."""
+
+    def _model_params(self, **kw):
+        params = {"product_name": "TabPFN",
+                  "assessment_mode": "model_engineering",
+                  "require_approval": True,
+                  "model_meta": {"model_name": "TabPFN",
+                                 "model_family": "tabular_fm",
+                                 "workflows": ["mitigation_controls"]}}
+        params.update(kw)
+        return params
+
+    def test_unstamped_mitigation_plan_reparks(self):
+        inv_id = _investigation("mitigation-bypass")
+        with no_worker():
+            run_id = security_agent.launch_security_assessment(
+                inv_id, self._model_params(
+                    approved_mitigation_plan={"plan": []}),
+                requested_by="alice")
+        db = SessionLocal()
+        try:
+            security_agent.jobqueue.drain(db, security_agent._handle_security_job,
+                                          kinds=[security_agent.KIND_SECURITY])
+            db.expire_all()
+            run = db.query(AgentRun).filter(AgentRun.id == run_id).first()
+            self.assertEqual(run.status, "awaiting_approval")
+            self.assertEqual(json.loads(run.stats)["pending_gate"],
+                             "model_mitigation_plan")
+        finally:
+            db.close()
+
+    def test_stamped_mitigation_plan_opens_the_gate(self):
+        inv_id = _investigation("mitigation-honoured")
+        with no_worker():
+            run_id = security_agent.launch_security_assessment(
+                inv_id, self._model_params(
+                    approved_mitigation_plan={"plan": []},
+                    approved_by="bob",
+                    approved_at="2026-01-01T00:00:00+00:00"),
+                requested_by="alice")
+        db = SessionLocal()
+        try:
+            with mock.patch.object(security_agent.sec_engine,
+                                   "build_assessment",
+                                   side_effect=RuntimeError("stop-after-gate")) as m:
+                security_agent.run_security_assessment(
+                    run_id, self._model_params(
+                        approved_mitigation_plan={"plan": []},
+                        approved_by="bob",
+                        approved_at="2026-01-01T00:00:00+00:00"))
+            self.assertTrue(m.called,
+                            "an attributed mitigation plan did not open the gate")
+        finally:
+            db.close()
+
+    def test_resume_carries_the_mitigation_plan(self):
+        inv_id = _investigation("mitigation-resume")
+        plan = {"plan": [{"control_id": "MM09"}]}
+        db = SessionLocal()
+        try:
+            run = AgentRun(
+                investigation_id=inv_id, trigger="security",
+                status="awaiting_approval",
+                plan=json.dumps({"product": "TabPFN"}),
+                stats=json.dumps({
+                    "pending_gate": "model_mitigation_plan",
+                    "mitigation_plan": plan,
+                    "params": {"product_name": "TabPFN",
+                               "assessment_mode": "model_engineering",
+                               "requested_by": "alice"}}))
+            db.add(run)
+            db.commit()
+            run_id = run.id
+        finally:
+            db.close()
+        with no_worker():
+            self.assertTrue(security_agent.resume_security_assessment(
+                run_id, approved_by="bob"))
+        db = SessionLocal()
+        try:
+            from app.models import Job as _Job
+            job = db.query(_Job).filter(_Job.run_id == run_id).first()
+            self.assertIsNotNone(job)
+            payload = json.loads(job.payload_json or "{}")
+            params = payload.get("params", {})
+            self.assertEqual(params.get("approved_mitigation_plan"), plan)
+            self.assertEqual(params.get("approved_by"), "bob")
+            self.assertTrue(params.get("approved_at"))
+            self.assertFalse(params.get("require_approval"))
+        finally:
+            db.close()
+
+
 class TestApprovedPlanNeedsAnApprover(_QueueCase):
     """The bypass: a plan on the request used to skip the gate entirely."""
 

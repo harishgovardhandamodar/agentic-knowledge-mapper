@@ -508,6 +508,16 @@ class TestSelfContradiction(unittest.TestCase):
                       a["sections"][0]["body"])
         self.assertEqual(rep["contradictions"], 0)
 
+    def test_elimination_claim_next_to_limitations_is_stripped(self):
+        a = {"sections": [{"heading": "Findings",
+                           "body": ("Differential privacy eliminates "
+                                    "extraction risk entirely. Utility loss "
+                                    "on rare slices is a known limitation.")}]}
+        rep = W.audit_answer("What does DP buy us?", a, PAGES)
+        self.assertNotIn("eliminates extraction risk",
+                         a["sections"][0]["body"])
+        self.assertEqual(rep["by_reason"].get("self_contradiction"), 1)
+
     def test_praise_without_denial_is_untouched(self):
         a = {"sections": [{"heading": "Findings",
                            "body": ("The platform ships with strict data "
