@@ -330,6 +330,10 @@ separate workflows, no standards mapping):
 | `hypothesis-analyst` | `draft_hypotheses` | `draft_hypotheses` |
 | `hypothesis-verifier` | `verify_hypotheses` | `verify_hypotheses` |
 | `hypothesis-reporter` | `write_hypothesis_report` | `write_hypothesis_report` |
+| `model-adv-intel` | `map_model_attacks` | `map_model_attacks` |
+| `model-adoption-analyst` | `rate_adoption` | `rate_adoption` |
+| `model-mitigation-analyst` | `propose_model_mitigations` | `propose_model_mitigations` |
+| `model-eval-reporter` | `write_model_eval_report` | `write_model_eval_report` |
 
 ## Related
 

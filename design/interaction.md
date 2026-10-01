@@ -168,6 +168,10 @@ sequenceDiagram
     participant HA as hypothesis-analyst
     participant HV as hypothesis-verifier
     participant HR as hypothesis-reporter
+    participant MAI as model-adv-intel
+    participant MAA as model-adoption-analyst
+    participant MMA as model-mitigation-analyst
+    participant MER as model-eval-reporter
     participant SEC as security.py
     participant OS as openshell.py
     participant L as ledger.py
@@ -222,10 +226,25 @@ sequenceDiagram
         HA-->>ORC: falsifiable claims H01… (no falsifier → dropped)
         ORC->>COL: collect_research (claim text as queries)
         ORC->>HV as hypothesis-verifier: verify_hypotheses
-        HV-->>ORC: support · counter-evidence · cross-flow flag
+        HV-->>ORC: support · counter-evidence · testability · cross-flow flag
         ORC->>SEC: score_hypotheses (confidence weights)
         SEC-->>ORC: confidence aggregate — higher is better-evidenced
         ORC->>HR as hypothesis-reporter: write_hypothesis_report
+    else assessment_mode=model_engineering (named model + metadata)
+        ORC->>COL: collect_research (W1 attack literature)
+        COL-->>ORC: ranked evidence
+        ORC->>MAI as model-adv-intel: map_model_attacks
+        MAI-->>ORC: MA-… findings (class · scope · confidence)
+        ORC->>COL: collect_research (W2 cards + primary sources)
+        ORC->>MAA as model-adoption-analyst: rate_adoption
+        MAA-->>ORC: 8 dimension ratings (unknown = gap)
+        ORC->>COL: collect_research (W3 mitigation literature)
+        ORC->>MMA as model-mitigation-analyst: propose_model_mitigations
+        MMA-->>ORC: ranked MM* plan + deferrals + roadmap
+        ORC->>SEC: coverage + risk + residual methods
+        SEC-->>ORC: W1 risk · W2 risk + uncertainty · indicative residual
+        ORC->>MER as model-eval-reporter: write_model_eval_report
+        MER-->>ORC: dual-section report + W3 plan + exec paragraph
     else catalog product
         ORC->>CA: analyse_controls + judge_applicability
     CA-->>ORC: control plan + applicability 0..1 per threat
