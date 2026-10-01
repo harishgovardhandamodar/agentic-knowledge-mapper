@@ -97,6 +97,11 @@ Two buttons in the sidebar close the loop the agent leaves open:
   material in place — query brief, review flags, an evidence diagram, answered
   questions with their supporting artifacts — with a Regenerate button that
   recomputes from the current flags.
+- **Full report** — the summary is the answer; this is the working. The
+  Summary sub-tab's dossier states the request verbatim, every run's plan and
+  queries, every collected artifact with why it was kept, and how each stored
+  score was applied and what moved it — read from stored rows, so every number
+  traces to a row. Exports as Markdown or PDF.
 - **Find open gaps** — reads which dimensions of the brief have *nothing at
   all*, and offers to launch a targeted run at each one. An answer that finds
   its own research.
@@ -381,6 +386,8 @@ an action are provable afterwards:
 | GET | `/api/investigations/{id}/graph/clusters?mode=` | category \| similarity centroids |
 | GET | `/api/investigations/{id}/summary` | Executive summary overlay data |
 | POST | `/api/investigations/{id}/summary/regenerate` | Recompute the summary from current review flags |
+| GET | `/api/investigations/{id}/dossier` | Investigation dossier: request, runs, collection, score audit |
+| GET | `/api/investigations/{id}/dossier/markdown`, `…/pdf` | The same write-up as Markdown / PDF |
 | GET | `/api/investigations/{id}/artifacts?review=&search=` | Review queue |
 | GET | `/api/investigations/{id}/artifacts/overview` | Collection: timeline, purpose, actor involvement shares |
 | GET | `/api/investigations/{id}/recommendations` | Coverage gaps, control leverage, stale brief, query yields |
@@ -531,6 +538,7 @@ agentic-knowledge-mapper/
 │   ├── main.py            # FastAPI routes
 │   ├── agent.py           # plan→search→analyze→map loop (background thread)
 │   ├── explainer.py       # Q&A pipeline: research→compose→ground→critique→diagram
+│   ├── dossier.py         # investigation dossier: request→runs→collection→score audit
 │   ├── security_agent.py  # security runs (job queue, approval gate, A2A dispatch)
 │   ├── agents.py          # A2A envelope protocol + fifteen agent cards (catalog + 3 model paths)
 │   ├── security.py        # threat/control catalog, scoring, report engine

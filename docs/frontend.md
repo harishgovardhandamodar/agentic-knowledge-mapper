@@ -212,3 +212,64 @@ from the same payload, so the two can never disagree; the security
 investigation pane shows the compact three-number strip. Nothing is merged
 and nothing is ranked across workflows -- a confidence is not comparable to
 a risk, so the sections sit side by side with their meanings attached.
+
+### Investigation dossier (Summary tab)
+
+The executive summary is the answer; the dossier is the working. It is a
+separate surface in the same tab because the two answer different questions:
+"what do we have" versus "how did we get here, and can I check it".
+
+`app/dossier.py` builds it from stored rows in four parts, in the order the
+work happened:
+
+1. **The request** -- title, keywords, description and sources verbatim, the
+   same strings the planner read.
+2. **What was investigated** -- every run's goal, planner rationale, the
+   queries it actually issued and where it sent them, its round/call cost, its
+   event stages and its error; then the query-shape ledger, which is the
+   agent's only memory across rounds of what each *kind* of question paid off.
+3. **What was collected** -- every artifact with type, source, relevance, the
+   collecting actor, why it was kept, and its review and drift flags; the known
+   issues; each answered question with its key points and the artifacts it
+   stands on. Rejected artifacts are listed and stand in no score.
+4. **How each score was applied, and what moved it** -- per assessment: its
+   inputs (exposure tier with its weight, focus, use case, doc URLs, declared
+   controls), the arithmetic in full, the items that drove each dimension, its
+   recorded scope, queries and evidence, its A2A agent chain, and the threat
+   pack version and fingerprint it was computed against. Current and superseded
+   rows are both reported, marked as such.
+
+Section 5 appends each *current* assessment's stored report verbatim, with its
+headings demoted so it cannot restart the dossier's own outline. Section 4
+explains how a number was reached; the appendix is the report the user read, so
+the two can be compared rather than reconciled.
+
+**One payload, three surfaces.** `investigation_dossier()` returns the
+structured dossier; `dossier_markdown()` renders that same data as prose. The
+JSON, Markdown and PDF endpoints all read from it, and the PDF passes its
+payload into the writer rather than rebuilding -- so the cover's numbers and
+the body cannot disagree.
+
+| Endpoint | Returns |
+|---|---|
+| `GET /api/investigations/{id}/dossier` | the structured dossier |
+| `GET /api/investigations/{id}/dossier/markdown` | the full write-up as Markdown |
+| `GET /api/investigations/{id}/dossier/pdf` | the same write-up as a PDF (501 without reportlab) |
+
+The three assessment paths keep their own meanings and are never averaged: the
+dossier says so in prose and prints one verdict block on the PDF cover only
+when a single score exists. When several exist it prints the scope table
+instead, because printing one of them as *the* number would rank a confidence
+against a risk.
+
+In the tab, `loadDossier()` fetches on demand (the payload is large and most
+visits only need the summary) and caches until the investigation changes.
+`secDossierRender()` builds the four sections read-only; wide tables scroll
+inside `.dos-table-wrap` rather than stretching the tab. Print is the browser
+fallback for a server without reportlab: a print stylesheet hides the chrome
+and leaves the dossier.
+
+`artifact_actor()` and `artifact_purpose()` live in `app/dossier.py` and
+`main.py` imports them, so the API and the dossier attribute an artifact the
+same way -- two copies would let a PDF and the on-screen report disagree about
+who collected something.

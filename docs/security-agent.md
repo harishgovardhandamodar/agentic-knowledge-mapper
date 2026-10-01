@@ -381,6 +381,19 @@ Appendix — sources and the A2A hop trail
 
 Export: Markdown download, PDF (reportlab, tables + headings), browser print.
 
+### The dossier is a separate report from the assessment
+
+An assessment report answers "what did we find about this system". The
+investigation dossier (`app/dossier.py`, `GET /api/investigations/{id}/dossier`
+plus `/markdown` and `/pdf`) answers the question behind it -- what was asked,
+what was searched, what was collected, and how each stored score was applied and
+what moved it. It reads stored rows only: no LLM call, no recomputation, no
+number a reader cannot trace to a row. The PDF cover prints one verdict block
+only when a single score exists, and the scope table when several do, because
+one of them printed as *the* number would rank a confidence against a risk.
+See [frontend.md](frontend.md#investigation-dossier-summary-tab) for the four
+sections and the on-screen preview.
+
 ## Investigation sub-tab executive summary
 
 The report's Investigation sub-tab opens with the investigation's executive

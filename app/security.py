@@ -3267,8 +3267,16 @@ def build_pdf(markdown_text: str, title: str = "AI Security Assessment",
 
     perspectives = meta.get("perspectives") or []
     if perspectives:
-        story.append(Paragraph("Audience highlights", styles["Heading2"]))
-        rows = [[Paragraph("<b>Audience</b>", cell_head),
+        # The table's column heading and its title both follow the caller: the
+        # assessment report passes audience panels, the investigation dossier
+        # passes what it covers. One heading for two reports would misdescribe
+        # one of them.
+        story.append(Paragraph(str(meta.get("highlights_title")
+                                  or "Audience highlights"),
+                              styles["Heading2"]))
+        rows = [[Paragraph("<b>"
+                           + str(meta.get("highlights_label") or "Audience")
+                           + "</b>", cell_head),
                  Paragraph("<b>Headline</b>", cell_head)]]
         for pv in perspectives:
             rows.append([Paragraph(_inline(str(pv.get("label", ""))), cell_style),
@@ -3402,8 +3410,11 @@ def build_pdf(markdown_text: str, title: str = "AI Security Assessment",
         canvas.saveState()
         canvas.setFont("Helvetica", 7)
         canvas.setFillColor(colors.HexColor("#656d76"))
+        # The footer's report name follows the document: a dossier stamped
+        # "AI Security Assessment" on every page would misdescribe the export.
         canvas.drawString(MARGIN, 1.2 * cm,
-                          _clean(f"AI Security Assessment - {product}")[:90])
+                          _clean(f"{str(meta.get('report_name') or 'AI Security Assessment')}"
+                                  f" - {product}")[:90])
         canvas.drawRightString(PAGE_W - MARGIN, 1.2 * cm,
                                f"{datestr}  ·  p. {_doc.page}")
         canvas.restoreState()

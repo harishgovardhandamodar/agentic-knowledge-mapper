@@ -28,6 +28,7 @@ from . import security as sec_engine
 from . import standards_matrix
 from . import design_docs
 from . import manager as manager_mod
+from . import dossier
 from .explainer import (launch_explanation, _extract_concepts, MODES,
                         DEPTH_PLAN, AUDIENCE_HINTS, _question_suggestions,
                         _quiz_from_answer, _save_explanation_to_graph,
@@ -580,36 +581,12 @@ def compare_runs(inv_id: int, from_run: int = Query(...),
 
 # ---------- artifacts ----------
 
-def _artifact_actor(a, run) -> str:
-    """Who/what brought this artifact in, as one honest label."""
-    if (a.origin or "") == "manual":
-        return "human"
-    if (a.author or "") == "explainer":
-        return "explainer"
-    if run is not None:
-        trig = run.trigger or "manual"
-        return {"manual": "agent · manual run",
-                "schedule": "agent · scheduled"}.get(trig, f"agent · {trig}")
-    return "agent"
-
-
-def _artifact_purpose(a, run) -> str:
-    """Why this artifact was collected, best available evidence first."""
-    if a.relevance_reason:
-        return a.relevance_reason
-    if (a.author or "") == "explainer":
-        return "saved from an explanation"
-    if (a.origin or "") == "manual":
-        return "added by hand"
-    if run is not None:
-        try:
-            goal = (json.loads(run.plan or "{}") or {}).get("goal")
-        except Exception:
-            goal = None
-        if goal:
-            return f"agent run goal: {goal}"[:300]
-        return f"collected by agent run #{run.id} ({run.trigger or 'manual'})"
-    return "collected by agent"
+# Provenance labels live in app.dossier so this API and the dossier's
+# collection inventory read an artifact the same way; two copies of these
+# would let a PDF and the on-screen report attribute the same artifact to
+# different actors.
+_artifact_actor = dossier.artifact_actor
+_artifact_purpose = dossier.artifact_purpose
 
 
 @app.get("/api/investigations/{inv_id}/recommendations")
@@ -1317,6 +1294,89 @@ def regenerate_summary(inv_id: int, request: Request,
                              "rejected": flags.get("rejected", 0)})
     out["regenerated"] = True
     return out
+
+
+# ---- investigation dossier: the full audit write-up ---------------------
+# The executive summary is the answer; this is the working. One payload
+# serves the on-screen preview, the markdown download and the PDF, so the
+# three can never disagree about what was investigated or how a score was
+# reached.
+
+
+@app.get("/api/investigations/{inv_id}/dossier")
+def get_dossier(inv_id: int, db: Session = Depends(get_db)):
+    from .dossier import investigation_dossier
+    try:
+        return investigation_dossier(db, inv_id)
+    except LookupError:
+        raise HTTPException(404, "Investigation not found")
+
+
+@app.get("/api/investigations/{inv_id}/dossier/markdown")
+def get_dossier_markdown(inv_id: int, db: Session = Depends(get_db)):
+    from .dossier import dossier_markdown
+    try:
+        md = dossier_markdown(db, inv_id)
+    except LookupError:
+        raise HTTPException(404, "Investigation not found")
+    return Response(
+        content=md, media_type="text/markdown",
+        headers={"Content-Disposition":
+                 f'attachment; filename="investigation-{inv_id}-dossier.md"'})
+
+
+@app.get("/api/investigations/{inv_id}/dossier/pdf")
+def get_dossier_pdf(inv_id: int, db: Session = Depends(get_db)):
+    from .dossier import dossier_markdown, investigation_dossier
+    try:
+        # One read, one payload: the cover's numbers and the body are the same
+        # snapshot, so the verdict block cannot disagree with the sections.
+        d = investigation_dossier(db, inv_id)
+        md = dossier_markdown(db, inv_id, dossier=d)
+    except LookupError:
+        raise HTTPException(404, "Investigation not found")
+    inv = d["investigation"]
+    col = d["collection"]
+    # One verdict block only when a single score exists: a dossier that
+    # reports three scores on different scales must not print one of them
+    # as the number, so it prints the scope table instead.
+    latest = [r for r in d["scores"]["rows"] if r["is_latest"]]
+    single = len(latest) == 1
+    try:
+        pdf = sec_engine.build_pdf(
+            md, title=f"Investigation dossier — {inv['title']}",
+            meta={
+                "product": inv["title"],
+                "overall": latest[0]["score"] if single else -1,
+                "posture": latest[0]["detail"].get("posture", "") if single else "",
+                "exposure_label": (latest[0]["inputs"].get("exposure_label")
+                                   if single else ""),
+                "report_name": "Investigation dossier",
+                "highlights_title": "What this investigation covers",
+                "highlights_label": "Scope",
+                "perspectives": [
+                    {"label": r["label"],
+                     "headline": (f"{r['score']:g}/100 — {r['score_meaning']}"
+                                  + (f" · {len(r['detail'].get('items') or [])}"
+                                     f" items" if r["detail"].get("items") is not None
+                                     else ""))}
+                    for r in latest] + [
+                    {"label": "Collected",
+                     "headline": (f"{col['totals']['artifacts']} artifacts "
+                                  f"({col['flags']['accepted']} accepted, "
+                                  f"{col['flags']['rejected']} rejected), "
+                                  f"{col['totals']['relationships']} relationships, "
+                                  f"{len(d['runs'])} run(s), "
+                                  f"{col['totals']['answered']} answered questions")},
+                ],
+                "date": d["generated"][:10],
+            })
+    except RuntimeError as exc:
+        raise HTTPException(501, str(exc))
+    return Response(
+        content=pdf, media_type="application/pdf",
+        headers={"Content-Disposition":
+                 f'attachment; filename="investigation-{inv_id}-dossier.pdf"'})
 
 
 class PrefsRequest(BaseModel):

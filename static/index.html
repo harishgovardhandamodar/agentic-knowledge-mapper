@@ -237,6 +237,37 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .sum-type { font-size: 10px; padding: 1px 6px; border-radius: 8px; background: var(--bg3); color: var(--text2); white-space: nowrap; }
 .sum-review-accepted { font-size: 10.5px; color: var(--green); white-space: nowrap; }
 .sum-review-pending { font-size: 10.5px; color: var(--text2); white-space: nowrap; }
+/* Dossier preview: the full audit write-up, rendered read-only. Tables need
+   their own block so a wide one scrolls instead of stretching the tab. */
+.dos-sec { border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; margin-bottom: 14px; background: var(--bg2); }
+.dos-sec > h4 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text2); margin: 0 0 10px; font-weight: 600; }
+.dos-sec h5 { font-size: 12.5px; margin: 12px 0 5px; font-weight: 600; }
+.dos-sec p { font-size: 12.5px; line-height: 1.6; color: var(--text); margin: 5px 0; }
+.dos-sec ul { margin: 5px 0; padding-left: 18px; }
+.dos-sec li { font-size: 12px; line-height: 1.55; margin: 3px 0; }
+.dos-table-wrap { overflow-x: auto; margin: 8px 0; }
+.dos-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+.dos-table th, .dos-table td { border: 1px solid var(--border); padding: 5px 7px; text-align: left; vertical-align: top; white-space: nowrap; }
+.dos-table th { background: var(--bg3); color: var(--text2); font-size: 10px; text-transform: uppercase; }
+.dos-table td.dos-wrap { white-space: normal; min-width: 160px; }
+.dos-kv { display: grid; grid-template-columns: max-content 1fr; gap: 3px 12px; font-size: 12px; }
+.dos-kv dt { color: var(--text2); }
+.dos-kv dd { margin: 0; }
+.dos-scope { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
+.dos-chip { border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; font-size: 11.5px; background: var(--bg3); }
+.dos-chip b { font-size: 13px; display: block; }
+/* Print = the dossier, nothing else. The PDF endpoint is the better export
+   (it has a cover and a table of contents); this is the browser fallback
+   for when reportlab is absent, so it hides the chrome rather than trying
+   to reproduce the report layout. */
+@media print {
+  body * { visibility: hidden; }
+  #summaryView, #summaryView * { visibility: visible; }
+  #summaryView { position: absolute; left: 0; top: 0; width: 100%; }
+  .sum-head, #summaryView .btn { display: none !important; }
+  .dos-table th, .dos-table td { white-space: normal; }
+  .dos-sec { break-inside: avoid; border-color: #ccc; }
+}
 #graphView { position: relative; }
 #graph { height: 100%; }
 .graph-controls { position: absolute; top: 12px; right: 12px; z-index: 10; display: flex; flex-direction: column; gap: 4px; }
@@ -1712,6 +1743,7 @@ async function regenSummary() {
 function renderSummaryTab(d) {
   const box = document.getElementById('sumBody');
   if (!box) return;
+  secDossierReset();
   const inv = d.investigation || {};
   const c = d.counts || {};
   const f = d.flags || {};
@@ -1760,8 +1792,218 @@ function renderSummaryTab(d) {
     html += `<div class="sum-section"><h4><i class="fas fa-triangle-exclamation"></i> Top threats</h4>` +
       threats.map(t => secThreatRowHtml(t)).join('') + '</div>';
   }
+  html += secDossierSectionHtml();
   box.innerHTML = html;
   secEnsureMermaid(box);
+}
+
+/* ---------- investigation dossier: the full audit write-up ---------- */
+/* The executive summary is the answer; this is the working. Four parts in
+   the order the work happened -- the request, what was investigated, what
+   was collected, and how each score was applied and what moved it. Loaded
+   on demand (it is a large payload) and rendered read-only from the same
+   endpoint the markdown and PDF are built from, so the three agree. */
+let secDossierCache = null;
+
+function secDossierReset() { secDossierCache = null; }
+
+async function loadDossier(force) {
+  if (!currentInv) { showNotif('Select an investigation first', 'error'); return; }
+  if (secDossierCache && !force) return secDossierCache;
+  const host = document.getElementById('dosPreview');
+  if (host) host.innerHTML = '<p style="font-size:12px;color:var(--text2)"><i class="fas fa-spinner fa-spin"></i> Assembling the dossier…</p>';
+  try {
+    const r = await fetch(`${API}/investigations/${currentInv}/dossier`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    secDossierCache = await r.json();
+    secDossierRender();
+    return secDossierCache;
+  } catch (e) {
+    if (host) host.innerHTML = `<p style="font-size:12px;color:var(--red)">Dossier unavailable: ${escHtml(e.message)}</p>`;
+    showNotif(`Dossier failed: ${e.message}`, 'error');
+    return null;
+  }
+}
+
+function secDossierSectionHtml() {
+  return `<div class="sum-section"><h4><i class="fas fa-folder-open"></i> Full report</h4>` +
+    `<p style="font-size:12px;color:var(--text2)">The complete write-up: what you asked, what was investigated and collected, and how every score was applied. Preview it here, or export it.</p>` +
+    `<div style="display:flex;gap:6px;flex-wrap:wrap;margin:8px 0;">` +
+    `<button class="btn btn-sm" onclick="loadDossier()"><i class="fas fa-eye"></i> Preview</button>` +
+    `<button class="btn btn-sm" onclick="downloadDossier('pdf')"><i class="fas fa-file-pdf"></i> Write to PDF</button>` +
+    `<button class="btn btn-sm" onclick="downloadDossier('md')"><i class="fas fa-file-lines"></i> Markdown</button>` +
+    `<button class="btn btn-ghost btn-sm" onclick="printDossier()"><i class="fas fa-print"></i> Print</button>` +
+    `</div><div id="dosPreview"></div></div>`;
+}
+
+function secDossierRender() {
+  const host = document.getElementById('dosPreview');
+  if (!host || !secDossierCache) return;
+  const d = secDossierCache;
+  const col = d.collection || {};
+  const tot = col.totals || {};
+  const fl = col.flags || {};
+  let h = '';
+
+  // --- 1. the request ---
+  const inv = d.investigation || {};
+  h += `<div class="dos-sec"><h4>1 · The request</h4><dl class="dos-kv">` +
+    `<dt>Title</dt><dd>${escHtml(inv.title || '')}</dd>` +
+    (inv.keywords ? `<dt>Keywords</dt><dd>${escHtml(inv.keywords)}</dd>` : '') +
+    (inv.description ? `<dt>Description</dt><dd>${escHtml(inv.description)}</dd>` : '') +
+    `<dt>Sources</dt><dd>${escHtml(inv.sources || 'none recorded')}</dd>` +
+    (inv.schedule && inv.schedule.enabled ? `<dt>Schedule</dt><dd>${escHtml(inv.schedule.cron || 'custom')}</dd>` : '') +
+    `</dl></div>`;
+
+  // --- 2. what was investigated ---
+  h += `<div class="dos-sec"><h4>2 · What was investigated</h4>`;
+  const runs = d.runs || [];
+  if (!runs.length) {
+    h += `<p style="color:var(--text2)">No agent run recorded — nothing was searched, so every number below comes from what was entered by hand or supplied to an assessment directly.</p>`;
+  }
+  runs.forEach(r => {
+    const st = r.stats || {};
+    const cost = Object.entries({
+      'rounds': 'rounds', 'artifacts_kept': 'artifacts kept', 'relationships': 'relationships',
+      'llm_calls': 'analysis calls', 'query_shapes': 'query shapes',
+    }).filter(([k]) => st[k] != null).map(([k, label]) => `${st[k]} ${label}`);
+    h += `<h5>Run #${r.id} — ${escHtml(r.trigger)} run, ${escHtml(r.status)}</h5>`;
+    if (r.goal) h += `<p><b>Goal.</b> ${escHtml(r.goal)}</p>`;
+    if (r.rationale) h += `<p><b>Planner's rationale.</b> ${escHtml(r.rationale)}</p>`;
+    if ((r.queries || []).length) {
+      h += `<div class="dos-table-wrap"><table class="dos-table"><thead><tr><th>Query</th><th>Sources searched</th></tr></thead><tbody>` +
+        r.queries.map(q => `<tr><td class="dos-wrap">${escHtml(q.text)}</td><td>${escHtml((q.sources || []).join(', ') || 'default')}</td></tr>`).join('') +
+        `</tbody></table></div>`;
+    }
+    if (cost.length) h += `<p style="color:var(--text2)">${escHtml(cost.join(' · '))}</p>`;
+    if (r.error) h += `<p style="color:var(--red)"><b>Error.</b> ${escHtml(r.error)}</p>`;
+  });
+  const shapes = d.query_shapes || [];
+  if (shapes.length) {
+    h += `<h5>Query shapes — what each kind of question has cost and returned</h5>` +
+      `<div class="dos-table-wrap"><table class="dos-table"><thead><tr><th>Shape</th><th>Example</th><th>Attempts</th><th>Found</th><th>Kept</th><th>Yield</th></tr></thead><tbody>` +
+      shapes.slice(0, 15).map(s => `<tr><td>${escHtml(s.shape)}</td><td class="dos-wrap">${escHtml(s.example || '')}</td><td>${s.attempts || 0}</td><td>${s.found || 0}</td><td>${s.kept || 0}</td><td>${s.found ? Math.round(100 * (s.kept || 0) / s.found) : 0}%</td></tr>`).join('') +
+      `</tbody></table></div>`;
+  }
+  h += `</div>`;
+
+  // --- 3. what was collected ---
+  h += `<div class="dos-sec"><h4>3 · What was collected</h4>` +
+    `<div class="dos-scope">` +
+    `<div class="dos-chip"><b>${tot.artifacts || 0}</b>artifacts</div>` +
+    `<div class="dos-chip"><b>${tot.relationships || 0}</b>relationships</div>` +
+    `<div class="dos-chip"><b>${tot.known_issues || 0}</b>known issues</div>` +
+    `<div class="dos-chip"><b>${tot.answered || 0}/${tot.answers || 0}</b>questions answered</div>` +
+    `<div class="dos-chip"><b>${fl.accepted || 0}</b>accepted</div>` +
+    `<div class="dos-chip"><b>${fl.rejected || 0}</b>rejected</div>` +
+    `</div>` +
+    `<p style="color:var(--text2)">Rejected artifacts stand in no score: they are listed for the record and excluded everywhere else.</p>`;
+  if ((col.by_type || []).length) {
+    h += `<p><b>Composition.</b> ${escHtml((col.by_type || []).slice(0, 8).map(c => `${c.count} ${c.name}`).join(' · '))}` +
+      (col.by_actor && col.by_actor.length ? ` — by actor: ${escHtml(col.by_actor.map(c => `${c.count} ${c.name}`).join(' · '))}` : '') +
+      `</p>`;
+  }
+  if ((col.artifacts || []).length) {
+    h += `<h5>Every artifact, with why it was kept</h5>` +
+      `<div class="dos-table-wrap"><table class="dos-table"><thead><tr><th>ID</th><th>Type</th><th>Title</th><th>Rel.</th><th>Why collected</th><th>Actor</th><th>Review</th></tr></thead><tbody>` +
+      col.artifacts.map(a => `<tr><td>A${a.id}</td><td>${escHtml(a.artifact_type)}</td><td class="dos-wrap">${escHtml(a.title)}</td><td>${Number(a.relevance || 0).toFixed(2)}</td><td class="dos-wrap">${escHtml(a.purpose || '')}</td><td>${escHtml(a.actor)}</td><td>${escHtml(a.review)}${a.drift ? ' (drift)' : ''}</td></tr>`).join('') +
+      `</tbody></table></div>`;
+  }
+  if ((col.known_issues || []).length) {
+    h += `<h5>Known issues</h5><div class="dos-table-wrap"><table class="dos-table"><thead><tr><th>CVE</th><th>Title</th><th>Severity</th><th>CVSS</th><th>Standing</th></tr></thead><tbody>` +
+      col.known_issues.map(c => `<tr><td>${escHtml(c.cve_id)}</td><td class="dos-wrap">${escHtml(c.title)}</td><td>${escHtml(c.severity)}</td><td>${c.cvss == null ? '—' : c.cvss}</td><td>${escHtml(c.status)}</td></tr>`).join('') +
+      `</tbody></table></div>`;
+  }
+  (col.answers || []).forEach(a => {
+    h += `<h5>${escHtml(a.question)}</h5>` +
+      `<p style="color:var(--text2);font-size:11px">${escHtml(a.status)} · ${escHtml(a.mode)}/${escHtml(a.depth)}/${escHtml(a.audience)} · ${a.hops || 0} hops</p>` +
+      (a.excerpt ? `<p>${escHtml(a.excerpt)}</p>` : '') +
+      ((a.key_points || []).length ? `<ul>${a.key_points.map(k => `<li>${escHtml(k)}</li>`).join('')}</ul>` : '') +
+      ((a.supporting || []).length ? `<p style="color:var(--text2);font-size:11px">Stands on: ${escHtml(a.supporting.slice(0, 8).map(s => `A${s.id} ${s.title}`).join(', '))}</p>` : '');
+  });
+  h += `</div>`;
+
+  // --- 4. scores ---
+  const scores = d.scores || {};
+  const rows = scores.rows || [];
+  h += `<div class="dos-sec"><h4>4 · How each score was applied, and what moved it</h4>`;
+  if (!rows.length) {
+    h += `<p style="color:var(--text2)">No security assessment has been run for this investigation.</p>`;
+  }
+  if ((scores.paths_present || []).length > 1) {
+    h += `<p style="color:var(--orange);font-size:12px">These numbers do not share a scale and are never averaged.</p>`;
+  }
+  rows.forEach(row => {
+    const det = row.detail || {};
+    h += `<h5>${escHtml(row.label)}${row.is_latest ? ' <span style="color:var(--green);font-size:10px">(current)</span>' : ' <span style="color:var(--text2);font-size:10px">(superseded)</span>'} — assessment #${row.id}</h5>`;
+    h += `<div class="dos-scope"><div class="dos-chip"><b>${Number(row.score || 0).toFixed(1)}</b>${escHtml(row.score_meaning)}</div>` +
+      (det.kind !== 'hypothesis' ? `<div class="dos-chip"><b>${Number(row.inherent || 0).toFixed(1)} → ${Number(row.residual || 0).toFixed(1)}</b>inherent → residual (Δ${Number(row.delta || 0).toFixed(1)})</div>` : '') +
+      `</div>`;
+    const inp = row.inputs || {};
+    h += `<p style="color:var(--text2);font-size:11px"><b>Inputs.</b> Exposure tier ${escHtml(inp.exposure_label || row.exposure || '')}` +
+      ((inp.focus || []).length ? `; focus ${escHtml(inp.focus.join(', '))}` : '') +
+      (inp.use_case ? `; use case ${escHtml(inp.use_case)}` : '') +
+      ((inp.doc_urls || []).length ? `; ${inp.doc_urls.length} doc URL(s)` : '') +
+      `</p>`;
+    if (det.kind === 'catalog') {
+      h += `<p><b>Method.</b> ${escHtml(det.aggregate_note || det.method)}</p>`;
+      h += `<p style="color:var(--text2);font-size:11px"><b>Controls applied.</b> ${escHtml((det.active_controls || []).join(', ') || 'None declared')} — controls reduce likelihood by coverage, never below the residual floor.</p>`;
+      h += `<div class="dos-table-wrap"><table class="dos-table"><thead><tr><th>Threat</th><th>L</th><th>I</th><th>Inherent</th><th>Coverage</th><th>Resid. L</th><th>Residual</th><th>Severity</th></tr></thead><tbody>` +
+        (det.items || []).map(t => `<tr><td class="dos-wrap">${escHtml(t.id)} ${escHtml(t.title || '')}</td><td>${Number(t.likelihood || 0).toFixed(1)}</td><td>${Number(t.impact || 0).toFixed(1)}</td><td>${Number(t.inherent_score || 0).toFixed(1)}</td><td>${Math.round(Number(t.coverage || 0))}%</td><td>${Number(t.residual_likelihood || 0).toFixed(1)}</td><td>${Number(t.residual_score || 0).toFixed(1)}</td><td><span class="sev-${escHtml(t.residual_severity || 'unknown')}">${escHtml(t.residual_severity || '—')}</span></td></tr>`).join('') +
+        `</tbody></table></div>`;
+      h += `<p><b>Posture.</b> ${escHtml(det.posture || '')} <span style="color:var(--text2)">(before controls: ${escHtml(det.inherent_posture || '—')})</span></p>`;
+    } else if (det.kind === 'dimensions') {
+      h += `<p><b>Method.</b> ${escHtml(det.method)} — each dimension's score comes from the findings mapped onto it; contribution = score × weight. Residual equals inherent: no control mapping is defined on this path.</p>`;
+      h += `<div class="dos-table-wrap"><table class="dos-table"><thead><tr><th>Dimension</th><th>Weight</th><th>Score</th><th>Contribution</th><th>Driven by</th></tr></thead><tbody>` +
+        (det.dimensions || []).map(dm => `<tr><td>${escHtml(dm.id)}</td><td>${Math.round(dm.weight * 100)}%</td><td>${Number(dm.score).toFixed(0)}/100</td><td>${Number(dm.contribution).toFixed(2)}</td><td class="dos-wrap">${escHtml((dm.drivers || []).slice(0, 3).map(it => `${it.id} ${(it.title || '').slice(0, 40)} (${Math.round(Number(it.inherent_score || 0))})`).join(', ') || 'no item mapped')}</td></tr>`).join('') +
+        `</tbody></table></div>`;
+      h += `<h5>Every finding</h5><ul>` +
+        (det.items || []).map(it => `<li><b>${escHtml(it.id)} ${escHtml(it.title || '')}</b> — ${Math.round(Number(it.inherent_score || 0))}/100 on ${escHtml(it.dimension || 'unmapped')}${it.rationale ? ` — ${escHtml(it.rationale)}` : ''}</li>`).join('') +
+        `</ul>`;
+    } else if (det.kind === 'hypothesis') {
+      h += `<p><b>Method.</b> ${escHtml(det.method)} — ${escHtml(det.score_meaning || '')}. Higher is better-evidenced, not more dangerous, so it is not comparable with the risk numbers above.</p>`;
+      h += `<h5>Every claim</h5><ul>` +
+        (det.claims || []).map(c => `<li><b>${escHtml(c.id)} ${escHtml(c.claim || '')}</b> — confidence ${Math.round(Number(c.confidence || 0))}/100, impact ${escHtml(c.impact)}/5` +
+          `${c.cross_flow ? '; corroborated by both flows' : ''}` +
+          `${(c.counter_evidence || []).length ? `; counter-evidence: ${escHtml(c.counter_evidence.join(', '))}` : ''}` +
+          `${(c.contradicted_by || []).length ? `; <span style="color:var(--orange)">in tension with flow 1: ${escHtml(c.contradicted_by.join(', '))}</span>` : ''}` +
+          `. Refuted by: ${escHtml(c.falsifier || '')}</li>`).join('') +
+        `</ul>`;
+    }
+    if (row.threat_pack_version) {
+      h += `<p style="color:var(--text2);font-size:11px"><b>Threat pack.</b> ${escHtml(row.threat_pack_version)} (${escHtml(row.threat_pack_fingerprint || 'no fingerprint')}) — the exact catalogue these numbers were computed against.</p>`;
+    }
+  });
+  h += `</div>`;
+  host.innerHTML = h;
+}
+
+async function downloadDossier(kind) {
+  if (!currentInv) { showNotif('Select an investigation first', 'error'); return; }
+  // Same download path for both formats: the endpoints send
+  // Content-Disposition, and a blob keeps the filename right instead of
+  // handing the browser a URL it has to guess a name from.
+  const isMd = kind === 'md';
+  const url = `${API}/investigations/${currentInv}/dossier/${isMd ? 'markdown' : 'pdf'}`;
+  if (!isMd) showNotif('Building PDF…');
+  try {
+    const res = await fetch(url);
+    if (res.status === 501) { showNotif('Server PDF needs reportlab — use Print → Save as PDF', 'error'); window.print(); return; }
+    if (!res.ok) { showNotif(`${isMd ? 'Markdown' : 'PDF'} export failed`, 'error'); return; }
+    const blob = await res.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `investigation-${currentInv}-dossier.${isMd ? 'md' : 'pdf'}`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    showNotif(`Dossier ${isMd ? 'Markdown' : 'PDF'} downloaded`, 'success');
+  } catch (e) { showNotif(`Export failed: ${e.message}`, 'error'); }
+}
+
+async function printDossier() {
+  const d = await loadDossier();
+  if (!d) return;
+  window.print();
 }
 
 function watchRun(runId) {
