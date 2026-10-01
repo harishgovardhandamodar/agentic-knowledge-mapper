@@ -9,6 +9,7 @@ import json
 import re
 import threading
 import traceback
+import urllib.parse
 from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
@@ -208,6 +209,23 @@ def _search_one(args) -> list:
     return []
 
 
+def _is_vendor_primary(cand: dict, vendors: list[str]) -> bool:
+    """Official vendor surface: the URL host names the vendor.
+
+    Title matching alone floods (every blog about Collibra mentions it);
+    host matching keeps the boost for docs, trust centers and vendor blogs.
+    Works on candidate dicts and artifact rows alike (both carry url).
+    """
+    if not vendors:
+        return False
+    try:
+        host = (urllib.parse.urlsplit(cand.get("url") or "").hostname or "")
+    except Exception:
+        host = ""
+    host = host.lower()
+    return any(v.lower() in host for v in vendors if v)
+
+
 def _keyword_terms(inv: Investigation) -> list:
     raw = f"{inv.title} {inv.keywords} {inv.description}"
     words = re.findall(r"[a-z0-9][a-z0-9\-]{2,}", raw.lower())
@@ -225,11 +243,14 @@ def _prefilter(inv: Investigation, found: list, keep_n: int) -> list:
     terms = _keyword_terms(inv)
     if not terms:
         return found[:keep_n]
+    vendors = _vendor_terms(inv)
     scored = []
     for c in found:
         title = (c.get("title") or "").lower()
         desc = (c.get("description") or "").lower()
         s = sum((2 if t in title else 0) + (1 if t in desc else 0) for t in terms)
+        if _is_vendor_primary(c, vendors):
+            s += 2
         scored.append((s, c))
     scored.sort(key=lambda kv: -kv[0])
     # Always keep at least the top slice even if scores are 0.
@@ -260,6 +281,11 @@ def _analyze_batch(inv: Investigation, batch: list, existing: list,
     type_list = ("news|paper|essay|research|tweet|interview|book"
                  + ("|adversarial_paper|model_card|benchmark|cve_advisory|"
                     "weights_release|known_issue" if model_subject else ""))
+    vendor_note = ""
+    if _vendor_terms(inv):
+        vendor_note = (" Prefer official vendor pages (docs, trust center, "
+                       "security whitepapers) over blogs for product-specific "
+                       "facts; keep general material as supporting evidence.")
     items = []
     for i, c in enumerate(batch):
         items.append(f"[{i}] {c['title']}\nURL: {c.get('url','')}\n"
@@ -269,7 +295,7 @@ def _analyze_batch(inv: Investigation, batch: list, existing: list,
         ctx = ("Already collected (reference by id for relates_to):\n" + "\n".join(
             f"- id {a['id']}: {a['title']} [{a.get('tags','')}]" for a in existing[:40]))
     user = (f"Brief: {inv.title} | {inv.keywords} | {inv.description}\n{ctx}\n\n"
-            f"Candidates:\n" + "\n\n".join(items) +
+            f"Candidates:\n" + "\n\n".join(items) + vendor_note +
             "\n\nReply JSON list: [{\"index\": i, \"relevance\": 0..1, \"keep\": bool, "
             "\"reason\": str, \"artifact_type\": " + type_list + ", "
             "\"tags\": [max 5 lowercase], \"sentiment\": -1..1, \"summary\": str (1-2 sentences), "
@@ -423,6 +449,8 @@ def run_investigation_agent(investigation_id: int, max_items: int = 25,
             # returned nothing last time is proposed first again.
             queries = yld.rank_queries(db, inv.id, queries)
             llm_calls_spent = 0
+            vendor_forced = False
+            refine_forced = False
 
             while rounds < max_rounds and total_kept < max_items:
                 rounds += 1
@@ -499,6 +527,35 @@ def run_investigation_agent(investigation_id: int, max_items: int = 25,
                 if total_kept >= max_items or rounds >= max_rounds:
                     break
                 # Refinement round: ask planner for follow-up queries.
+                # Once per run, if the brief names vendors but nothing kept
+                # so far comes from their official surface, force one
+                # vendor-doc query instead of hoping the planner
+                # rediscovers it.
+                if not vendor_forced:
+                    vendor_forced = True
+                    refine_forced = False
+                    _vendors = _vendor_terms(inv)
+                    if _vendors:
+                        _kept_urls = [
+                            a.url or "" for a in db.query(Artifact).filter(
+                                Artifact.investigation_id == inv.id).all()]
+                        if not any(_is_vendor_primary({"url": u}, _vendors)
+                                   for u in _kept_urls):
+                            _srcs = ["web"] if "web" in (
+                                inv.sources or "") else ["rss"]
+                            queries = [{
+                                "text": (f"{' '.join(_vendors)} security "
+                                         f"architecture documentation")[:120],
+                                "sources": _srcs}]
+                            refine_forced = True
+                            _event(
+                                db, run.id, "plan",
+                                "Refinement: forced vendor-doc query "
+                                "(nothing kept from vendor-primary sources).",
+                                {"queries": queries})
+                if refine_forced:
+                    refine_forced = False
+                    continue
                 try:
                     follow = llm.chat_json([
                         {"role": "system",

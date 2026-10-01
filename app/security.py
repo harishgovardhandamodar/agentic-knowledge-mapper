@@ -286,6 +286,14 @@ def _severity(score: int) -> str:
 # certainty. ``standard`` cites the framework control this maps to, so the
 # report reads like a real control-mapping exercise rather than a magic number.
 
+# Deprecated ids stay listed (never deleted) so old assessments remain
+# interpretable: {"T99": {"replaced_by": "T01", "reason": "..."}}. New
+# assessments ignore them (inherent rows and active controls); old rows
+# render from stored JSON. Empty today; threatpack aliases these for the
+# fingerprint and docs.
+DEPRECATED_THREATS: dict[str, dict[str, str]] = {}
+DEPRECATED_CONTROLS: dict[str, dict[str, str]] = {}
+
 # (id, name, description, efficacy, standard, [(threat_id, weight)])
 _CONTROL_CATALOG: list[dict[str, Any]] = [
     {
@@ -1106,7 +1114,8 @@ def score_assessment(
     posture, and a full breakdown so the UI can explain every number.
     """
     active = sorted({str(c).strip().upper() for c in (active_controls or [])
-                     if str(c).strip().upper() in _KNOWN_CIDS})
+                     if str(c).strip().upper() in _KNOWN_CIDS
+                     and str(c).strip().upper() not in DEPRECATED_CONTROLS})
     app = dict(applicability or {})
     control_analyst = (applicability is not None)
 
@@ -1626,6 +1635,8 @@ def build_assessment(
     # (inherent rows, active controls, applicability).
     inherent: list[dict[str, Any]] = []
     for tid, title, stride, owasp, base_l, impact, desc, mits in _THREAT_CATALOG:
+        if tid in DEPRECATED_THREATS:
+            continue
         lik = _scale_likelihood(base_l, weight)
         inherent.append({
             "id": tid, "title": title, "stride": stride, "owasp": owasp,

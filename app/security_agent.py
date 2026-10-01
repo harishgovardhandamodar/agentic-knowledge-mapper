@@ -129,6 +129,7 @@ def security_run_stats(result: dict, assessment_id: int,
             "threats": len(result.get("threats", [])),
             "evidence": len(result.get("evidence", [])),
             "known_exploits": len(result.get("known_exploits", [])),
+            "collector_cache_hits": result.get("collector_cache_hits", 0),
             "duration_ms": duration_ms}
 
 
@@ -410,6 +411,7 @@ def run_security_assessment(run_id: int, params: dict):
                 "attacks": result.get("model_attacks") or [],
                 "dimensions": result.get("adoption_dimensions") or [],
                 "mitigation": result.get("mitigation") or {},
+                "experiments": result.get("experiments") or [],
                 "w1": (result.get("scoring", {}) or {}).get("w1", {}),
                 "w2": (result.get("scoring", {}) or {}).get("w2", {}),
                 "w3": (result.get("scoring", {}) or {}).get("w3", {}),

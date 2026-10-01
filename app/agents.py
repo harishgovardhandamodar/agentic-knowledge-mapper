@@ -26,6 +26,7 @@ Agents (cards at ``GET /api/agents/cards`` and ``GET /.well-known/agents``):
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import re
 import time
@@ -151,6 +152,17 @@ AGENT_CARDS: list[dict[str, Any]] = [
         "protocol": PROTOCOL,
         "description": "Drafts the dual-section model evaluation report.",
         "skills": ["write_model_eval_report"],
+        "endpoint": "/api/agents/invoke",
+    },
+    {
+        "name": "experiment-planner",
+        "protocol": PROTOCOL,
+        "description": (
+            "Plans ranked experiments that settle open questions: unknown "
+            "dimensions, confident attacks, open falsifiers, MM validations. "
+            "Plan only — nothing here executes anything."
+        ),
+        "skills": ["plan_experiments"],
         "endpoint": "/api/agents/invoke",
     },
     {
@@ -550,6 +562,72 @@ def _audit_evidence(ranked: list[dict[str, Any]], artifacts: list[Any]) -> None:
             e["grounded"] = not res["violation"]
 
 
+def collector_subject_key(mode: str, name: str, family: str = "",
+                          focus: tuple = ()) -> str:
+    """Stable subject identity for the research cache: same subject asking
+    the same question family must hit the same cache entry across runs and
+    parallel manager jobs. Hash, not text, so keys stay fixed-width."""
+    canon = json.dumps({"mode": mode or "", "name": name or "",
+                        "family": family or "",
+                        "focus": sorted(str(f) for f in (focus or []))},
+                       sort_keys=True, separators=(",", ":"))
+    return hashlib.sha1(canon.encode("utf-8")).hexdigest()[:16]
+
+
+_COLLECTOR_CACHE: dict[tuple, dict] = {}
+_COLLECTOR_CACHE_MAX = 64
+
+
+def _collector_cache_lookup(investigation_id: Any, subject_key: str,
+                            threat_titles: list, db: Any) -> dict | None:
+    """A cached collection is only valid while the corpus is unchanged: the
+    entry records artifact count + max id, and any drift means a miss, never
+    a stale hit."""
+    from .models import Artifact
+    key = (investigation_id,
+           subject_key or "",
+           hashlib.sha1(json.dumps(sorted(str(t) for t in
+                                           (threat_titles or [])),
+                                   separators=(",", ":")).encode("utf-8")
+                        ).hexdigest()[:16])
+    entry = _COLLECTOR_CACHE.get(key)
+    if not entry:
+        return None
+    try:
+        current = db.query(Artifact).filter(
+            Artifact.investigation_id == int(investigation_id)).all()
+    except (TypeError, ValueError):
+        return None
+    ids = [a.id for a in current]
+    if len(ids) != entry.get("artifact_count") or \
+            (max(ids) if ids else 0) != entry.get("max_artifact_id", -1):
+        _COLLECTOR_CACHE.pop(key, None)
+        return None
+    return {"evidence": entry["evidence"],
+            "queries_run": entry["queries_run"],
+            "scope": entry["scope"],
+            "artifacts_scanned": 0, "cached": True}
+
+
+def _collector_cache_store(investigation_id: Any, subject_key: str,
+                           threat_titles: list, artifacts: list,
+                           evidence: list, queries_run: list,
+                           scope: str) -> None:
+    key = (investigation_id,
+           subject_key or "",
+           hashlib.sha1(json.dumps(sorted(str(t) for t in
+                                           (threat_titles or [])),
+                                   separators=(",", ":")).encode("utf-8")
+                        ).hexdigest()[:16])
+    ids = [a.id for a in (artifacts or []) if getattr(a, "id", None)]
+    _COLLECTOR_CACHE[key] = {
+        "evidence": evidence, "queries_run": queries_run, "scope": scope,
+        "artifact_count": len(ids),
+        "max_artifact_id": max(ids) if ids else 0}
+    while len(_COLLECTOR_CACHE) > _COLLECTOR_CACHE_MAX:
+        _COLLECTOR_CACHE.pop(next(iter(_COLLECTOR_CACHE)))
+
+
 def research_collector_handle(env: dict[str, Any], db: Any) -> dict[str, Any]:
     """Intent ``collect_research``: agentic multi-query search over local artifacts."""
     payload = env.get("payload", {})
@@ -558,6 +636,7 @@ def research_collector_handle(env: dict[str, Any], db: Any) -> dict[str, Any]:
     threat_titles = payload.get("threat_titles", [])
     investigation_id = payload.get("investigation_id")
     top_k = int(payload.get("top_k", 8))
+    subject_key = payload.get("subject_key") or ""
 
     if db is None:
         return reply_envelope(env, "research-collector", "research_collected",
@@ -582,6 +661,15 @@ def research_collector_handle(env: dict[str, Any], db: Any) -> dict[str, Any]:
         # when the current investigation has no matching artifacts yet.
         artifacts = db.query(Artifact).all()
         scope = "all investigations (current one had no matches)"
+
+    if subject_key and investigation_id is not None:
+        hit = _collector_cache_lookup(investigation_id, subject_key,
+                                      threat_titles, db)
+        if hit is not None:
+            return reply_envelope(
+                env, "research-collector", "research_collected", hit,
+                note=(f"{len(hit['evidence'])} evidence items "
+                      f"({hit['scope']}, cache hit)"))
 
     best: dict[int, dict[str, Any]] = {}
     queries_run: list[str] = []
@@ -615,10 +703,14 @@ def research_collector_handle(env: dict[str, Any], db: Any) -> dict[str, Any]:
     for e in ranked:
         e["reason"] = f"Matched {e['query_group']} ({'; '.join(e['matched_on'][:4])})"
     _audit_evidence(ranked, artifacts)
+    if subject_key and investigation_id is not None:
+        _collector_cache_store(investigation_id, subject_key, threat_titles,
+                               artifacts, ranked, queries_run, scope)
     return reply_envelope(
         env, "research-collector", "research_collected",
         {"evidence": ranked, "queries_run": queries_run,
-         "scope": scope, "artifacts_scanned": len(artifacts)},
+         "scope": scope, "artifacts_scanned": len(artifacts),
+         "cached": False},
         note=f"{len(ranked)} evidence items ({scope}, {len(artifacts)} scanned)",
     )
 
@@ -2424,8 +2516,11 @@ def _hypothesis(fid: str, claim: str, premise: str, mechanism: str,
     # so the familiar residual columns stay empty rather than implying a
     # measured risk that does not exist.
     return {
-        "id": fid, "claim": claim, "premise": premise, "mechanism": mechanism,
+        "id": fid, "hypothesis_id": fid, "claim": claim,
+        "premise": premise, "mechanism": mechanism,
         "consequence": consequence, "falsifier": falsifier,
+        "falsifiers": [falsifier] if falsifier else [],
+        "status": "untested", "source_flows": [],
         "supporting": list(supporting or []), "counter_evidence": list(counter or []),
         "impact": float(impact), "testability": float(testability),
         "inherent_score": float(impact), "residual_score": float(impact),
@@ -2703,6 +2798,26 @@ def hypothesis_verifier_handle(env: dict[str, Any], db: Any = None) -> dict[str,
             "impact_if_true": impact / 5.0 * 100.0,
         }
         v = dict(h)
+        if not v.get("hypothesis_id"):
+            v["hypothesis_id"] = v.get("id")
+        fals = [f for f in (v.get("falsifiers") or []) if str(f).strip()]
+        if v.get("falsifier") and str(v["falsifier"]).strip() not in fals:
+            fals = [str(v["falsifier"]).strip()] + fals
+        v["falsifiers"] = fals
+        flows = []
+        if any(r in support for r in (h.get("_target_ids") or [])):
+            flows.append("model")
+        if any(r in support for r in (h.get("_adversarial_ids") or [])):
+            flows.append("model_adversarial")
+        v["source_flows"] = flows
+        # The verifier judges corroboration, never refutation: refuted is
+        # set explicitly by a human or by later evidence, not inferred here.
+        if counter or contradicted:
+            v["status"] = "contested"
+        elif dims["evidence_support"] >= 60.0:
+            v["status"] = "supported"
+        else:
+            v["status"] = "untested"
         v.update({
             "support_score": round(dims["evidence_support"], 1),
             "cross_flow": corroborated,
@@ -3355,6 +3470,18 @@ def model_eval_reporter_handle(env: dict[str, Any],
                 for item in roadmap.get(k) or []:
                     A(f"- **{k}:** {item}")
             A("")
+    experiments = payload.get("experiments") or []
+    if experiments:
+        A("## Experiments — plan only")
+        A("")
+        A("Ranked probes for what is still open. Nothing here executes "
+          "anything: execution is out of band.")
+        A("")
+        for e in experiments:
+            A(f"- **{e.get('id')} {e.get('title')}** "
+              f"[{e.get('method_type')}, effort {e.get('effort')}] — "
+              f"{(e.get('rationale') or '')[:140]}")
+        A("")
     report = "\n".join(L)
     exec_paragraph = (
         f"{name} ({meta.get('model_family')}) shows "
@@ -3434,6 +3561,9 @@ def run_model_engineering_a2a_workflow(
                       "note": "W3 requested alone: W1/W2 collectors run for "
                               "signals so mitigations have risk context"})
     name = model_meta.get("model_name") or "the model"
+    skey = collector_subject_key("model_engineering", name,
+                                 model_meta.get("model_family"))
+    cache_hits = 0
     evidence_w1: list[dict[str, Any]] = []
     evidence_w2: list[dict[str, Any]] = []
     evidence_w3: list[dict[str, Any]] = []
@@ -3457,6 +3587,7 @@ def run_model_engineering_a2a_workflow(
                 "model-eval-orchestrator", "research-collector",
                 "collect_research",
                 {"product_name": name, "use_case": use_case,
+                 "subject_key": skey,
                  "threat_titles": _model_w1_terms(model_meta), "top_k": 10,
                  "investigation_id": investigation_id},
                 task_id=task_id, trace=trace,
@@ -3464,6 +3595,7 @@ def run_model_engineering_a2a_workflow(
             )
             res = dispatch(env, db)
             trace = res["trace"]
+            cache_hits += 1 if res["payload"].get("cached") else 0
             evidence_w1 = res["payload"].get("evidence", [])
             queries_run += res["payload"].get("queries_run", [])
             env = new_envelope(
@@ -3484,6 +3616,7 @@ def run_model_engineering_a2a_workflow(
                 "model-eval-orchestrator", "research-collector",
                 "collect_research",
                 {"product_name": name, "use_case": use_case,
+                 "subject_key": skey,
                  "threat_titles": _model_w2_terms(model_meta), "top_k": 10,
                  "investigation_id": investigation_id},
                 task_id=task_id, trace=trace,
@@ -3491,6 +3624,7 @@ def run_model_engineering_a2a_workflow(
             )
             res = dispatch(env, db)
             trace = res["trace"]
+            cache_hits += 1 if res["payload"].get("cached") else 0
             evidence_w2 = res["payload"].get("evidence", [])
             queries_run += res["payload"].get("queries_run", [])
             env = new_envelope(
@@ -3514,6 +3648,7 @@ def run_model_engineering_a2a_workflow(
                 "model-eval-orchestrator", "research-collector",
                 "collect_research",
                 {"product_name": name, "use_case": use_case,
+                 "subject_key": skey,
                  "threat_titles": _model_w3_terms(model_meta), "top_k": 10,
                  "investigation_id": investigation_id},
                 task_id=task_id, trace=trace,
@@ -3521,6 +3656,7 @@ def run_model_engineering_a2a_workflow(
             )
             res = dispatch(env, db)
             trace = res["trace"]
+            cache_hits += 1 if res["payload"].get("cached") else 0
             evidence_w3 = res["payload"].get("evidence", [])
             queries_run += res["payload"].get("queries_run", [])
             env = new_envelope(
@@ -3549,19 +3685,40 @@ def run_model_engineering_a2a_workflow(
                     "queries_run": queries_run,
                     "scoring": {"w1": w1, "w2": w2, "w3": w3,
                                 "assessment_path": "model_engineering"},
+                    "collector_cache_hits": cache_hits,
                     "a2a_trace": trace,
                     "model_meta": model_meta,
                     "model_attacks": findings,
                     "adoption_dimensions": dimensions,
                     "mitigation": mitigation,
                     "w3_scoring": w3,
+                    "experiments": [],
                 }
+        experiments: list[dict[str, Any]] = []
+        if "experiment_plan" in workflows:
+            env = new_envelope(
+                "model-eval-orchestrator", "experiment-planner",
+                "plan_experiments",
+                {"model_meta": model_meta,
+                 "findings": findings, "dimensions": dimensions,
+                 "hypotheses": [],
+                 "mitigation_plan": (mitigation.get("plan") or [])},
+                task_id=task_id, trace=trace,
+                note="ranked probes for what is still open",
+            )
+            res = dispatch(env, db)
+            trace = res["trace"]
+            experiments = res["payload"].get("experiments", [])
+            _hop_io(trace, "experiment-planner", "plan_experiments",
+                    "W1/W2/MM open questions",
+                    f"{len(experiments)} experiments planned")
         env = new_envelope(
             "model-eval-orchestrator", "model-eval-reporter",
             "write_model_eval_report",
             {"model_meta": model_meta, "findings": findings,
              "dimensions": dimensions, "w1_scoring": w1, "w2_scoring": w2,
-             "mitigation": mitigation, "w3_scoring": w3},
+             "mitigation": mitigation, "w3_scoring": w3,
+             "experiments": experiments},
             task_id=task_id, trace=trace,
             note="dual-section report + exec paragraph",
         )
@@ -3596,12 +3753,14 @@ def run_model_engineering_a2a_workflow(
         "scoring": {"overall_pct": w2.get("overall_pct"),
                      "w1": w1, "w2": w2, "w3": w3,
                      "assessment_path": "model_engineering"},
+        "collector_cache_hits": cache_hits,
         "a2a_trace": trace,
         "model_meta": model_meta,
         "model_attacks": findings,
         "adoption_dimensions": dimensions,
         "mitigation": mitigation,
         "w3_scoring": w3,
+        "experiments": experiments,
         "report_markdown": report_markdown,
         "recommendations": recommendations,
     }
@@ -3635,7 +3794,7 @@ def model_mitigation_analyst_handle(env: dict[str, Any],
     dimensions = payload.get("dimensions") or []
     evidence = payload.get("evidence") or []
     name = meta.get("model_name") or "the model"
-    base_plan = _me.rank_mitigations(meta, findings, dimensions)
+    base_plan = _me.plan_or_empty(meta, findings, dimensions, evidence)
     _, deferred = _me.prefilter_mitigations(meta)
     valid_ids = {e.get("artifact_id") for e in evidence}
     plan = [dict(item) for item in base_plan]
@@ -3739,7 +3898,73 @@ def model_mitigation_analyst_handle(env: dict[str, Any],
     )
 
 
+def experiment_planner_handle(env: dict[str, Any],
+                              db: Any = None) -> dict[str, Any]:
+    """Intent ``plan_experiments``: ranked probes for open questions.
+
+    Deterministic mapping first (unknowns, confident attacks, open
+    falsifiers, top MM validations); the LLM only sharpens titles and
+    rationale. A plan with nothing to target is an explicit empty list.
+    Plan only: nothing here executes anything.
+    """
+    from . import model_eval as _me
+    payload = env.get("payload", {})
+    meta = payload.get("model_meta") or {}
+    base = _me.plan_experiments(
+        meta, payload.get("findings") or [], payload.get("dimensions") or [],
+        payload.get("hypotheses") or [], payload.get("mitigation_plan") or [])
+    experiments = base["experiments"]
+    source = "deterministic mapping (no LLM)"
+    try:
+        from . import llm as _llm
+        lines = "\n".join(
+            f"- {e['id']} [{e['method_type']}] {e['title']}: {e['rationale']}"
+            for e in experiments[:12])
+        sys_p = (
+            "You sharpen an experiment plan. Reply with STRICT JSON only: "
+            "{\"items\": [{\"id\": str, \"title\": str, \"rationale\": str}]}. "
+            "Rules: keep every id, drop none, add none; one-sentence titles "
+            "naming what is measured; rationale names the open question it "
+            "settles; never promise an outcome, only information gain.")
+        user_p = (f"Model: {meta.get('model_name') or 'the model'}\n"
+                  f"Deployment: {meta.get('deployment_pattern')}, "
+                  f"weights: {meta.get('weights_source')}\n"
+                  f"Plan:\n{lines or '(empty)'}")
+        raw = _llm.chat([{"role": "system", "content": sys_p},
+                         {"role": "user", "content": user_p}],
+                        temperature=0.1, max_tokens=1600).strip()
+        m = re.search(r"\{.*\}", raw, re.S)
+        if not m:
+            raise ValueError("model did not return an items object")
+        data = json.loads(m.group(0))
+        by_id = {e["id"]: e for e in experiments}
+        refined = []
+        for it in data.get("items") or []:
+            if not isinstance(it, dict) or it.get("id") not in by_id:
+                continue
+            base_item = dict(by_id[it["id"]])
+            if it.get("title"):
+                base_item["title"] = str(it["title"])[:160]
+            if it.get("rationale"):
+                base_item["rationale"] = str(it["rationale"])[:300]
+            refined.append(base_item)
+        if refined:
+            experiments = refined
+            source = "experiment-planner via LLM gateway"
+    except Exception as exc:
+        source = f"deterministic mapping (LLM unavailable: {exc})"
+    return reply_envelope(
+        env, "experiment-planner", "experiments_planned",
+        {"experiments": experiments, "roadmap": base["roadmap"],
+         "method": base["method"], "method_version": base["method_version"],
+         "method_fingerprint": base["method_fingerprint"],
+         "note": base["note"], "source": source},
+        note=f"{len(experiments)} experiments planned ({source})",
+    )
+
+
 _MODEL_HANDLERS = {
+    "experiment-planner": {"plan_experiments": experiment_planner_handle},
     "model-adv-intel": {"map_model_attacks": model_adv_intel_handle},
     "model-adoption-analyst": {"rate_adoption": model_adoption_analyst_handle},
     "model-mitigation-analyst": {"propose_model_mitigations":

@@ -455,8 +455,83 @@ def compile_run(db, run_id: int) -> dict[str, Any]:
     if synth is not None:
         return {"artifact_id": synth.id, "summary_investigation_id": summary_id,
                 "markdown": synth.content, "existing": True}
+    def _child_gaps(inv_id: int) -> list[str]:
+        """Open questions that travel with a child into the synthesis.
+
+        Score meanings stay separate here too: these are gaps, not numbers,
+        so they append to the brief as facts rather than entering any
+        aggregation.
+        """
+        gaps = []
+        try:
+            failed = db.query(AgentRun).filter(
+                AgentRun.investigation_id == inv_id,
+                AgentRun.status == "error").count()
+        except Exception:
+            failed = 0
+        if failed:
+            gaps.append(f"{failed} run(s) failed or interrupted")
+        try:
+            pending = db.query(Artifact).filter(
+                Artifact.investigation_id == inv_id,
+                Artifact.review != "accepted").count()
+        except Exception:
+            pending = 0
+        if pending:
+            gaps.append(f"{pending} artifact(s) still pending review")
+        try:
+            latest = db.query(SecurityAssessment).filter(
+                SecurityAssessment.investigation_id == inv_id).order_by(
+                SecurityAssessment.id.desc()).first()
+        except Exception:
+            latest = None
+        if latest is not None:
+            try:
+                scoring = json.loads(latest.scoring_json or "{}") or {}
+            except Exception:
+                scoring = {}
+            path = scoring.get("assessment_path") or "standard"
+            if path == "model_engineering":
+                try:
+                    model_json = json.loads(
+                        getattr(latest, "model_json", None) or "{}") or {}
+                except Exception:
+                    model_json = {}
+                deferred = (model_json.get("mitigation") or {}).get(
+                    "deferred") or []
+                if deferred:
+                    gaps.append(f"{len(deferred)} deferred mitigation(s): "
+                                + ", ".join(
+                                    d.get("control_id", "?")
+                                    for d in deferred[:4]))
+            elif path == "model_hypothesis":
+                try:
+                    from . import dossier as _dossier
+                    claims = _dossier.hypothesis_register(latest)
+                except Exception:
+                    claims = []
+                open_h = [c.get("hypothesis_id") or c.get("id") for c in claims
+                          if (c.get("status") or "untested") in
+                          ("untested", "contested")]
+                if open_h:
+                    gaps.append(f"open falsifiers: {', '.join(open_h[:5])}")
+            try:
+                stats = {}
+                if latest.run_id:
+                    run = db.query(AgentRun).filter(
+                        AgentRun.id == latest.run_id).first()
+                    stats = json.loads((run.stats if run else None)
+                                       or "{}") or {}
+            except Exception:
+                stats = {}
+            if not isinstance(stats, dict) or \
+                    stats.get("assessment_id") is None:
+                gaps.append("latest assessment has incomplete stats")
+        return gaps
+
     briefs = []
     topics_risks: list[tuple[str, list[dict[str, Any]]]] = []
+    topic_gaps: list[tuple[str, list[str]]] = []
     for c in row["children"]:
         inv = db.query(Investigation).filter(
             Investigation.id == c["investigation_id"]).first()
@@ -476,11 +551,15 @@ def compile_run(db, run_id: int) -> dict[str, Any]:
                 .filter(Artifact.investigation_id == c["investigation_id"]).count())
         risks = topic_top_risks(threats)
         topics_risks.append((c["title"], risks))
+        gaps = _child_gaps(c["investigation_id"])
+        if gaps:
+            topic_gaps.append((c["title"], gaps))
         briefs.append(
             f"## {c['title']}\n"
             f"Residual {getattr(rec, 'residual_pct', None)} "
             f"(overall {getattr(rec, 'overall_pct', None)}), "
-            f"{arts} artifacts.\n{md}")
+            f"{arts} artifacts.\n{md}"
+            + (f"\nOpen gaps: {'; '.join(gaps)}." if gaps else ""))
     plan = {}
     try:
         plan = json.loads(run.plan_json or "{}")
@@ -500,7 +579,15 @@ def compile_run(db, run_id: int) -> dict[str, Any]:
          {"role": "user",
           "content": f"Command: {run.command}\n\n{tables}\n\n" + "\n\n".join(briefs)}],
         max_tokens=3000, temperature=0.2)
-    markdown = tables + "\n## Synthesis\n\n" + (text or "").strip() + "\n"
+    gaps_section = ""
+    if topic_gaps:
+        gaps_section = ("\n## Open gaps by topic\n\n"
+                        "Not scores — work still owed, carried into the "
+                        "stored synthesis so it survives the LLM paraphrase.\n\n"
+                        + "".join(f"### {title}\n"
+                                  + "".join(f"- {g}\n" for g in gaps)
+                                  for title, gaps in topic_gaps))
+    markdown = tables + gaps_section + "\n## Synthesis\n\n" + (text or "").strip() + "\n"
     art = Artifact(investigation_id=summary_id,
                    title=f"Manager synthesis (run #{run.id})",
                    artifact_type="research",

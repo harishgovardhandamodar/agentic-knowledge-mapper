@@ -259,6 +259,82 @@ def barren_queries(db, inv_id) -> list:
     return out
 
 
+def stale_assessment(db, inv_id, assessment_id=None) -> list:
+    """An assessment older than the evidence collected after it.
+
+    A score computed before the newest artifacts arrived silently excludes
+    them. The fix is a re-run, not a reinterpretation, so this flags rather
+    than adjusts.
+    """
+    from .models import Artifact, SecurityAssessment
+    q = db.query(SecurityAssessment).filter(
+        SecurityAssessment.investigation_id == inv_id)
+    if assessment_id is not None:
+        rec = q.filter(SecurityAssessment.id == assessment_id).first()
+        if rec is None:
+            return []
+        recs = [rec]
+    else:
+        recs = q.order_by(SecurityAssessment.id.desc()).all()
+    if not recs:
+        return []
+    out = []
+    for rec in recs:
+        try:
+            newer = db.query(Artifact).filter(
+                Artifact.investigation_id == inv_id,
+                Artifact.created_at > rec.created_at).count()
+        except Exception:
+            newer = 0
+        if newer > 0:
+            out.append({
+                "kind": "stale_assessment",
+                "assessment_id": rec.id,
+                "severity": "medium" if newer >= 5 else "low",
+                "why": (f"assessment #{rec.id} predates {newer} collected "
+                        f"artifact(s); its numbers exclude them"),
+                "suggestion": f"re-run the assessment to include the {newer} "
+                              f"newer artifact(s)",
+            })
+    return out
+
+
+def unevidenced_leverage(db, inv_id, assessment_id=None) -> list:
+    """High-leverage controls with zero supporting artifacts.
+
+    control_leverage ranks by modeled residual cut; this checks whether
+    anything collected backs the winner. A top control nobody evidenced is
+    the declared-vs-evidenced gap in actionable form.
+    """
+    from .models import Artifact
+    top = control_leverage(db, inv_id, assessment_id=assessment_id)[:1]
+    if not top:
+        return []
+    winner = top[0]
+    cid = str(winner.get("control_id") or "")
+    arts = db.query(Artifact).filter(
+        Artifact.investigation_id == inv_id).all()
+    hits = 0
+    for a in arts:
+        if (a.review or "") != "accepted":
+            continue
+        blob = " ".join([a.title or "", a.description or "", a.tags or "",
+                         a.url or ""]).lower()
+        if cid.lower() in blob:
+            hits += 1
+    if hits > 0:
+        return []
+    return [{
+        "kind": "unevidenced_leverage",
+        "control_id": cid,
+        "severity": winner.get("severity", "medium"),
+        "why": (f"{cid} would cut residual by {winner.get('residual_cut')} "
+                f"points, but no accepted artifact evidences it"),
+        "suggestion": f"collect vendor or test evidence for {cid} before "
+                      f"banking its {winner.get('residual_cut')}-point cut",
+    }]
+
+
 def digest(db, inv_id, *, assessment_id=None, limit: int = 8) -> dict:
     """Every recommendation, ranked, in one call.
 
@@ -271,6 +347,8 @@ def digest(db, inv_id, *, assessment_id=None, limit: int = 8) -> dict:
     recs += stale_brief(db, inv_id)
     recs += control_leverage(db, inv_id, assessment_id=assessment_id)
     recs += barren_queries(db, inv_id)
+    recs += stale_assessment(db, inv_id, assessment_id=assessment_id)
+    recs += unevidenced_leverage(db, inv_id, assessment_id=assessment_id)
     recs.sort(key=lambda r: (-_sev(r["severity"]), r["kind"], r.get("term", "")))
     by_kind = {}
     for r in recs:
