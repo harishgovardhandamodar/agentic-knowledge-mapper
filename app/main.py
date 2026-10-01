@@ -211,6 +211,16 @@ class SecurityAssessRequest(BaseModel):
     # wording -- and never means hypothesis, which is only ever asked for
     # explicitly because it needs the other two to have run.
     assessment_mode: str = ""
+    # Model-engineering assessments target a model, not a product workflow.
+    # Ignored unless assessment_mode == "model_engineering".
+    model_name: Optional[str] = ""
+    model_family: Optional[str] = ""
+    modality: Optional[str] = ""
+    weights_source: Optional[str] = ""
+    training_data_posture: Optional[str] = ""
+    deployment_pattern: Optional[str] = ""
+    model_focus_terms: Optional[list[str]] = []
+    workflows: Optional[list[str]] = []
 
 
 class SecurityRescoreRequest(BaseModel):
@@ -1466,11 +1476,31 @@ def _security_json(rec: SecurityAssessment) -> dict:
         pack.update(threatpack.compare_fingerprint(pack["fingerprint"]))
     except Exception:
         pass
+    try:
+        _model = _load(getattr(rec, "model_json", None), {}) or {}
+    except Exception:
+        _model = {}
+    if not isinstance(_model, dict):
+        _model = {}
     return {
         "id": rec.id,
         "investigation_id": rec.investigation_id,
         "run_id": rec.run_id,
         "product_name": rec.product_name,
+        "model": _model.get("meta") or {},
+        "adoption_dimensions": _model.get("dimensions") or [],
+        "mitigation": {**{k: (_model.get("mitigation") or {}).get(k)
+                              for k in ("plan", "deferred", "uncovered_risks",
+                                        "roadmap")
+                              if (_model.get("mitigation") or {}).get(k)
+                              is not None},
+                         "w3": _model.get("w3") or {},
+                         "approved_mitigation_plan":
+                             _model.get("approved_mitigation_plan"),
+                         "approved_by": _model.get("approved_by"),
+                         "approved_at": _model.get("approved_at")}
+        if ((_model.get("mitigation") or {}).get("plan")
+                or _model.get("w3")) else {},
         "product_url": rec.product_url,
         "exposure": rec.exposure,
         "use_case": rec.use_case,
@@ -1519,7 +1549,8 @@ def _assessment_path_fields(rec, scoring: dict) -> dict:
     """
     path = scoring.get("assessment_path")
     profile = None
-    if path not in ("model", "model_adversarial", "model_hypothesis", "standard"):
+    if path not in ("model", "model_adversarial", "model_hypothesis",
+                    "model_engineering", "standard"):
         try:
             import json as _json
             focus = _json.loads(rec.focus_json) if rec.focus_json else []
@@ -1638,14 +1669,16 @@ def rescore_security_assessment(assessment_id: int, data: SecurityRescoreRequest
     except Exception:
         stored_scoring = {}
     if _assessment_path_fields(rec, stored_scoring).get("assessment_path") in (
-            "model", "model_adversarial", "model_hypothesis"):
+            "model", "model_adversarial", "model_hypothesis",
+            "model_engineering"):
         # The what-if re-scorer varies catalog controls against catalog
         # threats; a model assessment has neither (dimension weights or
         # hypothesis confidence instead). Re-running catalog math on it would
         # produce numbers from the wrong method wearing this id.
         _ap = _assessment_path_fields(rec, stored_scoring).get("assessment_path")
         _label = {"model_adversarial": "Adversarial",
-                  "model_hypothesis": "Hypothesis"}.get(_ap, "Model")
+                  "model_hypothesis": "Hypothesis",
+                  "model_engineering": "Model-engineering"}.get(_ap, "Model")
         raise HTTPException(
             422, f"{_label}-path "
                  "assessment: re-score does not apply (no catalog threats or "
@@ -1741,9 +1774,22 @@ def start_security_assessment(inv_id: int, data: SecurityAssessRequest,
     # Reject an unknown mode rather than treating it as auto. A typo'd
     # "adversarial" would otherwise silently run the internals question and
     # return a report that looks like an answer to a question nobody asked.
-    if data.assessment_mode not in ("", "target", "adversarial", "hypothesis"):
+    if data.assessment_mode not in ("", "target", "adversarial", "hypothesis",
+                                      "model_engineering"):
         raise HTTPException(422, "assessment_mode must be one of: target, "
-                                 "adversarial, hypothesis, or empty for auto")
+                                 "adversarial, hypothesis, model_engineering, "
+                                 "or empty for auto")
+    model_meta: dict = {}
+    if (data.assessment_mode or "") == "model_engineering":
+        from . import model_eval as _me
+        model_meta = _me.normalize_model_meta({
+            "model_name": data.model_name, "model_family": data.model_family,
+            "modality": data.modality, "weights_source": data.weights_source,
+            "training_data_posture": data.training_data_posture,
+            "deployment_pattern": data.deployment_pattern,
+            "focus_terms": data.model_focus_terms, "workflows": data.workflows})
+        if not model_meta["model_name"]:
+            raise HTTPException(422, "model_engineering requires model_name")
     if security_agent.security_run_busy(
             db, inv_id,
             assessment_mode=data.assessment_mode or "",
@@ -1764,14 +1810,17 @@ def start_security_assessment(inv_id: int, data: SecurityAssessRequest,
                                           data.assessment_mode or "",
                                           subject_profile=_prof)
     _path = {"target": "model", "adversarial": "model_adversarial",
-             "hypothesis": "model_hypothesis"}.get(_mode, "standard")
+             "hypothesis": "model_hypothesis",
+             "model_engineering": "model_engineering"}.get(_mode, "standard")
     ledger_api.human_action(request, "started_security_assessment",
                             {"investigation": inv.id, "title": inv.title,
                              "product": data.product_name or "Target product",
                              "assessment_mode": _mode,
                              "require_approval": bool(data.require_approval)})
     run_id = security_agent.launch_security_assessment(inv.id, {
-        "product_name": data.product_name or "Target product",
+        "product_name": (model_meta.get("model_name")
+                         if _mode == "model_engineering" else "") or
+        data.product_name or "Target product",
         "product_url": data.product_url or "",
         "exposure": data.exposure or "confidential_data",
         "use_case": data.use_case or "",
@@ -1781,6 +1830,7 @@ def start_security_assessment(inv_id: int, data: SecurityAssessRequest,
         "declared_controls": data.declared_controls or [],
         "require_approval": bool(data.require_approval),
         "assessment_mode": _mode,
+        "model_meta": model_meta,
     }, requested_by=ledger_api.request_actor(request))
     return {"status": "started", "run_id": run_id,
             "assessment_mode": _mode, "assessment_path": _path}

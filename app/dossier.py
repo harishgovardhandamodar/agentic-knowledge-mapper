@@ -31,6 +31,8 @@ from collections import Counter
 from datetime import datetime, timezone
 from typing import Any
 
+from . import model_eval as _model_eval
+
 # Path -> (section label, what the headline number means, which scoring
 # dimension table describes it). Same three flows the summary reports, plus
 # the catalog path, so a dossier covers every stored assessment.
@@ -39,7 +41,31 @@ _PATH_META: dict[str, tuple[str, str]] = {
     "model": ("Workflow 1 · Model internals", "model risk"),
     "model_adversarial": ("Workflow 2 · Adversarial misuse", "misuse potential"),
     "model_hypothesis": ("Hypothesis synthesis", "mean confidence"),
+    "model_engineering": ("Model engineering", "W2 adoption risk · W1 coverage"),
 }
+
+
+def _score_text(v: Any) -> str:
+    """A score for display: ``None`` (no evidence) is a dash, never zero."""
+    try:
+        return f"{float(v):g}/100"
+    except (TypeError, ValueError):
+        return "— (no evidence)"
+
+
+def _delta_vs_current(cur: dict | None, row: dict, short: bool = False) -> str:
+    """Score delta for change logs: no-evidence rows get a dash, not math."""
+    if cur is None:
+        return "— (path retired)"
+    if cur.get("score") is None or row.get("score") is None:
+        return "— (no score)"
+    try:
+        delta = float(cur["score"]) - float(row["score"])
+    except (TypeError, ValueError):
+        return "— (unreadable)"
+    if short:
+        return f"{delta:+.1f}"
+    return f"{delta:+.1f} vs current (#{cur['id']})"
 _PATH_ORDER = ("standard", "model", "model_adversarial", "model_hypothesis")
 
 
@@ -600,6 +626,52 @@ def _dimension_scoring(path: str, scoring: dict, items: list[dict]) -> dict[str,
     }
 
 
+def _model_engineering_scoring(scoring: dict, items: list[dict],
+                               model_meta: dict[str, Any]) -> dict[str, Any]:
+    """Model-engineering path: W1 attack findings + W2 dimension register.
+
+    Scores may be ``None`` (no evidence) and stay ``None`` through display:
+    a dash, never a zero that would read as "secure".
+    """
+    w1 = scoring.get("w1") or {}
+    w2 = scoring.get("w2") or {}
+    w3 = scoring.get("w3") or {}
+    mit = (model_meta or {}).get("mitigation") or {}
+    attacks = [i for i in items if isinstance(i, dict)]
+    full_dims = {d.get("dimension"): d for d in
+                 (model_meta.get("dimensions") or []) if isinstance(d, dict)}
+    dims = []
+    for d_id, label, _w in _model_eval.ADOPTION_DIMENSIONS:
+        hit = next((x for x in (w2.get("rated") or [])
+                    if x.get("dimension") == d_id), {})
+        full = full_dims.get(d_id) or {}
+        dims.append({"id": d_id, "label": label,
+                     "rating": hit.get("rating", "unknown"),
+                     "rationale": full.get("rationale") or "",
+                     "implications": full.get("adoption_implications") or []})
+    return {
+        "kind": "model_engineering",
+        "method": scoring.get("method") or "model_engineering_v1",
+        "model": (model_meta or {}).get("meta") or {},
+        "w1": w1, "w2": w2,
+        "attacks": attacks,
+        "dimensions": dims,
+        "model_adv_version": scoring.get("model_adv_version") or "",
+        "model_adv_fingerprint": scoring.get("model_adv_fingerprint") or "",
+        "adoption_version": scoring.get("adoption_version") or "",
+        "adoption_fingerprint": scoring.get("adoption_fingerprint") or "",
+        "w3": w3,
+        "mitigation_plan": mit.get("plan") or [],
+        "mitigation_deferred": mit.get("deferred") or [],
+        "mitigation_uncovered": mit.get("uncovered_risks") or [],
+        "mitigation_roadmap": mit.get("roadmap") or {},
+        "mitigation_approved_by": mit.get("approved_by") or
+        (model_meta or {}).get("approved_by") or "",
+        "posture": scoring.get("posture") or "",
+        "items": attacks,
+    }
+
+
 def _hypothesis_scoring(scoring: dict, items: list[dict]) -> dict[str, Any]:
     """Hypothesis path: confidence in the drafted claims, not risk. Higher is
     better-evidenced. The claim rows carry their own per-claim confidence."""
@@ -752,14 +824,23 @@ def _score_audit(db, inv_id: int) -> dict[str, Any]:
             detail = _catalog_scoring(scoring, items)
         elif path == "model_hypothesis":
             detail = _hypothesis_scoring(scoring, items)
+        elif path == "model_engineering":
+            try:
+                model_meta = _load(getattr(rec, "model_json", None), {}) or {}
+            except Exception:
+                model_meta = {}
+            detail = _model_engineering_scoring(scoring, items, model_meta)
         else:
             detail = _dimension_scoring(path, scoring, items)
+        _raw_score = scoring.get("overall_pct", rec.overall_pct)
         rows_out.append({
             "id": rec.id,
             "path": path,
             "label": label,
             "score_meaning": meaning,
-            "score": _f(scoring.get("overall_pct", rec.overall_pct)),
+            # None (no evidence) survives as None: a dash in display, never
+            # a zero that would read as "secure".
+            "score": None if _raw_score is None else _f(_raw_score),
             "inherent": _f(scoring.get("inherent_pct", rec.inherent_pct)),
             "residual": _f(scoring.get("residual_pct", rec.residual_pct)),
             "delta": _f(scoring.get("delta")),
@@ -877,7 +958,7 @@ def dossier_markdown(db, inv_id: int, dossier: dict | None = None) -> str:
         parts.append("| Path | Score | What it means |")
         parts.append("|---|---|---|")
         for r in latest:
-            parts.append(f"| {r['label']} | {r['score']}/100 | "
+            parts.append(f"| {r['label']} | {_score_text(r['score'])} | "
                          f"{r['score_meaning']} |")
     else:
         parts.append("")
@@ -913,17 +994,49 @@ def dossier_markdown(db, inv_id: int, dossier: dict | None = None) -> str:
             res_s = f"{res:g}/100" if isinstance(res, (int, float)) else "—"
             parts.append(f"| {t.get('id')} {_short(str(t.get('title') or ''), 48)} "
                          f"| {res_s} | {cov_s}{weak} | {_short(label, 40)} |")
-        weakest = sorted(
-            ((t.get("coverage"), t.get("id")) for _, t in heat
-             if isinstance(t.get("coverage"), (int, float))),
-            key=lambda e: e[0])[:2]
-        if weakest and weakest[0][0] < 70:
-            parts.append("")
-            parts.append("Lowest coverage: "
-                         + ", ".join(f"{i} ({c:.0f}%)" for c, i in weakest)
-                         + " — the LOW headline does not cover these; "
-                         "see section 8 before relying on it in a regulated "
-                         "environment.")
+    for r in latest:
+        if r["path"] != "model_engineering":
+            continue
+        det = r.get("detail") or {}
+        meta = det.get("model") or {}
+        w1 = det.get("w1") or {}
+        w2 = det.get("w2") or {}
+        name = meta.get("model_name") or r.get("product_name") or "model"
+        parts.append("")
+        parts.append(f"**Model {name}.** W1 "
+                     f"{_score_text(w1.get('overall_pct'))} adversarial "
+                     f"coverage ({len(det.get('attacks') or [])} findings) · "
+                     f"W2 {_score_text(w2.get('overall_pct'))} adoption risk "
+                     f"({w2.get('uncertainty_pct', 0):g}% uncertainty).")
+        blockers = [d["id"] for d in det.get("dimensions") or []
+                    if d.get("rating") in ("high", "critical")][:3]
+        classes = sorted({f.get("attack_class")
+                          for f in det.get("attacks") or []
+                          if f.get("attack_class")})[:3]
+        if blockers:
+            parts.append(f"Adoption blockers: {', '.join(blockers)}.")
+        if classes:
+            parts.append(f"Top adversarial classes: {', '.join(classes)}.")
+        plan = det.get("mitigation_plan") or []
+        if plan:
+            parts.append("Top recommended controls: "
+                         + ", ".join(p.get("control_id") for p in plan[:3]
+                                     if p.get("control_id")) + ".")
+        uncovered = det.get("mitigation_uncovered") or []
+        if uncovered:
+            parts.append("Top residual risks after plan: "
+                         + ", ".join(uncovered[:3]) + ".")
+    weakest = sorted(
+        ((t.get("coverage"), t.get("id")) for _, t in heat
+         if isinstance(t.get("coverage"), (int, float))),
+        key=lambda e: e[0])[:2]
+    if weakest and weakest[0][0] < 70:
+        parts.append("")
+        parts.append("Lowest coverage: "
+                     + ", ".join(f"{i} ({c:.0f}%)" for c, i in weakest)
+                     + " — the LOW headline does not cover these; "
+                     "see section 8 before relying on it in a regulated "
+                     "environment.")
     gaps = []
     if tot.get("known_issues"):
         gaps.append(f"{tot['known_issues']} known issue(s) surfaced")
@@ -1175,25 +1288,23 @@ def dossier_markdown(db, inv_id: int, dossier: dict | None = None) -> str:
         mark = " _(current)_" if row["is_latest"] else " _(superseded)_"
         A(f"### {row['label']}{mark} — assessment #{row['id']}")
         A("")
-        A(f"**Score.** {row['score']:g}/100 ({row['score_meaning']}). "
-          + (f"Inherent {row['inherent']:g} → residual {row['residual']:g} "
-             f"(delta {row['delta']:g})."
-             if row["path"] != "model_hypothesis"
-             else f"Mean confidence across {len(det.get('claims', []))} claims."))
+        A(f"**Score.** {_score_text(row['score'])} ({row['score_meaning']}). "
+          + (f"Mean confidence across {len(det.get('claims', []))} claims."
+             if row["path"] == "model_hypothesis"
+             else (f"W1 {_score_text((det.get('w1') or {}).get('overall_pct'))} "
+                   f"adversarial coverage · W2 "
+                   f"{_score_text((det.get('w2') or {}).get('overall_pct'))} "
+                   f"adoption risk."
+                   if row["path"] == "model_engineering"
+                   else f"Inherent {row['inherent']:g} → residual "
+                        f"{row['residual']:g} (delta {row['delta']:g}).")))
         A("")
         if not row["is_latest"]:
             # A superseded assessment keeps its score and its delta, not its
             # arithmetic: reprinting every table triples the section for
             # numbers no decision should use.
             cur = cur_by_path.get(row.get("path"))
-            if cur is not None:
-                try:
-                    delta = float(cur["score"]) - float(row["score"])
-                    delta_s = f"{delta:+.1f} vs current (#{cur['id']})"
-                except (TypeError, ValueError):
-                    delta_s = "current unreadable"
-            else:
-                delta_s = "path retired, no current version"
+            delta_s = _delta_vs_current(cur, row)
             A(f"Superseded {(row.get('created_at') or '')[:10]} — {delta_s}. "
               f"See the §5 change log for the version history.")
             A("")
@@ -1282,6 +1393,138 @@ def dossier_markdown(db, inv_id: int, dossier: dict | None = None) -> str:
                   + (f" — {_short(it.get('rationale', ''), 120)}"
                      if it.get("rationale") else "") + ".")
             A("")
+        elif det["kind"] == "model_engineering":
+            meta = det.get("model") or {}
+            A("**Model identity.** "
+              + " · ".join(f"{k}: {v}" for k, v in
+                            (("name", meta.get("model_name") or "—"),
+                             ("family", meta.get("model_family") or "—"),
+                             ("modality", meta.get("modality") or "—"),
+                             ("weights", meta.get("weights_source") or "—"),
+                             ("training data",
+                              meta.get("training_data_posture") or "—"),
+                             ("deployment",
+                              meta.get("deployment_pattern") or "—"))))
+            A("")
+            if meta.get("focus_terms"):
+                A("**Focus terms.** " + ", ".join(meta["focus_terms"]) + ".")
+                A("")
+            w1 = det.get("w1") or {}
+            attacks = det.get("attacks") or []
+            A(f"**W1 — Adversarial research "
+              f"({w1.get('method') or 'adversarial_coverage_v1'}).** "
+              f"Risk {_score_text(w1.get('overall_pct'))}, "
+              f"class coverage {w1.get('coverage_pct', 0):g}%.")
+            A("")
+            if attacks:
+                A("| Attack | Class | Applies to | Confidence | Prerequisites |")
+                A("|---|---|---|---|---|")
+                for f in attacks:
+                    A(f"| {f.get('attack_id')} {_short(str(f.get('title') or ''), 48)} "
+                      f"| {f.get('attack_class')} | {f.get('applies_to')} "
+                      f"| {_f(f.get('confidence'), 0):.0%} "
+                      f"| {_short('; '.join(f.get('prerequisites') or ['unstated']), 60)} |")
+                A("")
+                for f in attacks:
+                    if f.get("mitigations"):
+                        A(f"- **{f.get('attack_id')} mitigations.** "
+                          + "; ".join(f["mitigations"]) + ".")
+                    if f.get("residual_notes"):
+                        A(f"  {f['residual_notes']}")
+                if any(f.get("mitigations") or f.get("residual_notes")
+                       for f in attacks):
+                    A("")
+            else:
+                A("No adversarial evidence found in the collected corpus as "
+                  "of this run — a statement about the evidence, not the "
+                  "model.")
+                A("")
+            w2 = det.get("w2") or {}
+            A(f"**W2 — Adoption risk "
+              f"({w2.get('method') or 'adoption_risk_v1'}).** "
+              f"Risk {_score_text(w2.get('overall_pct'))}, "
+              f"uncertainty {w2.get('uncertainty_pct', 0):g}%: unknown "
+              f"dimensions raise uncertainty, never lower risk.")
+            A("")
+            A("| Dimension | Rating | Rationale |")
+            A("|---|---|---|")
+            for d_ in det.get("dimensions") or []:
+                A(f"| {d_['id']} | {d_.get('rating', 'unknown')} "
+                  f"| {_short(str(d_.get('rationale') or ''), 120)} |")
+            A("")
+            unknowns = [d_["id"] for d_ in det.get("dimensions") or []
+                        if d_.get("rating", "unknown") == "unknown"]
+            if unknowns:
+                A(f"**Unknown dimensions ({len(unknowns)}).** "
+                  + ", ".join(unknowns) + ": no evidence was collected, so "
+                  "these raise uncertainty rather than lowering risk.")
+                A("")
+            impl = [(d_["id"], d_.get("implications") or [])
+                    for d_ in det.get("dimensions") or []]
+            impl = [(i, x) for i, x in impl if x]
+            if impl:
+                A("**Adoption implications.**")
+                A("")
+                for i, x in impl:
+                    A(f"- **{i}.** " + "; ".join(x[:3]) + ".")
+                A("")
+            w3 = det.get("w3") or {}
+            plan = det.get("mitigation_plan") or []
+            if w3.get("method") and not plan:
+                A(f"**W3 — Mitigation plan "
+                  f"({w3.get('method')}).** No mitigations proposed: no "
+                  f"drivers and no mitigation literature, so no risk context "
+                  f"to plan against. Insufficient evidence, not a clean "
+                  f"bill of health.")
+                A("")
+            if plan or det.get("mitigation_deferred"):
+                A(f"**W3 — Mitigation plan "
+                  f"({w3.get('method') or 'mitigation_residual_v1'}).** The "
+                  f"Mapper recommends and tracks this plan; it does not "
+                  f"implement these controls. Residuals are indicative "
+                  f"priors, not guarantees.")
+                A("")
+                if plan:
+                    A("| # | Control | Burden | Addresses | Limitations |")
+                    A("|---|---|---|---|---|")
+                    for p in plan:
+                        addr = ((p.get("addresses") or {}).get("attacks", [])
+                                + (p.get("addresses") or {}).get("dimensions", []))
+                        A(f"| {p.get('priority')} | **{p.get('control_id')}** "
+                          f"{_short(str(p.get('rationale') or ''), 80)} "
+                          f"| {p.get('burden')} | {', '.join(addr)} "
+                          f"| {_short(str(p.get('residual_limitations') or ''), 80)} |")
+                    A("")
+                for d in det.get("mitigation_deferred") or []:
+                    A(f"- **{d.get('control_id')} deferred.** {d.get('reason')}.")
+                if det.get("mitigation_deferred"):
+                    A("")
+                if det.get("mitigation_uncovered"):
+                    A("**Still uncovered.** "
+                      + "; ".join(det["mitigation_uncovered"]) + ".")
+                    A("")
+                roadmap = det.get("mitigation_roadmap") or {}
+                if any(roadmap.get(k) for k in ("30d", "60d", "90d")):
+                    for k in ("30d", "60d", "90d"):
+                        for item in roadmap.get(k) or []:
+                            A(f"- **{k}:** {item}")
+                    A("")
+                if det.get("mitigation_approved_by"):
+                    A(f"**Approved plan.** Approved by "
+                      f"{det['mitigation_approved_by']}.")
+                    A("")
+            if det.get("model_adv_version") or det.get("adoption_version"):
+                A(f"**Method versions.** model-adversarial "
+                  f"{det.get('model_adv_version') or '—'} "
+                  f"({det.get('model_adv_fingerprint') or 'no fingerprint'}) · "
+                  f"adoption-risk {det.get('adoption_version') or '—'} "
+                  f"({det.get('adoption_fingerprint') or 'no fingerprint'})"
+                  + (f" · mitigation-residual "
+                     f"{w3.get('mitigation_version') or '—'} "
+                     f"({w3.get('mitigation_fingerprint') or 'no fingerprint'})"
+                     if w3.get("method") else "")
+                  + ".")
+                A("")
         elif det["kind"] == "hypothesis":
             A(f"**Method.** {_short(det['method'], 120)}. "
               f"{det['score_meaning']}. Higher is better-evidenced, not more "
@@ -1379,21 +1622,14 @@ def dossier_markdown(db, inv_id: int, dossier: dict | None = None) -> str:
         A("|---|---|---|---|---|")
         for row in earlier:
             cur = cur_by_path.get(row.get("path"))
-            if cur is not None:
-                try:
-                    delta = float(cur["score"]) - float(row["score"])
-                    delta_s = f"{delta:+.1f}"
-                except (TypeError, ValueError):
-                    delta_s = "—"
-            else:
-                delta_s = "— (path retired)"
+            delta_s = _delta_vs_current(cur, row, short=True)
             inh = row.get("inherent")
             res = row.get("residual")
             span = (f"{inh:g} → {res:g}"
                     if isinstance(inh, (int, float))
                     and isinstance(res, (int, float)) else "—")
             A(f"| {row['label']} — assessment #{row['id']} "
-              f"| {(row.get('created_at') or '')[:10]} | {row['score']}/100 "
+              f"| {(row.get('created_at') or '')[:10]} | {_score_text(row['score'])} "
               f"| {span} | {delta_s} |")
         A("")
 
