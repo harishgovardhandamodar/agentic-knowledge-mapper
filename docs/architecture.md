@@ -107,6 +107,7 @@ flowchart TB
 | `app/security_agent.py` + `app/agents.py` + `app/security.py` + `app/threatpack.py` | Security assessments via the A2A envelope protocol, scored against a versioned pack |
 | `app/dossier.py` | Report assembly: executive summary + 7 sections from stored rows, Markdown prose, Markdown+images bundle |
 | `app/mermaid_png.py` | Figure renderer: batch-draws mermaid sources to PNG via headless Chromium, cached by source hash |
+| `app/model_eval.py` | Model-engineering core: family/modality enums, attack taxonomy, `adversarial_coverage_v1` + `adoption_risk_v1` scoring, method versions/fingerprints (no LLM, evalkit-pinned) |
 | Chromium + vendored `mermaid.min.js` | Baked into the image so PDF/bundle exports draw real pictures with no network |
 | `app/manager.py` | Command parsing, fan-out over topics, summary compilation |
 | `app/standards_matrix.py` | Relevance-ranked standards score matrix served to the security pane |
@@ -291,6 +292,16 @@ flowchart LR
   rendered figures all read stored rows and cached pictures — no LLM, no
   recomputation — so re-exporting the same investigation byte-agrees on the
   numbers. See [frontend](frontend.md).
+- **Model assessments are a separate mode, not a product flavor.**
+  `assessment_mode=model_engineering` runs W1 adversarial research plus W2
+  adoption risk (plus W3 mitigation planning when requested) through their
+  own A2A agents, scores, catalogs and report template. Scores may be null
+  (no evidence) and stay null through display. Families are data in
+  `app/model_eval.py`, never new code paths.
+- **Mitigations are recommended, never implemented.** The MM01–MM15 catalog
+  carries efficacy priors and burden ratings; the analyst ranks by driver
+  pressure minus burden, residuals stay indicative, and inapplicable controls
+  are deferred with reasons rather than silently dropped.
 - **The LLM is optional in the loop, not in the product.** Research, scoring,
   and diagram generation all have deterministic paths; the pack's own evalkit
   pins the expected scores so a silent model change fails CI instead of

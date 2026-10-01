@@ -289,6 +289,17 @@ identity, duration), rendered per run in section 2; a security history entry
 whose run left none carries an "incomplete stats" chip, and the Coverage
 section names failed runs and open gap goals from the summary payload.
 
+The Assessment form offers a fourth mode, **model engineering**, for a named
+model: family, modality, weights, training data, deployment, focus terms and
+W1/W2/W3 checkboxes. Results render a model-identity card, the W1 attack table
+(class, scope, confidence — family-only evidence is labeled as such), the
+W2 dimension register with unknowns called out, and the W3 mitigation plan
+(ranked controls, deferrals with reasons, uncovered risks, 30/60/90 roadmap);
+any score can be "— (no evidence)". The Controls tab stays hidden on model
+paths, the pipeline strip shows the W1/W2/W3 agents, and a run parked on a
+mitigation plan shows the MM* proposal with burden and limitations for a
+second person to approve or reject.
+
 In the tab, `loadDossier()` fetches on demand (the payload is large and most
 visits only need the summary) and caches until the investigation changes.
 `secDossierRender()` builds every section read-only -- executive summary,

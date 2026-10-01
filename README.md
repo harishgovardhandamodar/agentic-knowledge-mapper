@@ -204,7 +204,12 @@ and export a bundle that verifies offline with no database attached.
 Scope a product + exposure setting to the investigation's graph: the agent
 searches related research, maps known attacks, and writes a scored report
 with executive summary, threat register, known exploits, A2A trail,
-diagrams, and Markdown/PDF export. The inherent → residual severity mix is
+diagrams, and Markdown/PDF export. A fourth mode assesses a **model** instead
+of a product workflow (W1 adversarial research + W2 adoption risk + W3
+mitigation planning, e.g. TabPFN or Stable Diffusion XL); either score may
+read "no evidence" rather than a number when the corpus has nothing to say.
+W3 proposes a ranked MM* control plan with deferrals, residual notes and an
+approval gate, but never implements controls. The inherent → residual severity mix is
 clickable — each band opens an overlay listing exactly the findings behind
 that count. What-if control toggles recompute the score instantly.
 
