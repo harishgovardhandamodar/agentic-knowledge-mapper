@@ -1845,6 +1845,33 @@ function secDossierRender() {
   const fl = col.flags || {};
   let h = '';
 
+  // --- 0. executive summary: the answer, before the working ---
+  const rows0 = ((d.scores || {}).rows || []);
+  const latest0 = rows0.filter(r => r.is_latest);
+  const answers0 = col.answers || [];
+  const done0 = answers0.filter(a => a.status === 'done');
+  h += `<div class="dos-sec"><h4>Executive summary</h4>`;
+  h += `<p><b>${escHtml((d.investigation || {}).title || '')}</b> was investigated against ${escHtml((d.investigation || {}).sources || 'no recorded sources')}, ` +
+    `collecting ${tot.artifacts || 0} artifact(s) and answering ${tot.answered || 0} of ${tot.answers || 0} question(s).</p>`;
+  if (latest0.length) {
+    h += `<div class="dos-table-wrap"><table class="dos-table"><thead><tr><th>Path</th><th>Score</th><th>What it means</th></tr></thead><tbody>` +
+      latest0.map(r => `<tr><td>${escHtml(r.label)}</td><td><b>${r.score}/100</b></td><td class="dos-wrap">${escHtml(r.score_meaning || '')}</td></tr>`).join('') +
+      `</tbody></table></div>`;
+  } else {
+    h += `<p style="color:var(--text2)">No security assessment has been run for this investigation, so there is no score to report.</p>`;
+  }
+  if (done0.length) {
+    const lead = done0[0].summary || done0[0].excerpt || '';
+    if (lead) h += `<p><b>Lead finding.</b> ${escHtml(lead.length > 420 ? lead.slice(0, 419) + '…' : lead)}</p>`;
+  }
+  const gaps = [];
+  if (tot.known_issues) gaps.push(`${tot.known_issues} known issue(s) surfaced`);
+  const unans = (tot.answers || 0) - (tot.answered || 0);
+  if (unans > 0) gaps.push(`${unans} question(s) still unanswered`);
+  if (fl.duplicates) gaps.push(`${fl.duplicates} duplicate artifact(s)`);
+  if (gaps.length) h += `<p style="color:var(--orange)"><b>Open items.</b> ${escHtml(gaps.join('; '))}.</p>`;
+  h += `</div>`;
+
   // --- 1. the request ---
   const inv = d.investigation || {};
   h += `<div class="dos-sec"><h4>1 · The request</h4><dl class="dos-kv">` +
@@ -1974,8 +2001,99 @@ function secDossierRender() {
       h += `<p style="color:var(--text2);font-size:11px"><b>Threat pack.</b> ${escHtml(row.threat_pack_version)} (${escHtml(row.threat_pack_fingerprint || 'no fingerprint')}) — the exact catalogue these numbers were computed against.</p>`;
     }
   });
+  // --- 5. the assessment reports, as written: the full text behind section 4 ---
+  const reported = rows.filter(r => (r.report_markdown || '').trim());
+  if (reported.length) {
+    h += `<div class="dos-sec"><h4>5 · Assessment reports, as written (${reported.length})</h4>` +
+      `<p style="color:var(--text2);font-size:12px">Each report exactly as its assessment produced it. A diagram fenced inside a report is also drawn live in section 6.</p>`;
+    reported.forEach(r => {
+      h += `<h5>${escHtml(r.label)} — assessment #${r.id}${r.is_latest ? ' (current)' : ' (superseded)'}</h5>` +
+        `<pre style="white-space:pre-wrap;word-break:break-word;font-size:11px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:8px;max-height:320px;overflow:auto;">${escHtml(r.report_markdown)}</pre>`;
+    });
+    h += `</div>`;
+  }
+  // --- 6. diagrams: every mermaid the investigation produced ---
+  // One entry per distinct source, like the exported Markdown/PDF: the same
+  // figure repeated across assessments is listed once, with every place it
+  // appears folded into its caption line.
+  const allDiagrams = [];
+  // Same rule as the exporter's _norm_mermaid: re-indentation alone must not
+  // split one figure into two entries.
+  const normSrc = s => String(s || '').replace(/\s+/g, ' ').trim();
+  function pushDiagram(g, where) {
+    const prior = allDiagrams.find(e => normSrc(e.source) === normSrc(g.source));
+    if (prior) {
+      if (!prior.where.includes(where)) prior.where += `, ${where}`;
+      return;
+    }
+    allDiagrams.push({...g, where});
+  }
+  rows0.forEach(r => (r.diagrams || []).forEach(g =>
+    pushDiagram(g, `assessment #${r.id} — ${r.label}`)));
+  answers0.forEach(a => (a.diagrams || []).forEach(g =>
+    pushDiagram(g, `explainer #${a.id} — ${(a.question || '').slice(0, 80)}`)));
+  if (allDiagrams.length) {
+    h += `<div class="dos-sec"><h4>6 · Diagrams (${allDiagrams.length})</h4>` +
+      `<p style="color:var(--text2)">Every diagram produced across this investigation — the stored figure set, anything inside a report, and anything an explainer generated.</p>`;
+    allDiagrams.forEach((g, i) => {
+      h += `<h5>${i + 1} · ${escHtml(g.caption || 'Diagram')}</h5>` +
+        `<p style="color:var(--text2);font-size:11px">${escHtml(g.origin || '')} — ${escHtml(g.where || '')}</p>` +
+        // Rendered live by mermaid, so a diagram the report cannot draw as a
+        // vector still appears as a picture rather than as source text.
+        `<div class="diagram-wrap"><div class="mermaid" data-src="${escHtml(g.source || '')}">${escHtml(g.source || '')}</div></div>`;
+    });
+    h += `</div>`;
+  }
+
+  // --- 7. the deep-dives, in full: the support material ---
+  const deep = answers0.filter(a => a.status === 'done' && ((a.sections || []).length || a.summary));
+  if (deep.length) {
+    h += `<div class="dos-sec"><h4>7 · Deep-dives in full (${deep.length})</h4>` +
+      `<p style="color:var(--text2)">Each answered question with its finding, its diagram and its sources — the material behind section 3.</p>`;
+    deep.forEach(a => {
+      h += `<h5>${escHtml(a.question || '')}</h5>` +
+        `<p style="color:var(--text2);font-size:11px">explainer #${a.id} · ${escHtml(a.mode || '')}/${escHtml(a.depth || '')}/${escHtml(a.audience || '')} · ${a.hops || 0} hops${a.as_of ? ' · as of ' + escHtml(a.as_of) : ''}</p>`;
+      if (a.summary) h += `<p>${escHtml(a.summary)}</p>`;
+      (a.diagrams || []).forEach(g => {
+        h += `<p style="font-size:11px;color:var(--text2)"><b>Diagram.</b> ${escHtml(g.caption || '')}</p>` +
+          `<div class="diagram-wrap"><div class="mermaid" data-src="${escHtml(g.source || '')}">${escHtml(g.source || '')}</div></div>`;
+      });
+      if ((a.mechanism_steps || []).length) {
+        h += `<p><b>How it works.</b></p><ol>` +
+          a.mechanism_steps.map(s => `<li>${escHtml(String(s))}</li>`).join('') + `</ol>`;
+      }
+      if ((a.tradeoffs || []).length) {
+        h += `<p><b>Trade-offs.</b></p><ul>` +
+          a.tradeoffs.map(t => `<li>${escHtml(String(t))}</li>`).join('') + `</ul>`;
+      }
+      (a.sections || []).forEach(s => {
+        if (s.heading) h += `<h6>${escHtml(s.heading)}</h6>`;
+        if (s.body) h += `<p>${escHtml(s.body)}</p>`;
+      });
+      if ((a.key_points || []).length) {
+        h += `<p><b>Key points.</b></p><ul>` +
+          a.key_points.map(k => `<li>${escHtml(k)}</li>`).join('') + `</ul>`;
+      }
+      if ((a.conflicts || []).length) h += `<p><b>Conflicts noted.</b> ${escHtml(a.conflicts.join('; '))}</p>`;
+      const ground = a.supporting || a.sources || [];
+      if (ground.length) {
+        h += `<p><b>Grounded in.</b> ` + ground.map(s => {
+          const t = s.title || s.url || 'source';
+          return s.url && !String(s.url).startsWith('graph://')
+            ? `<a href="${escHtml(s.url)}" target="_blank" rel="noopener">${escHtml(t)}</a>`
+            : escHtml(t);
+        }).join('; ') + `</p>`;
+      }
+      if ((a.documents || []).length) h += `<p><b>Documents.</b> ${escHtml(a.documents.join(', '))}</p>`;
+    });
+    h += `</div>`;
+  }
+
   h += `</div>`;
   host.innerHTML = h;
+  // Diagrams arrive as source text; load the renderer first so they are drawn
+  // as pictures once in the DOM instead of left as raw source.
+  secEnsureMermaid(host);
 }
 
 async function downloadDossier(kind) {

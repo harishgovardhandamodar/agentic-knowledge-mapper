@@ -131,35 +131,100 @@ def _first_line(src: str, limit: int = 60) -> str:
     return line if len(line) <= limit else line[: limit - 1] + "…"
 
 
-def _explainer_diagrams(exp: Any) -> list[dict[str, str]]:
-    """Mermaid an explainer produced, from both places it can live: the
-    payload's own ``diagrams`` object and any fenced blocks in its answer."""
+def _source_refs(ans: dict) -> list[dict[str, str]]:
+    """An answer's citations, as title plus whatever link it carries.
+
+    The explainer writes sources as dicts, but the URL is often an internal
+    ``graph://artifact/N`` handle rather than a web address, so it is kept as
+    a separate field instead of being flattened into ``url`` and read as a
+    broken link."""
     out: list[dict[str, str]] = []
-    meta = _load(getattr(exp, "meta", None), {}) or {}
-    packs: list[tuple[str, Any]] = []
-    if isinstance(meta, dict):
-        packs.append(("explainer payload", meta.get("diagrams")))
+    for s in (ans.get("sources") or []):
+        if isinstance(s, dict):
+            out.append({"title": str(s.get("title") or "").strip(),
+                        "url": str(s.get("url") or "").strip(),
+                        "kind": str(s.get("kind") or s.get("source") or "").strip()})
+        elif isinstance(s, str):
+            out.append({"title": s.strip(), "url": "", "kind": ""})
+    return out[:12]
+
+
+def _explainer_diagrams(exp: Any) -> list[dict[str, str]]:
+    """Mermaid an explainer produced.
+
+    The explainer stores its figure under ``answer.diagram`` -- a single
+    object of ``mermaid``/``title``/``caption``, not a keyed collection. It
+    also accepts a ``diagrams`` map and fenced blocks in the prose, so all
+    three are read: a deep-dive whose figure only exists in the prose would
+    otherwise leave the report claiming it has no diagrams at all.
+    """
+    out: list[dict[str, str]] = []
     ans = _load(getattr(exp, "answer", None), {}) or {}
-    if isinstance(ans, dict):
-        for key, val in (ans.get("diagrams") or {}).items() if isinstance(
-                ans.get("diagrams"), dict) else []:
-            packs.append((f"answer · {key}", val))
+    meta = _load(getattr(exp, "meta", None), {}) or {}
+    if not isinstance(ans, dict):
+        ans = {}
+    packs: list[tuple[str, Any]] = [("explainer payload", meta.get("diagrams"))]
+
+    one = ans.get("diagram")
+    if isinstance(one, dict):
+        packs.append(("explainer figure", one))
+    figs = ans.get("figures")
+    if isinstance(figs, list):
+        packs.append(("explainer figures", figs))
+    elif isinstance(one, str) and one.strip():
+        packs.append(("explainer figure", one))
+    if isinstance(ans.get("diagrams"), dict):
+        packs.append(("answer diagrams", ans["diagrams"]))
+
     for origin, pack in packs:
-        if isinstance(pack, dict):
-            for key, val in pack.items():
-                val = val.get("mermaid") if isinstance(val, dict) else val
+        if isinstance(pack, str):
+            if pack.strip():
+                out.append({"key": "", "caption": _first_line(pack),
+                            "source": pack.strip(), "origin": origin,
+                            "note": ""})
+            continue
+        if isinstance(pack, list):
+            for val in pack:
+                if isinstance(val, dict) and str(val.get("mermaid") or "").strip():
+                    note = " ".join(str(val.get(k) or "").strip()
+                                    for k in ("title", "caption")).strip()
+                    out.append({"key": "", "caption": note or _first_line(
+                        str(val["mermaid"])), "source": str(val["mermaid"]).strip(),
+                        "origin": origin, "note": note})
+            continue
+        if not isinstance(pack, dict):
+            continue
+        if "mermaid" in pack:
+            items = [(None, pack)]
+        else:
+            items = list(pack.items())
+        for key, val in items:
+            src = ""
+            note = ""
+            if isinstance(val, dict):
+                src = str(val.get("mermaid") or "").strip()
+                note = " ".join(str(val.get(k) or "").strip()
+                                for k in ("title", "caption")).strip()
+            else:
                 src = str(val or "").strip()
-                if src:
-                    out.append({"key": str(key), "caption": str(key).replace("_", " "),
-                                "source": src, "origin": origin})
-        elif isinstance(pack, str) and pack.strip():
-            out.append({"key": "", "caption": _first_line(pack),
-                        "source": pack.strip(), "origin": origin})
+            if not src or not _looks_mermaid(src):
+                continue
+            label = str(key or "").strip()
+            out.append({
+                "key": label,
+                "caption": (label.replace("_", " ") if label
+                            else note or _first_line(src)),
+                "source": src,
+                "origin": origin,
+                "note": note,
+            })
     for key, src in _mermaid_fences(
-            (ans.get("summary") if isinstance(ans, dict) else "") or ""):
-        out.append({"key": key or "(unlabelled)",
-                    "caption": key.replace("_", " ") if key else _first_line(src),
-                    "source": src, "origin": "answer body"})
+            str(ans.get("summary") or "") + "\n" + "\n".join(
+                str(s.get("body") or "")
+                for s in (ans.get("sections") or []) if isinstance(s, dict))):
+        out.append({"key": key, "caption": key.replace("_", " ") if key
+                    else _first_line(src), "source": src,
+                    "origin": "answer prose", "note": ""})
     return out
 
 
@@ -184,18 +249,38 @@ def _flatten_headings(md: str) -> str:
     depth and the structure is lost. Mapping the report's shallowest heading
     to ``###`` and everything below it proportionally keeps the internal
     hierarchy visible while leaving the dossier's ``##`` outline untouched."""
-    levels = sorted({len(l) - len(l.lstrip("#"))
-                     for l in (md or "").splitlines()
-                     if l.startswith("#") and (len(l) == 1 or l[1] == " ")})
+    def _level(ln: str) -> int:
+        return len(ln) - len(ln.lstrip("#"))
+
+    lines = (md or "").splitlines()
+
+    def _is_heading(ln: str) -> bool:
+        # ATX: hashes then a space. The old test only checked ln[1], which
+        # recognises `# title` and nothing else -- every `##` section was
+        # treated as body text and left its level untouched.
+        rest = ln.lstrip("#")
+        return ln.startswith("#") and (rest == "" or rest.startswith(" "))
+
+    levels = sorted({_level(l) for l in lines if _is_heading(l)})
     if not levels:
         return md or ""
-    top = levels[0]
-    shift = 3 - top          # the report's own h1 lands on the dossier's h3
-    return "\n".join(
-        ("#" * min(6, len(ln) - len(ln.lstrip("#")) + shift)) + ln.lstrip("#")
-        if ln.startswith("#") and (len(ln) == 1 or ln[1] == " ")
-        else ln
-        for ln in (md or "").splitlines())
+    # Land the report's *shallowest* heading on h3 and keep every step below it
+    # in proportion, so the report's own title lands at h3 while its `## 6.
+    # Known exploits` sits at h4 -- inside the dossier's section 5 rather than
+    # beside it, competing with the dossier's own numbered outline.
+    base = levels[0]
+    depth = min(3, len(levels))          # at most three visible levels
+    span = max(1, levels[-1] - base)
+    out = []
+    for ln in lines:
+        if _is_heading(ln):
+            lvl = _level(ln)
+            rel = min(1 + int(round((lvl - base) / span * (depth - 1))),
+                      depth)
+            out.append("#" * (2 + rel) + ln.lstrip("#"))
+        else:
+            out.append(ln)
+    return "\n".join(out)
 
 
 # --------------------------------------------------------------------------
@@ -326,10 +411,34 @@ def _collection_section(db, inv_id: int) -> dict[str, Any]:
             "hops": e.hops or 0,
             "diagrams": _explainer_diagrams(e),
             "excerpt": _answer_excerpt(e),
-            "key_points": [str(k) for k in (ans.get("key_points") or [])][:6]
-                          if isinstance(ans, dict) else [],
-            "sources": [str(s) for s in (ans.get("sources") or [])][:12]
-                       if isinstance(ans, dict) else [],
+            "key_points": [str(k) for k in (ans.get("key_points") or [])][:6],
+            # The explainer's own narrative, read from the stored answer so the
+            # dossier shows the finding rather than only the question. The
+            # summary is what a reader needs before the full sections.
+            "summary": str(ans.get("summary") or "").strip(),
+            "mechanism_steps": (
+                [str(s) for s in (ans.get("mechanism_steps") or [])
+                 if isinstance(s, (str, int, float))][:12]
+                if isinstance(ans.get("mechanism_steps"), list) else []),
+            "tradeoffs": (
+                [str(s) for s in (ans.get("tradeoffs") or [])
+                 if isinstance(s, (str, int, float))][:10]
+                if isinstance(ans.get("tradeoffs"), list) else []),
+            "as_of": str(ans.get("as_of") or ""),
+            "conflicts": ([str(c) for c in (ans.get("conflicts") or [])
+                           if isinstance(c, str)][:8]
+                          if isinstance(ans.get("conflicts"), list) else []),
+            # Each section heading and body, so an export can carry the whole
+            # deep-dive rather than a truncated excerpt.
+            "sections": ([{"heading": str(s.get("heading") or ""),
+                           "body": str(s.get("body") or "")}
+                          for s in (ans.get("sections") or [])
+                          if isinstance(s, dict)][:40]
+                         if isinstance(ans.get("sections"), list) else []),
+            "documents": ([str(s) for s in (ans.get("documents") or [])
+                           if isinstance(s, str)][:10]
+                          if isinstance(ans.get("documents"), list) else []),
+            "sources": _source_refs(ans),
             # _supporting_for already returns plain dicts, and rejects
             # artifacts a reviewer rejected.
             "supporting": [{"id": s.get("id"), "title": s.get("title") or "",
@@ -555,7 +664,9 @@ def _diagram_index(rows: list[dict], answers: list[dict]) -> list[dict]:
         if not sig:
             return
         if sig in seen:
-            seen[sig]["seen_in"].append(where)
+            entry = seen[sig]
+            if where not in entry["seen_in"]:
+                entry["seen_in"].append(where)
             return
         entry = {"key": key, "caption": cap, "source": src, "origin": origin,
                  "label": label, "seen_in": [where]}
@@ -737,6 +848,61 @@ def dossier_markdown(db, inv_id: int, dossier: dict | None = None) -> str:
     A(f"_Investigation #{inv['id']} · generated {d['generated'][:19]} UTC · "
       f"status {inv['status'] or 'unknown'} · "
       f"created {(inv['created_at'] or '')[:10]}_")
+    A("")
+
+    # --- executive summary: the whole point of the document, first ---
+    A("## Executive summary")
+    A("")
+    tot, fl = col["totals"], col["flags"]
+    rows = d["scores"]["rows"]
+    latest = [r for r in rows if r.get("is_latest")]
+    parts = [
+        f"**{inv['title']}** was investigated against "
+        f"{inv['sources'] or 'no recorded sources'}, collecting "
+        f"{tot.get('artifacts', 0)} artifact(s) and answering "
+        f"{tot.get('answered', 0)} of {tot.get('answers', 0)} question(s).",
+    ]
+    if latest:
+        # One line per path, each naming what its number means. A dossier that
+        # lists the scores without their meanings invites reading one as the
+        # answer to a question it does not answer.
+        parts.append("")
+        parts.append("| Path | Score | What it means |")
+        parts.append("|---|---|---|")
+        for r in latest:
+            parts.append(f"| {r['label']} | {r['score']}/100 | "
+                         f"{r['score_meaning']} |")
+    else:
+        parts.append("")
+        parts.append("No security assessment has been run for this "
+                     "investigation, so there is no score to report.")
+    answered = [a for a in col["answers"] if a.get("status") == "done"]
+    if answered:
+        top = answered[0].get("summary") or answered[0].get("excerpt") or ""
+        if top:
+            parts.append("")
+            parts.append("**Lead finding.** " + _short(top, 420))
+    gaps = []
+    if tot.get("known_issues"):
+        gaps.append(f"{tot['known_issues']} known issue(s) surfaced")
+    unanswered = tot.get("answers", 0) - tot.get("answered", 0)
+    if unanswered > 0:
+        gaps.append(f"{unanswered} question(s) still unanswered")
+    if fl.get("duplicates"):
+        gaps.append(f"{fl['duplicates']} duplicate artifact(s)")
+    if gaps:
+        parts.append("")
+        parts.append("**Open items.** " + "; ".join(gaps) + ".")
+    parts.append("")
+    parts.append("Read section 2 for what was asked, section 3 for what came "
+                 "back, section 4 for how each score was reached, section 5 "
+                 "for the assessment reports verbatim, section 6 for every "
+                 "diagram, and section 7 for the deep-dives behind each "
+                 "answer.")
+    for p in parts:
+        A(p)
+    A("")
+    A("---")
     A("")
 
     # --- part 1: the request ---
@@ -1099,6 +1265,84 @@ def dossier_markdown(db, inv_id: int, dossier: dict | None = None) -> str:
             A(d["source"])
             A("```")
             A("")
+
+    # --- support material: every answer in full ---
+    deep = [a for a in col["answers"] if a.get("status") == "done"
+            and (a.get("sections") or a.get("summary"))]
+    if deep:
+        A("## 7. The deep-dives, in full")
+        A("")
+        A("Each question that was answered, with its finding, its diagram and "
+          "its sources. Section 3 lists them; this is the material itself, so "
+          "an exported report carries the whole investigation rather than a "
+          "pointer to it.")
+        A("")
+        for ans in deep:
+            A(f"### {ans['question']}")
+            A("")
+            A(f"_explainer #{ans['id']} · {ans['mode']}/{ans['depth']}/"
+              f"{ans['audience']} · {ans['hops']} hops"
+              + (f" · as of {ans['as_of']}" if ans.get("as_of") else "")
+              + "_")
+            A("")
+            if ans.get("summary"):
+                A(ans["summary"])
+                A("")
+            for dg in ans.get("diagrams") or []:
+                A(f"**Diagram — {dg['caption']}**  ")
+                A(f"_{dg['origin']}_")
+                A("")
+                A("```mermaid")
+                A(dg["source"])
+                A("```")
+                A("")
+            if ans.get("mechanism_steps"):
+                A("**How it works.**")
+                A("")
+                for i, step in enumerate(ans["mechanism_steps"], 1):
+                    A(f"{i}. {step}")
+                A("")
+            if ans.get("tradeoffs"):
+                A("**Trade-offs.**")
+                A("")
+                for t in ans["tradeoffs"]:
+                    A(f"- {t}")
+                A("")
+            for sec in ans.get("sections") or []:
+                if sec["heading"]:
+                    A(f"#### {sec['heading']}")
+                    A("")
+                if sec["body"]:
+                    A(sec["body"])
+                    A("")
+            if ans.get("key_points"):
+                A("**Key points.**")
+                A("")
+                for kp in ans["key_points"]:
+                    A(f"- {kp}")
+                A("")
+            if ans.get("conflicts"):
+                A("**Conflicts noted.** "
+                  + "; ".join(ans["conflicts"]) + ".")
+                A("")
+            if ans.get("supporting"):
+                A("**Grounded in.** "
+                  + "; ".join(f"{s.get('title') or s.get('url') or 'source'}"
+                              + (f" [{s['url']}]" if s.get("url") else "")
+                              for s in ans["supporting"][:12])
+                  + ".")
+                A("")
+            elif ans.get("sources"):
+                A("**Grounded in.** "
+                  + "; ".join(
+                      f"{s['title'] or 'source'}"
+                      + (f" ({s['url']})" if s.get("url") else "")
+                      for s in ans["sources"][:12])
+                  + ".")
+                A("")
+            if ans.get("documents"):
+                A("**Documents referenced.** " + ", ".join(ans["documents"]) + ".")
+                A("")
 
     A("---")
     A("")

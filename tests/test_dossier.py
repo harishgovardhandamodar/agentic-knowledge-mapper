@@ -11,6 +11,7 @@ hypothesis confidence) with the items that drove each dimension.
 """
 import json
 import os
+import re
 import tempfile
 import unittest
 from unittest import mock
@@ -683,6 +684,104 @@ class TestDiagramCollection(unittest.TestCase):
             # diagram; listing each copy padded the report with duplicates.
             self.assertEqual(md.count("flowchart LR"), 1)
             self.assertIn("appears in", md)
+        finally:
+            inv.close()
+
+
+class TestReportShape(unittest.TestCase):
+    """An exported report must lead with the answer and carry its material."""
+
+    def test_embedded_report_headings_cannot_hijack_the_outline(self):
+        from app.dossier import _flatten_headings
+        md = ("# Assessment\n\n## Executive summary\n\n### KE-01\n\n"
+              "## 6. Known exploits\n\n### KE-02\n\n#### deeper\n")
+        out = _flatten_headings(md)
+        # The dossier's own sections are h2. An appended report that keeps an
+        # h2 shows up beside them as a peer of the dossier's numbered outline,
+        # and its TOC entry reads as a top-level section that does not exist.
+        self.assertEqual([l for l in out.splitlines() if l.startswith("## ")], [])
+        self.assertEqual([l for l in out.splitlines() if l.startswith("# ")], [])
+        # Internal structure survives: the report's title is above its sections.
+        self.assertTrue(out.index("### Assessment")
+                        < out.index("#### 6. Known exploits"))
+
+    def test_headings_without_an_h1_are_still_detected(self):
+        from app.dossier import _flatten_headings
+        out = _flatten_headings("## Executive summary\n\n### KE-01\n")
+        self.assertEqual([l for l in out.splitlines() if l.startswith("## ")], [])
+
+    def test_executive_summary_comes_first(self):
+        inv = _Inv()
+        try:
+            out = _run("standard", inv.db, inv.id)
+            _store(inv.db, inv.id, out)
+            md = dossier_markdown(inv.db, inv.id)
+            self.assertIn("## Executive summary", md)
+            self.assertLess(md.index("## Executive summary"),
+                            md.index("## 1. The request"))
+            # The summary carries the scores with what each one means, so the
+            # numbers are not read as interchangeable.
+            self.assertIn("What it means", md)
+        finally:
+            inv.close()
+
+    def test_explainer_diagram_comes_from_the_answer_object(self):
+        # The explainer stores one figure at answer.diagram, not in a keyed
+        # map: reading only the map reported zero diagrams for investigations
+        # that had one per deep-dive.
+        from app.dossier import _explainer_diagrams
+        exp = mock.Mock()
+        exp.answer = json.dumps({
+            "diagram": {"mermaid": "flowchart TD\n A[Steward] --> B[LLM]",
+                        "title": "Data flow", "caption": "everything goes out"},
+        })
+        exp.meta = json.dumps({"concepts": []})
+        got = _explainer_diagrams(exp)
+        self.assertEqual(len(got), 1)
+        self.assertIn("Data flow", got[0]["caption"])
+
+    def test_diagram_is_listed_once_however_many_times_it_is_referenced(self):
+        # Every assessment of one product repeats the same figure, and one
+        # assessment repeats it again inside its own report. Each copy in the
+        # "appears in" list is noise: the same assessment named twice.
+        inv = _Inv()
+        try:
+            out = _run("standard", inv.db, inv.id)
+            out["diagrams"] = {"dataflow": sec.mermaid_dataflow(NAME)}
+            rec = _store(inv.db, inv.id, out)
+            rec.markdown = ("```mermaid dataflow\n"
+                            + sec.mermaid_dataflow(NAME) + "\n```")
+            inv.db.commit()
+            md = dossier_markdown(inv.db, inv.id)
+            # Scope to the diagram section: the appendix in section 5 quotes
+            # the report verbatim, so the figure legitimately appears there too.
+            sec6 = md[md.index("## 6. Diagrams"):]
+            self.assertEqual(sec6.count("flowchart LR"), 1)
+            seen_in = re.search(r"appears in ([^.]*)\.", sec6).group(1)
+            parts = [p.strip() for p in seen_in.split(",")]
+            self.assertEqual(len(parts), len(set(parts)),
+                             f"duplicate entries in {parts}")
+        finally:
+            inv.close()
+
+    def test_deep_dives_are_exported_in_full(self):
+        inv = _Inv()
+        try:
+            exp = Explanation(
+                investigation_id=inv.id, question="how does the leak work",
+                status="done", mode="deep_dive", answer=json.dumps({
+                    "summary": "the payload leaves unfiltered",
+                    "sections": [{"heading": "Trigger",
+                                  "body": "any AI action on an asset"}],
+                    "diagram": {"mermaid": "flowchart LR\n A-->B"},
+                }))
+            inv.db.add(exp)
+            inv.db.commit()
+            md = dossier_markdown(inv.db, inv.id)
+            self.assertIn("The deep-dives, in full", md)
+            self.assertIn("the payload leaves unfiltered", md)
+            self.assertIn("Trigger", md)
+            self.assertIn("flowchart LR", md)
         finally:
             inv.close()
 
