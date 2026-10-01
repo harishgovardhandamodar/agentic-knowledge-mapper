@@ -300,6 +300,15 @@ paths, the pipeline strip shows the W1/W2/W3 agents, and a run parked on a
 mitigation plan shows the MM* proposal with burden and limitations for a
 second person to approve or reject.
 
+Hypothesis assessments render a claim register (status, falsifiers,
+tensions) with a builder to edit falsifiers, mark status, attach evidence
+and launch evidence collection — edits never move the scored confidence.
+An experiment planner proposes ranked probes for open falsifiers,
+unknowns and MM validations (plan only), shown in results and dossier
+with roadmap and disclaimer. The security history badges incomplete
+stats and superseded packs; assessments compare side-by-side only within
+one method, and the review badge tooltips the actionable pending count.
+
 In the tab, `loadDossier()` fetches on demand (the payload is large and most
 visits only need the summary) and caches until the investigation changes.
 `secDossierRender()` builds every section read-only -- executive summary,

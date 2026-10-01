@@ -235,6 +235,13 @@ fail CI on silent edits, same rule as the pack.
 4. Unintended → revert the edit. The evalkit is the thing that tells you which
    it was.
 
+`tests/test_versioning.py` pins every fingerprint, so a catalog edit without
+a version bump is a red build, not a quiet drift. Rows scored on older packs
+are badged **superseded pack** in the dossier, history and preview — and
+persisting a what-if re-score writes a **new** row linked by `supersedes_id`,
+never edits the old one. The policy constants live in code (`CHANGE_POLICY`
+in `threatpack.py` / `model_eval.py`), not just here.
+
 ## Related
 
 - [security-agent.md](security-agent.md) — the A2A workflow that consumes the pack

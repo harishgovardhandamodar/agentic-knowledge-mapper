@@ -302,6 +302,12 @@ flowchart LR
   carries efficacy priors and burden ratings; the analyst ranks by driver
   pressure minus burden, residuals stay indicative, and inapplicable controls
   are deferred with reasons rather than silently dropped.
+- **History is immutable.** Re-scores write new rows (`supersedes_id`);
+  old packs render with superseded badges plus changelog excerpts, never
+  re-arithmetic. Fingerprint moves without version bumps fail CI.
+- **Research is collected once per subject.** The collector caches by
+  (investigation, subject, questions) with a corpus-drift guard, so
+  parallel model jobs share literature instead of triplicating fan-out.
 - **The LLM is optional in the loop, not in the product.** Research, scoring,
   and diagram generation all have deterministic paths; the pack's own evalkit
   pins the expected scores so a silent model change fails CI instead of
