@@ -242,6 +242,97 @@ def audit_section(section: dict, page_norms: list, page_toks: list) -> dict:
     return res
 
 
+_SELF_CONTRADICTIONS: list[tuple[str, "re.Pattern", "re.Pattern"]] = [
+    # (concept, absolute-praise pattern, control-missing pattern)
+    ("residency",
+     re.compile(r"(strict|strong|robust|enforce[sd]?|guarantee[sd]?).{0,40}"
+                r"(residency|data residency|sovereignty)|residency.{0,30}"
+                r"(guardrail|guarantee|enforced|assured)", re.I),
+     re.compile(r"no.{0,30}residency|residency.{0,30}(gap|missing|absent|"
+                r"unknown|opaque|unclear)|lack of.{0,20}residency", re.I)),
+    ("retention",
+     re.compile(r"zero(-| )?data(-| )?retention|no(-| )train(ing)?.{0,30}"
+                r"(clause|guarantee|contract)|data is not (retained|used for "
+                r"training)|strict.{0,30}retention", re.I),
+     re.compile(r"no.{0,30}retention|retention.{0,30}(gap|missing|unknown|"
+                r"opaque|unclear)|lack of.{0,20}retention|zero(-| )retention"
+                r".{0,30}(unconfirmed|not confirmed|unknown|opaque)", re.I)),
+    ("dlp",
+     re.compile(r"strict.{0,30}(dlp|redaction)|(dlp|redaction).{0,30}"
+                r"(enforced|in place|gate|guardrail)", re.I),
+     re.compile(r"no.{0,30}(dlp|redaction)|(dlp|redaction).{0,30}"
+                r"(gap|missing|absent)", re.I)),
+    ("classification",
+     re.compile(r"classification gate.{0,30}(enforced|in place|blocks)|"
+                r"strict classification", re.I),
+     re.compile(r"no classification gate|classification.{0,30}"
+                r"(gap|missing)|lack of classification", re.I)),
+    ("audit",
+     re.compile(r"(immutable|comprehensive|strict).{0,30}audit (log|trail)|"
+                r"audit.{0,30}(in place|enforced)", re.I),
+     re.compile(r"no audit (log|trail)|audit.{0,30}(gap|missing|absent)", re.I)),
+]
+
+_ATTRIBUTED_RE = re.compile(
+    r"according to|vendor (docs|documentation|states|claims|documentation)|"
+    r"documentation states|docs (state|say|describe)", re.I)
+
+
+def _contradiction_pass(answer: dict, sections: list) -> list[dict]:
+    """Strip absolute control praise the answer itself denies elsewhere.
+
+    Returns finding dicts for the audit report. Purely deterministic: no
+    pages, no model calls.
+    """
+    others = " ".join(
+        [answer.get("summary") or ""]
+        + [str(s.get("body") or "") for s in sections]
+        + [" ".join(str(x) for x in (answer.get("conflicts") or []))]
+        + [" ".join(str(x) for x in (answer.get("key_points") or []))])
+    denied = {name for name, _, deny in _SELF_CONTRADICTIONS
+              if deny.search(others)}
+    if not denied:
+        return []
+    praise = [(name, aff) for name, aff, _ in _SELF_CONTRADICTIONS
+              if name in denied]
+    findings: list[dict] = []
+
+    def _hit(sentence: str) -> str:
+        if _ATTRIBUTED_RE.search(sentence):
+            return ""
+        for name, aff in praise:
+            if aff.search(sentence):
+                return name
+        return ""
+
+    if isinstance(answer.get("summary"), str) and answer["summary"]:
+        kept, dropped = [], []
+        for s in _sentences(answer["summary"]):
+            concept = _hit(s)
+            (dropped if concept else kept).append(s)
+        if dropped:
+            answer["summary"] = " ".join(kept)
+            for s in dropped:
+                findings.append({"section": "summary", "sentence": s[:200],
+                                 "reason": "self_contradiction",
+                                 "detail": f"praises a control the answer "
+                                           f"lists as missing"})
+    for sec in sections:
+        body = sec.get("body") or ""
+        if not body:
+            continue
+        bad = [{"sentence": s} for s in _sentences(body) if _hit(s)]
+        if bad:
+            _strip_sentences(sec, bad)
+            for b in bad:
+                findings.append({
+                    "section": (sec.get("heading") or "")[:80],
+                    "sentence": b["sentence"][:200],
+                    "reason": "self_contradiction",
+                    "detail": "praises a control the answer lists as missing"})
+    return findings
+
+
 def _strip_sentences(section: dict, bad: list) -> int:
     """Delete the given sentences from a section body. Never adds text.
 
@@ -402,6 +493,7 @@ def audit_answer(question: str, answer: dict, pages: list, *,
         "unsupported": 0, "removed": 0, "repairs": 0, "repairs_held": 0,
         "unsupported_remaining": 0,
         "sections_stripped": 0, "sections_emptied": 0,
+        "contradictions": 0,
         "drift_candidates": 0, "drift_flagged": 0, "sections_dropped": 0,
         "by_reason": {"no_evidence_for": 0}, "examples": [],
         "dropped_sections": [], "elapsed_ms": 0,
@@ -467,6 +559,21 @@ def audit_answer(question: str, answer: dict, pages: list, *,
             report["sections_emptied"] += 1
 
     sections[:] = [s for s in sections if (s.get("body") or "").strip()]
+
+    # --- pass 2b: self-contradiction -----------------------------------------
+    # An answer must not praise a control ("strict residency guardrails")
+    # while its own gaps list that control as missing. Grounding checks each
+    # sentence against the sources; this checks the answer against itself.
+    # Only absolute, unattributed praise is stripped: a sentence that
+    # attributes the claim ("according to the vendor docs") is legitimate
+    # context for the denial, and item 7 of the report contract wants such
+    # claims labelled, not deleted.
+    for found in _contradiction_pass(answer, sections):
+        report["contradictions"] += 1
+        report["by_reason"]["self_contradiction"] = report["by_reason"].get(
+            "self_contradiction", 0) + 1
+        if len(report["examples"]) < 6:
+            report["examples"].append(found)
 
     # What survived: should be zero whenever the guard is on, which is the point
     # of the counter -- a non-zero value means a strip failed to remove its

@@ -48,6 +48,39 @@ class TestRenderSources(unittest.TestCase):
         with mock.patch.dict(os.environ, {"AKM_CHROMIUM_BIN": "/nonexistent"}):
             self.assertEqual(render_sources([FLOW]), {})
 
+    def test_tall_figure_gets_a_solo_page(self):
+        # A figure clipped out of its batch is retried alone with the whole
+        # page to itself instead of falling back to source text.
+        import tempfile
+        from app import mermaid_png
+        a = "flowchart TD\n A-->B"
+        b = "sequenceDiagram\n X->>Y: tall"
+        calls = []
+
+        def fake_batch(binary, js, sources):
+            calls.append(list(sources))
+            if len(sources) > 1:
+                return {a: _fake_png()}
+            return {sources[0]: _fake_png()}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict(os.environ, {
+                    "AKM_MERMAID_CACHE": tmp,
+                    "AKM_CHROMIUM_BIN": "/bin/true"}):
+                with mock.patch.object(mermaid_png, "_chromium_bin",
+                                       return_value="/bin/true"):
+                    with mock.patch.object(mermaid_png, "_render_batch",
+                                           side_effect=fake_batch):
+                        got = render_sources([a, b])
+        self.assertEqual(set(got), {a, b})
+        self.assertIn([b], calls)
+
+    def test_house_style_is_in_the_page(self):
+        from app.mermaid_png import _page_html
+        html = _page_html([FLOW], "file:///x/mermaid.min.js")
+        self.assertIn("DejaVu Sans", html)
+        self.assertIn("background", html)
+
     def test_disk_cache_avoids_the_browser(self):
         import tempfile
         from app import mermaid_png

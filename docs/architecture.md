@@ -71,6 +71,9 @@ flowchart TB
         AG["agent.py<br/>collection loop"]
         EX["explainer.py<br/>Q&A pipeline"]
         SEC["security_agent.py<br/>+ agents.py (A2A)<br/>+ security.py (engine)"]
+        DOS["dossier.py<br/>report assembly"]
+        MMP["mermaid_png.py<br/>figure renderer"]
+        BRW["headless Chromium<br/>+ vendored mermaid.js"]
         MGR["manager.py<br/>fan-out + synthesis"]
         JOB["jobqueue.py<br/>durable queue (security runs)"]
         SCH["scheduler.py<br/>cron ticks"]
@@ -87,6 +90,10 @@ flowchart TB
     AG & EX & SEC --> LLM
     AG & EX & SEC & MGR & LED --> DB
     SEC --> LED
+    API --> DOS
+    DOS --> MMP
+    MMP --> BRW
+    MMP --> VOLC[("picture cache<br/>data/mermaid_png")]
 
 ```
 
@@ -98,6 +105,9 @@ flowchart TB
 | `app/agent.py` | Collection loop: plan → search → analyze → map → refine (background thread) |
 | `app/explainer.py` | Question answering: graph-first research → compose → ground → critique → diagram |
 | `app/security_agent.py` + `app/agents.py` + `app/security.py` + `app/threatpack.py` | Security assessments via the A2A envelope protocol, scored against a versioned pack |
+| `app/dossier.py` | Report assembly: executive summary + 7 sections from stored rows, Markdown prose, Markdown+images bundle |
+| `app/mermaid_png.py` | Figure renderer: batch-draws mermaid sources to PNG via headless Chromium, cached by source hash |
+| Chromium + vendored `mermaid.min.js` | Baked into the image so PDF/bundle exports draw real pictures with no network |
 | `app/manager.py` | Command parsing, fan-out over topics, summary compilation |
 | `app/standards_matrix.py` | Relevance-ranked standards score matrix served to the security pane |
 | `app/cve.py` | CVE collection and enrichment (NVD → CIRCL → recorded unknown) |
@@ -219,6 +229,38 @@ sequenceDiagram
     API-->>UI: nodes + edges → vis-network
 ```
 
+## Report exports (dossier → Markdown / PDF / bundle)
+
+The Summary tab's Full report section previews the dossier and exports it in
+three formats. All of them read the same `investigation_dossier()` payload,
+so preview, Markdown, PDF and bundle can never disagree about what was
+investigated or how a score was reached.
+
+```mermaid
+flowchart LR
+    UI2["Browser<br/>Preview / Print"] --> API2["main.py<br/>/dossier · /markdown · /pdf · /bundle"]
+    API2 --> DOS2["dossier.py<br/>exec summary + §§1–8"]
+    DOS2 --> MD["dossier.md<br/>prose + mermaid fences"]
+    MD --> PDF["security.py build_pdf<br/>A4 + vectors + PNGs"]
+    MD --> ZIP["dossier_bundle()<br/>md + images/*.png"]
+    DOS2 --> MMP2["mermaid_png.py<br/>collect → render → cache"]
+    MMP2 --> CHR["headless Chromium<br/>vendored mermaid.js"]
+    MMP2 --> CAC[("data/mermaid_png<br/>sha1(source).png")]
+```
+
+- **Markdown** is the prose plus the mermaid fences verbatim — it renders
+  natively on GitHub and keeps every figure re-renderable elsewhere.
+- **PDF** draws the three canonical figures (`dataflow`, `workflow`,
+  `threat_paths`) as ReportLab vectors and every other mermaid fence as a
+  rendered PNG picture. A fence with no picture keeps its source text: a
+  missing picture never breaks the export.
+- **Bundle** (`.zip`) is the Markdown with a picture link above each fence
+  plus the pictures under `images/` — figures show in viewers with no
+  diagram plugin, and the fences stay for GitHub and reproducibility.
+- **Pictures are content-addressed.** Rendered PNGs persist in the
+  `akm_data` volume keyed by source hash, so repeat exports never relaunch
+  the browser; a changed diagram re-renders, an unchanged one does not.
+
 ## Key design decisions
 
 - **Investigations scope everything.** Artifacts, relationships, runs, explanations,
@@ -245,6 +287,10 @@ sequenceDiagram
   path it took in the trace. See [explainer](explainer.md).
 - **Security is a separate agent family** speaking an envelope protocol (A2A),
   searching the app's own graph for evidence. See [security-agent](security-agent.md).
+- **Exports are assembled, not generated.** Dossier prose, PDF vectors, and
+  rendered figures all read stored rows and cached pictures — no LLM, no
+  recomputation — so re-exporting the same investigation byte-agrees on the
+  numbers. See [frontend](frontend.md).
 - **The LLM is optional in the loop, not in the product.** Research, scoring,
   and diagram generation all have deterministic paths; the pack's own evalkit
   pins the expected scores so a silent model change fails CI instead of

@@ -219,8 +219,8 @@ The executive summary is the answer; the dossier is the working. It is a
 separate surface in the same tab because the two answer different questions:
 "what do we have" versus "how did we get here, and can I check it".
 
-`app/dossier.py` builds it from stored rows in four parts, in the order the
-work happened:
+`app/dossier.py` builds it from stored rows: an executive summary with the
+answer first, then seven sections in the order the work happened:
 
 1. **The request** -- title, keywords, description and sources verbatim, the
    same strings the planner read.
@@ -239,22 +239,33 @@ work happened:
    pack version and fingerprint it was computed against. Current and superseded
    rows are both reported, marked as such.
 
-Section 5 appends each *current* assessment's stored report verbatim, with its
+Section 5 appends each assessment's stored report verbatim, with its
 headings demoted so it cannot restart the dossier's own outline. Section 4
 explains how a number was reached; the appendix is the report the user read, so
-the two can be compared rather than reconciled.
+the two can be compared rather than reconciled. Section 6 indexes every
+diagram once (stored figures, report fences, explainer figures, deduplicated
+by source), and section 7 reprints each answered deep-dive in full with its
+diagram and sources.
 
-**One payload, three surfaces.** `investigation_dossier()` returns the
+**One payload, four surfaces.** `investigation_dossier()` returns the
 structured dossier; `dossier_markdown()` renders that same data as prose. The
-JSON, Markdown and PDF endpoints all read from it, and the PDF passes its
-payload into the writer rather than rebuilding -- so the cover's numbers and
-the body cannot disagree.
+JSON, Markdown, PDF and bundle endpoints all read from it, and the PDF passes
+its payload into the writer rather than rebuilding -- so the cover's numbers
+and the body cannot disagree.
 
 | Endpoint | Returns |
 |---|---|
 | `GET /api/investigations/{id}/dossier` | the structured dossier |
 | `GET /api/investigations/{id}/dossier/markdown` | the full write-up as Markdown |
 | `GET /api/investigations/{id}/dossier/pdf` | the same write-up as a PDF (501 without reportlab) |
+| `GET /api/investigations/{id}/dossier/bundle` | `.zip`: the Markdown with picture links plus every diagram as `images/*.png` |
+
+Diagrams appear as pictures everywhere, not just in the tab. The PDF draws
+canonical figures as vectors and renders every other mermaid fence to PNG via
+`app/mermaid_png.py` (headless Chromium, pictures cached by source hash); the
+bundle embeds the same pictures with relative links while keeping the fences.
+A figure that cannot be rendered keeps its source text -- the export stays
+complete rather than failing.
 
 The three assessment paths keep their own meanings and are never averaged: the
 dossier says so in prose and prints one verdict block on the PDF cover only
@@ -262,12 +273,30 @@ when a single score exists. When several exist it prints the scope table
 instead, because printing one of them as *the* number would rank a confidence
 against a risk.
 
+Superseded assessments never reprint: section 4 condenses them to score plus
+delta, and section 5 keeps the current reports verbatim with a change log for
+the rest. Section 8 registers what was not closed -- interrupted runs,
+unanswered questions, sub-70% coverage threats, as-declared controls with
+efficacies, review backlog -- and the executive summary opens with the
+highest-residual-threat table plus a confidence block (answered count,
+accepted/pending split, failed runs, last assessment) and any open
+explainer_gap goals, so the headline number cannot be read alone.
+
+"Usable after review" means accepted by a reviewer: pending artifacts are
+unjudged, not evidence, and the table lists accepted first. Security runs
+always leave measurable stats (assessment id, residual, posture, pack
+identity, duration), rendered per run in section 2; a security history entry
+whose run left none carries an "incomplete stats" chip, and the Coverage
+section names failed runs and open gap goals from the summary payload.
+
 In the tab, `loadDossier()` fetches on demand (the payload is large and most
 visits only need the summary) and caches until the investigation changes.
-`secDossierRender()` builds the four sections read-only; wide tables scroll
-inside `.dos-table-wrap` rather than stretching the tab. Print is the browser
-fallback for a server without reportlab: a print stylesheet hides the chrome
-and leaves the dossier.
+`secDossierRender()` builds every section read-only -- executive summary,
+§§1–8 -- with each diagram drawn live by Mermaid and deduplicated exactly
+like the PDF's index, so preview and export show the same figures. Wide
+tables scroll inside `.dos-table-wrap` rather than stretching the tab. Print
+is the browser fallback for a server without reportlab: a print stylesheet
+hides the chrome and leaves the dossier.
 
 `artifact_actor()` and `artifact_purpose()` live in `app/dossier.py` and
 `main.py` imports them, so the API and the dossier attribute an artifact the

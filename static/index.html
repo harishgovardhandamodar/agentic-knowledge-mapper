@@ -1786,7 +1786,14 @@ function renderSummaryTab(d) {
         `<span class="${(a.review || '') === 'accepted' ? 'sum-review-accepted' : 'sum-review-pending'}">${escHtml(a.review || '')}</span></div>`).join('') + '</div>';
   }
   html += `<div class="sum-section"><h4><i class="fas fa-chart-simple"></i> Coverage</h4>` +
-    `<p style="font-size:12px;color:var(--text2);">${c.artifacts || 0} artifacts (${c.papers || 0} papers) · ${c.threats || 0} threats scored · ${c.explanations || 0} explanations · ${c.cves || 0} known issues</p></div>`;
+    `<p style="font-size:12px;color:var(--text2);">${c.artifacts || 0} artifacts (${c.papers || 0} papers) · ${c.threats || 0} threats scored · ${c.explanations || 0} explanations · ${c.cves || 0} known issues</p>`;
+  const rh = d.run_health || {};
+  if ((rh.failed_runs || 0) > 0)
+    html += `<p style="font-size:12px;color:var(--orange)"><b>${rh.failed_runs} run(s) failed or interrupted</b> — their goals are listed under Full report, section 8.</p>`;
+  (rh.open_gaps || []).forEach(g => {
+    html += `<p style="font-size:12px;color:var(--text2)"><b>Open gap (run #${g.run_id}, ${escHtml(g.status || 'unknown')}).</b> ${escHtml((g.goal || 'goal not recorded').slice(0, 160))}</p>`;
+  });
+  html += `</div>`;
   const threats = ((d.top_findings || {}).threats) || [];
   if (threats.length) {
     html += `<div class="sum-section"><h4><i class="fas fa-triangle-exclamation"></i> Top threats</h4>` +
@@ -1865,12 +1872,46 @@ function secDossierRender() {
     const lead = done0[0].summary || done0[0].excerpt || '';
     if (lead) h += `<p><b>Lead finding.</b> ${escHtml(lead.length > 420 ? lead.slice(0, 419) + '…' : lead)}</p>`;
   }
+  // Highest residual threats: the headline is an aggregate, these are what
+  // is still standing after controls.
+  const heat = [];
+  latest0.forEach(r => (((r.detail || {}).items) || []).forEach(t => {
+    if (t && t.residual_score !== undefined && t.residual_score !== null)
+      heat.push({path: r.label, t});
+  }));
+  heat.sort((a, b) => (b.t.residual_score || 0) - (a.t.residual_score || 0));
+  if (heat.length) {
+    h += `<p><b>Highest residual threats.</b></p>` +
+      `<div class="dos-table-wrap"><table class="dos-table"><thead><tr><th>Threat</th><th>Residual</th><th>Coverage</th><th>Path</th></tr></thead><tbody>` +
+      heat.slice(0, 6).map(e => {
+        const cov = (typeof e.t.coverage === 'number') ? `${Math.round(e.t.coverage)}%` : '—';
+        const weak = (typeof e.t.coverage === 'number') && e.t.coverage < 70 ? ' <i>(lowest coverage)</i>' : '';
+        return `<tr><td class="dos-wrap">${escHtml(e.t.id)} ${escHtml(e.t.title || '')}</td><td>${escHtml(String(e.t.residual_score))}/100</td><td>${cov}${weak}</td><td class="dos-wrap">${escHtml(e.path)}</td></tr>`;
+      }).join('') + `</tbody></table></div>`;
+    const weakest = heat.filter(e => typeof e.t.coverage === 'number')
+      .sort((a, b) => a.t.coverage - b.t.coverage).slice(0, 2);
+    if (weakest.length && weakest[0].t.coverage < 70)
+      h += `<p style="color:var(--orange)">Lowest coverage: ${weakest.map(e => `${escHtml(e.t.id)} (${Math.round(e.t.coverage)}%)`).join(', ')} — the LOW headline does not cover these; see section 8.</p>`;
+  }
   const gaps = [];
   if (tot.known_issues) gaps.push(`${tot.known_issues} known issue(s) surfaced`);
   const unans = (tot.answers || 0) - (tot.answered || 0);
   if (unans > 0) gaps.push(`${unans} question(s) still unanswered`);
   if (fl.duplicates) gaps.push(`${fl.duplicates} duplicate artifact(s)`);
   if (gaps.length) h += `<p style="color:var(--orange)"><b>Open items.</b> ${escHtml(gaps.join('; '))}.</p>`;
+  {
+    const conf = [`${tot.answered || 0}/${tot.answers || 0} questions answered`,
+      `${fl.accepted || 0} accepted · ${fl.pending || 0} pending artifacts`];
+    const failed = (d.runs || []).filter(r => (r.status || '') !== 'done');
+    if (failed.length) conf.push(`${failed.length} run(s) failed or interrupted`);
+    if (latest0.length) conf.push(`last assessment #${Math.max(...latest0.map(r => r.id))}`);
+    h += `<p><b>Confidence.</b> ${escHtml(conf.join('; '))}.</p>`;
+    const gapRuns = (d.runs || []).filter(r => (r.trigger || '') === 'explainer_gap' && (r.status || '') !== 'done' && r.goal);
+    if (gapRuns.length) {
+      h += `<p style="color:var(--orange)"><b>Open questions.</b> Follow-up research that never finished:</p><ul>` +
+        gapRuns.map(r => `<li><b>Run #${r.id}</b> (${escHtml(r.status || 'unknown')}): ${escHtml(r.goal.length > 160 ? r.goal.slice(0, 159) + '…' : r.goal)}</li>`).join('') + `</ul>`;
+    }
+  }
   h += `</div>`;
 
   // --- 1. the request ---
@@ -1904,7 +1945,17 @@ function secDossierRender() {
         `</tbody></table></div>`;
     }
     if (cost.length) h += `<p style="color:var(--text2)">${escHtml(cost.join(' · '))}</p>`;
-    if (r.error) h += `<p style="color:var(--red)"><b>Error.</b> ${escHtml(r.error)}</p>`;
+    if (st.assessment_id != null) {
+      const abits = [`assessment #${st.assessment_id}`];
+      if (st.residual_pct != null && !isNaN(Number(st.residual_pct))) abits.push(`residual ${Number(st.residual_pct)}/100`);
+      if (st.posture) abits.push(String(st.posture).slice(0, 80));
+      [['threats', 'threats'], ['evidence', 'evidence items'], ['control_count', 'controls'], ['known_exploits', 'known exploits']]
+        .forEach(([k, label]) => { if (st[k] != null) abits.push(`${st[k]} ${label}`); });
+      if (st.duration_ms != null && !isNaN(Number(st.duration_ms))) abits.push(`${Math.round(Number(st.duration_ms) / 1000)}s`);
+      if (st.failed) abits.push(`failed: ${String(st.failed).slice(0, 120)}`);
+      h += `<p><b>Assessment.</b> ${escHtml(abits.join(' · '))}.</p>`;
+    }
+    if (r.error) h += `<p style="color:var(--text2)"><b>Outcome.</b> ${escHtml(r.status || 'error')}: ${escHtml(r.error)} — a past run's record, not a live fault; what it left missing is tracked in section 8.</p>`;
   });
   const shapes = d.query_shapes || [];
   if (shapes.length) {
@@ -1923,9 +1974,11 @@ function secDossierRender() {
     `<div class="dos-chip"><b>${tot.known_issues || 0}</b>known issues</div>` +
     `<div class="dos-chip"><b>${tot.answered || 0}/${tot.answers || 0}</b>questions answered</div>` +
     `<div class="dos-chip"><b>${fl.accepted || 0}</b>accepted</div>` +
+    `<div class="dos-chip"><b>${fl.pending || 0}</b>pending</div>` +
     `<div class="dos-chip"><b>${fl.rejected || 0}</b>rejected</div>` +
+    `<div class="dos-chip"><b>${tot.usable || 0}</b>usable (accepted only)</div>` +
     `</div>` +
-    `<p style="color:var(--text2)">Rejected artifacts stand in no score: they are listed for the record and excluded everywhere else.</p>`;
+    `<p style="color:var(--text2)">Rejected artifacts stand in no score: they are listed for the record and excluded everywhere else. Pending artifacts are unjudged, not evidence.</p>`;
   if ((col.by_type || []).length) {
     h += `<p><b>Composition.</b> ${escHtml((col.by_type || []).slice(0, 8).map(c => `${c.count} ${c.name}`).join(' · '))}` +
       (col.by_actor && col.by_actor.length ? ` — by actor: ${escHtml(col.by_actor.map(c => `${c.count} ${c.name}`).join(' · '))}` : '') +
@@ -1961,9 +2014,18 @@ function secDossierRender() {
   if ((scores.paths_present || []).length > 1) {
     h += `<p style="color:var(--orange);font-size:12px">These numbers do not share a scale and are never averaged.</p>`;
   }
+  const curByPath = {};
+  rows.forEach(r => { if (r.is_latest) curByPath[r.path] = r; });
   rows.forEach(row => {
     const det = row.detail || {};
     h += `<h5>${escHtml(row.label)}${row.is_latest ? ' <span style="color:var(--green);font-size:10px">(current)</span>' : ' <span style="color:var(--text2);font-size:10px">(superseded)</span>'} — assessment #${row.id}</h5>`;
+    if (!row.is_latest) {
+      // Superseded rows keep score + delta, not the full arithmetic.
+      const cur = curByPath[row.path];
+      const delta = cur ? `${(Number(cur.score) - Number(row.score)) >= 0 ? '+' : ''}${(Number(cur.score) - Number(row.score)).toFixed(1)} vs current (#${cur.id})` : 'path retired, no current version';
+      h += `<p style="color:var(--text2);font-size:12px">Superseded ${(row.created_at || '').slice(0, 10)} — ${escHtml(delta)}. See the §5 change log for the version history.</p>`;
+      return;
+    }
     h += `<div class="dos-scope"><div class="dos-chip"><b>${Number(row.score || 0).toFixed(1)}</b>${escHtml(row.score_meaning)}</div>` +
       (det.kind !== 'hypothesis' ? `<div class="dos-chip"><b>${Number(row.inherent || 0).toFixed(1)} → ${Number(row.residual || 0).toFixed(1)}</b>inherent → residual (Δ${Number(row.delta || 0).toFixed(1)})</div>` : '') +
       `</div>`;
@@ -2003,14 +2065,30 @@ function secDossierRender() {
     }
   });
   // --- 5. the assessment reports, as written: the full text behind section 4 ---
+  // Current reports print in full; superseded ones collapse to a change log,
+  // exactly like the export, instead of tripling the section.
   const reported = rows.filter(r => (r.report_markdown || '').trim());
+  const repCur = reported.filter(r => r.is_latest);
+  const repOld = reported.filter(r => !r.is_latest);
   if (reported.length) {
     h += `<div class="dos-sec"><h4>5 · Assessment reports, as written (${reported.length})</h4>` +
-      `<p style="color:var(--text2);font-size:12px">Each report exactly as its assessment produced it. A diagram fenced inside a report is also drawn live in section 6.</p>`;
-    reported.forEach(r => {
-      h += `<h5>${escHtml(r.label)} — assessment #${r.id}${r.is_latest ? ' (current)' : ' (superseded)'}</h5>` +
+      `<p style="color:var(--text2);font-size:12px">Each current report exactly as its assessment produced it. A diagram fenced inside a report is also drawn live in section 6.</p>`;
+    repCur.forEach(r => {
+      h += `<h5>${escHtml(r.label)} — assessment #${r.id} (current)</h5>` +
         `<pre style="white-space:pre-wrap;word-break:break-word;font-size:11px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:8px;max-height:320px;overflow:auto;">${escHtml(r.report_markdown)}</pre>`;
     });
+    if (repOld.length) {
+      const curByPath = {};
+      rows.forEach(r => { if (r.is_latest) curByPath[r.path] = r; });
+      h += `<h5>Earlier versions (change log)</h5>` +
+        `<div class="dos-table-wrap"><table class="dos-table"><thead><tr><th>Assessment</th><th>Created</th><th>Score</th><th>Inherent → residual</th><th>Δ vs current</th></tr></thead><tbody>` +
+        repOld.map(r => {
+          const cur = curByPath[r.path];
+          const delta = cur ? `${(Number(cur.score) - Number(r.score)) >= 0 ? '+' : ''}${(Number(cur.score) - Number(r.score)).toFixed(1)}` : '— (path retired)';
+          const span = (typeof r.inherent === 'number' && typeof r.residual === 'number') ? `${r.inherent} → ${r.residual}` : '—';
+          return `<tr><td>${escHtml(r.label)} — #${r.id}</td><td>${escHtml((r.created_at || '').slice(0, 10))}</td><td>${escHtml(String(r.score))}/100</td><td>${escHtml(span)}</td><td>${escHtml(delta)}</td></tr>`;
+        }).join('') + `</tbody></table></div>`;
+    }
     h += `</div>`;
   }
   // --- 6. diagrams: every mermaid the investigation produced ---
@@ -2087,6 +2165,49 @@ function secDossierRender() {
       }
       if ((a.documents || []).length) h += `<p><b>Documents.</b> ${escHtml(a.documents.join(', '))}</p>`;
     });
+    h += `</div>`;
+  }
+
+  // --- 8. open questions and evidence gaps: what was not closed ---
+  const badRuns = (d.runs || []).filter(r => (r.status || '') !== 'done');
+  const stuckA = answers0.filter(a => (a.status || '') !== 'done');
+  const weakT = [];
+  rows0.forEach(r => (((r.detail || {}).items) || []).forEach(t => {
+    if (t && typeof t.coverage === 'number' && t.coverage < 70)
+      weakT.push({path: r.label, t});
+  }));
+  weakT.sort((a, b) => a.t.coverage - b.t.coverage);
+  const ctrlIds = [];
+  rows0.forEach(r => (((r.detail || {}).items) || []).forEach(t => {
+    (((t || {}).controls) || []).forEach(c => {
+      if (c && !ctrlIds.includes(c)) ctrlIds.push(c);
+    });
+  }));
+  if (badRuns.length || stuckA.length || weakT.length || ctrlIds.length || (fl.pending)) {
+    h += `<div class="dos-sec"><h4>8 · Open questions and evidence gaps</h4>` +
+      `<p style="color:var(--text2);font-size:12px">What the investigation did not close. Work through this section before acting on the headline score.</p>`;
+    if (badRuns.length) {
+      h += `<h5>Interrupted runs</h5><ul>` +
+        badRuns.map(r => `<li><b>Run #${r.id}</b> (${escHtml(r.trigger || 'manual')}): ${escHtml(r.error || 'did not finish')}.</li>`).join('') + `</ul>`;
+    }
+    if (stuckA.length) {
+      h += `<h5>Unanswered questions</h5><ul>` +
+        stuckA.map(a => `<li><b>Explainer #${a.id}</b>: status ${escHtml(a.status || 'unknown')} — ${escHtml((a.question || '').slice(0, 100))}.</li>`).join('') + `</ul>`;
+    }
+    if (weakT.length) {
+      h += `<h5>Weakest coverage</h5><p style="color:var(--text2);font-size:12px">The aggregate headline does not describe these threats.</p>` +
+        `<div class="dos-table-wrap"><table class="dos-table"><thead><tr><th>Threat</th><th>Coverage</th><th>Residual</th><th>Path</th></tr></thead><tbody>` +
+        weakT.map(e => `<tr><td class="dos-wrap">${escHtml(e.t.id)} ${escHtml(e.t.title || '')}</td><td>${Math.round(e.t.coverage)}%</td><td>${escHtml(String(e.t.residual_score))}/100</td><td class="dos-wrap">${escHtml(e.path)}</td></tr>`).join('') +
+        `</tbody></table></div>`;
+    }
+    if (ctrlIds.length) {
+      h += `<h5>Controls relied upon</h5>` +
+        `<p style="color:var(--orange);font-size:12px">Every control below is <b>as-declared</b>: its efficacy is the value the assessment computed with, not a measured result. Treat the residual as provisional until each control is independently tested.</p>` +
+        `<p>${ctrlIds.map(c => `<span class="dos-chip">${escHtml(c)} · declared</span>`).join(' ')}</p>`;
+    }
+    if (fl.pending)
+      h += `<p><b>Evidence still under review.</b> ${fl.pending} artifact(s) pending; findings resting on them should be re-checked after triage.</p>`;
+    h += `<p><b>Blast radius not quantified.</b> Reachable Restricted assets, context sizes and steward populations were not recorded — residual risk is a score, not an exposure estimate.</p>`;
     h += `</div>`;
   }
 
@@ -2534,9 +2655,17 @@ async function deleteArtifact(id) {
 
 async function updatePendingCount() {
   if (!currentInv) return;
-  const res = await fetch(`${API}/investigations/${currentInv}/artifacts?review=pending&limit=1`);
+  // Two numbers: everything awaiting triage, and the slice that actually
+  // needs a human decision (relevance >= 0.40). Low-relevance explainer
+  // concepts can wait behind real evidence.
+  const res = await fetch(`${API}/investigations/${currentInv}/artifacts?review=pending&limit=500`);
   const data = await res.json();
-  document.getElementById('pendingCount').textContent = data.total ? `(${data.total})` : '';
+  const items = data.items || [];
+  const actionable = items.filter(a => Number(a.relevance || 0) >= 0.4).length;
+  const el = document.getElementById('pendingCount');
+  if (!el) return;
+  el.textContent = data.total ? `(${data.total})` : '';
+  el.title = data.total ? `${actionable} of ${data.total} pending at relevance ≥ 0.40` : '';
 }
 
 async function loadCollection() {
@@ -6714,7 +6843,10 @@ async function loadSecurityHistory() {
         : i.assessment_path === 'model_hypothesis'
         ? `${i.threat_count || 0} claims · confidence`
         : `${i.exploit_count || 0} exploits`;
-      return `<div style="padding:6px 0;border-bottom:1px solid var(--border);"><a href="#" onclick="loadSecurityById(${i.id});return false;" style="color:var(--accent);">#${i.id} ${escHtml(i.product_name)}</a>${badge} <span style="color:var(--text2)">· ${escHtml(i.exposure)} · ${i.overall_pct}/100 · ${count}</span></div>`;
+      const statChip = (i.stats_complete === false)
+        ? ' <span style="font-size:9.5px;border:1px solid var(--red);color:var(--red);border-radius:3px;padding:0 4px;" title="The run behind this assessment left no measurable stats">incomplete stats</span>'
+        : '';
+      return `<div style="padding:6px 0;border-bottom:1px solid var(--border);"><a href="#" onclick="loadSecurityById(${i.id});return false;" style="color:var(--accent);">#${i.id} ${escHtml(i.product_name)}</a>${badge}${statChip} <span style="color:var(--text2)">· ${escHtml(i.exposure)} · ${i.overall_pct}/100 · ${count}</span></div>`;
     }).join('');
   } catch (e) { el.innerHTML = '<span style="color:var(--red)">Failed to load history</span>'; }
 }

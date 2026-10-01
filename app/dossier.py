@@ -385,7 +385,10 @@ def _collection_section(db, inv_id: int) -> dict[str, Any]:
             "collected_at": _iso(a.created_at),
             "excerpt": _short(a.description or a.content or "", 240),
         })
-    usable = [a for a in arts if (a.review or "") != "rejected"]
+    # "Usable" means a reviewer accepted it. Pending artifacts -- however
+    # relevant -- have not been judged yet, and counting them as evidence
+    # inflates the base the findings stand on.
+    usable = [a for a in arts if (a.review or "") == "accepted"]
     flags = {"accepted": sum(1 for a in arts if (a.review or "") == "accepted"),
              "pending": sum(1 for a in arts if (a.review or "") not in
                             ("accepted", "rejected")),
@@ -452,10 +455,14 @@ def _collection_section(db, inv_id: int) -> dict[str, Any]:
     by_source = Counter((i["source"] or "unspecified") for i in items)
     by_actor = Counter(i["actor"] for i in items)
     by_day = Counter((i["collected_at"] or "")[:10] for i in items if i["collected_at"])
+    rank = {"accepted": 0, "pending": 1, "rejected": 2}
+    items.sort(key=lambda i: (rank.get(i["review"], 1),
+                              -i["relevance"], i["id"]))
     return {
         "totals": {
             "artifacts": len(items),
             "usable": len(usable),
+            "rel_high": sum(1 for i in items if i["relevance"] >= 0.4),
             "relationships": len(rels),
             "relationship_types": dict(Counter(
                 r.relationship_type or "related_to" for r in rels)),
@@ -882,6 +889,41 @@ def dossier_markdown(db, inv_id: int, dossier: dict | None = None) -> str:
         if top:
             parts.append("")
             parts.append("**Lead finding.** " + _short(top, 420))
+    heat: list[tuple[str, dict]] = []
+    for r in latest:
+        for t in ((r.get("detail") or {}).get("items") or []):
+            if isinstance(t, dict) and t.get("residual_score") is not None:
+                heat.append((r["label"], t))
+    heat.sort(key=lambda e: -_f(e[1].get("residual_score")))
+    if heat:
+        # The headline score is an aggregate; the threats below are what is
+        # still standing after controls. A reader who stops at the number
+        # never learns that T12-class items barely moved.
+        parts.append("")
+        parts.append("**Highest residual threats.**")
+        parts.append("")
+        parts.append("| Threat | Residual | Coverage | Path |")
+        parts.append("|---|---|---|---|")
+        for label, t in heat[:6]:
+            cov = t.get("coverage")
+            cov_s = f"{cov:.0f}%" if isinstance(cov, (int, float)) else "—"
+            weak = " *(lowest coverage)*" \
+                if isinstance(cov, (int, float)) and cov < 70 else ""
+            res = t.get("residual_score")
+            res_s = f"{res:g}/100" if isinstance(res, (int, float)) else "—"
+            parts.append(f"| {t.get('id')} {_short(str(t.get('title') or ''), 48)} "
+                         f"| {res_s} | {cov_s}{weak} | {_short(label, 40)} |")
+        weakest = sorted(
+            ((t.get("coverage"), t.get("id")) for _, t in heat
+             if isinstance(t.get("coverage"), (int, float))),
+            key=lambda e: e[0])[:2]
+        if weakest and weakest[0][0] < 70:
+            parts.append("")
+            parts.append("Lowest coverage: "
+                         + ", ".join(f"{i} ({c:.0f}%)" for c, i in weakest)
+                         + " — the LOW headline does not cover these; "
+                         "see section 8 before relying on it in a regulated "
+                         "environment.")
     gaps = []
     if tot.get("known_issues"):
         gaps.append(f"{tot['known_issues']} known issue(s) surfaced")
@@ -893,12 +935,36 @@ def dossier_markdown(db, inv_id: int, dossier: dict | None = None) -> str:
     if gaps:
         parts.append("")
         parts.append("**Open items.** " + "; ".join(gaps) + ".")
+    # Confidence up front: the headline score means little without knowing
+    # how much was answered, what failed, and how much evidence is reviewed.
+    conf = [f"{tot.get('answered', 0)}/{tot.get('answers', 0)} questions answered",
+            f"{fl.get('accepted', 0)} accepted · "
+            f"{fl.get('pending', 0)} pending artifacts"]
+    failed = [r for r in (d.get("runs") or [])
+              if (r.get("status") or "") not in ("done",)]
+    if failed:
+        conf.append(f"{len(failed)} run(s) failed or interrupted")
+    if latest:
+        conf.append(f"last assessment "
+                    f"#{max(r['id'] for r in latest)}")
+    parts.append("")
+    parts.append("**Confidence.** " + "; ".join(conf) + ".")
+    gap_runs = [r for r in (d.get("runs") or [])
+                if (r.get("trigger") or "") == "explainer_gap"
+                and (r.get("status") or "") != "done" and r.get("goal")]
+    if gap_runs:
+        parts.append("")
+        parts.append("**Open questions.** Follow-up research that never "
+                     "finished; its goals are still unanswered:")
+        for r in gap_runs:
+            parts.append(f"- Run #{r['id']} ({r.get('status')}): "
+                         f"{_short(r['goal'], 160)}")
     parts.append("")
     parts.append("Read section 2 for what was asked, section 3 for what came "
                  "back, section 4 for how each score was reached, section 5 "
-                 "for the assessment reports verbatim, section 6 for every "
-                 "diagram, and section 7 for the deep-dives behind each "
-                 "answer.")
+                 "for the current assessment reports, section 6 for every "
+                 "diagram, section 7 for the deep-dives behind each answer, "
+                 "and section 8 for what was not closed.")
     for p in parts:
         A(p)
     A("")
@@ -960,12 +1026,43 @@ def dossier_markdown(db, inv_id: int, dossier: dict | None = None) -> str:
           + (f" · {(r['started_at'] or '')[:19]} → {(r['finished_at'] or '')[:19]}"
              if r.get("started_at") else ""))
         A("")
+        if stats.get("assessment_id"):
+            # Security runs record assessment stats, not search counts: show
+            # what the run produced so short runs still leave a trace.
+            abits = [f"assessment #{stats['assessment_id']}"]
+            if stats.get("residual_pct") is not None:
+                try:
+                    abits.append(f"residual {float(stats['residual_pct']):g}/100")
+                except (TypeError, ValueError):
+                    pass
+            if stats.get("posture"):
+                abits.append(_short(str(stats["posture"]), 80))
+            for key, label in (("threats", "threats"),
+                               ("evidence", "evidence items"),
+                               ("control_count", "controls"),
+                               ("known_exploits", "known exploits")):
+                if stats.get(key) is not None:
+                    abits.append(f"{stats[key]} {label}")
+            if stats.get("duration_ms") is not None:
+                try:
+                    abits.append(f"{float(stats['duration_ms']) / 1000:.0f}s")
+                except (TypeError, ValueError):
+                    pass
+            if stats.get("failed"):
+                abits.append(f"failed: {_short(str(stats['failed']), 120)}")
+            A("**Assessment.** " + " · ".join(abits) + ".")
+            A("")
         if r["stages"]:
             A("**Stages.** " + " · ".join(f"{s['stage']} ×{s['count']}"
                                            for s in r["stages"]))
             A("")
         if r.get("error"):
-            A(f"**Error.** {r['error']}")
+            # A past run's failure is a historical record, not a live fault:
+            # label it as an outcome and point at the gaps register instead
+            # of printing a bare "Error." that reads as if the report broke.
+            A(f"**Outcome.** {r['status']}: {r['error']} — recorded "
+              f"{(r.get('finished_at') or r.get('started_at') or '')[:10]}; "
+              f"what it left missing is tracked in section 8.")
             A("")
 
     shapes = d.get("query_shapes") or []
@@ -989,10 +1086,18 @@ def dossier_markdown(db, inv_id: int, dossier: dict | None = None) -> str:
     tot = col["totals"]
     fl = col["flags"]
     A(f"**Totals.** {tot['artifacts']} artifacts "
-      f"({tot['usable']} usable after review) · {tot['relationships']} relationships · "
+      f"({fl['accepted']} accepted · {fl['pending']} pending · "
+      f"{fl['rejected']} rejected; {tot['usable']} usable after review — "
+      f"accepted only) · {tot['relationships']} relationships · "
       f"{tot['known_issues']} known issues · {tot['answered']}/{tot['answers']} "
       f"questions answered.")
     A("")
+    low = tot['artifacts'] - tot.get('rel_high', tot['artifacts'])
+    if low:
+        A(f"**Relevance note.** {low} artifact(s) sit below 0.40 relevance, "
+          f"mostly explainer-derived concepts: they inform questions, not "
+          f"findings, and appear at the end of the table.")
+        A("")
     A(f"**Review state.** {fl['accepted']} accepted · {fl['pending']} pending · "
       f"{fl['rejected']} rejected"
       + (f" · {fl['drift']} drift-flagged" if fl["drift"] else "")
@@ -1063,6 +1168,8 @@ def dossier_markdown(db, inv_id: int, dossier: dict | None = None) -> str:
           + "; ".join(f"{_PATH_META[p][0]} reports {_PATH_META[p][1]}"
                       for p in paths) + ".")
         A("")
+    cur_by_path = {r.get("path"): r for r in scores["rows"]
+                   if r["is_latest"]}
     for row in scores["rows"]:
         det = row["detail"]
         mark = " _(current)_" if row["is_latest"] else " _(superseded)_"
@@ -1074,6 +1181,23 @@ def dossier_markdown(db, inv_id: int, dossier: dict | None = None) -> str:
              if row["path"] != "model_hypothesis"
              else f"Mean confidence across {len(det.get('claims', []))} claims."))
         A("")
+        if not row["is_latest"]:
+            # A superseded assessment keeps its score and its delta, not its
+            # arithmetic: reprinting every table triples the section for
+            # numbers no decision should use.
+            cur = cur_by_path.get(row.get("path"))
+            if cur is not None:
+                try:
+                    delta = float(cur["score"]) - float(row["score"])
+                    delta_s = f"{delta:+.1f} vs current (#{cur['id']})"
+                except (TypeError, ValueError):
+                    delta_s = "current unreadable"
+            else:
+                delta_s = "path retired, no current version"
+            A(f"Superseded {(row.get('created_at') or '')[:10]} — {delta_s}. "
+              f"See the §5 change log for the version history.")
+            A("")
+            continue
         inp = row["inputs"]
         A(f"**Inputs.** Exposure tier {inp['exposure_label'] or row['exposure']}"
           + (f" (weight {inp['exposure_weight']:g})"
@@ -1222,7 +1346,10 @@ def dossier_markdown(db, inv_id: int, dossier: dict | None = None) -> str:
               + ".")
             A("")
 
-    # --- appendix: each current assessment's own report, verbatim ---
+    # --- appendix: the current reports verbatim, older ones as a log ---
+    # Reprinting every superseded assessment roughly triples this section
+    # without adding information: the numbers that changed are the scores and
+    # the dates, and those fit in a table.
     current = [r for r in scores["rows"] if r["is_latest"] and r.get("report_markdown")]
     if current:
         A("## 5. The assessment reports as written")
@@ -1236,6 +1363,39 @@ def dossier_markdown(db, inv_id: int, dossier: dict | None = None) -> str:
             A("")
             A(_flatten_headings(row["report_markdown"]))
             A("")
+    earlier = [r for r in scores["rows"] if not r["is_latest"]]
+    if earlier:
+        if not current:
+            A("## 5. The assessment reports as written")
+            A("")
+        cur_by_path = {r.get("path"): r for r in scores["rows"]
+                       if r["is_latest"]}
+        A("### Earlier versions (change log)")
+        A("")
+        A("Superseded assessments are summarised, not reprinted: the report "
+          "that changed is above, and what moved between versions is below.")
+        A("")
+        A("| Assessment | Created | Score | Inherent → residual | Δ vs current |")
+        A("|---|---|---|---|---|")
+        for row in earlier:
+            cur = cur_by_path.get(row.get("path"))
+            if cur is not None:
+                try:
+                    delta = float(cur["score"]) - float(row["score"])
+                    delta_s = f"{delta:+.1f}"
+                except (TypeError, ValueError):
+                    delta_s = "—"
+            else:
+                delta_s = "— (path retired)"
+            inh = row.get("inherent")
+            res = row.get("residual")
+            span = (f"{inh:g} → {res:g}"
+                    if isinstance(inh, (int, float))
+                    and isinstance(res, (int, float)) else "—")
+            A(f"| {row['label']} — assessment #{row['id']} "
+              f"| {(row.get('created_at') or '')[:10]} | {row['score']}/100 "
+              f"| {span} | {delta_s} |")
+        A("")
 
     # --- every mermaid source the investigation produced ---
     figs = _diagram_index(scores["rows"], col.get("answers") or [])
@@ -1250,19 +1410,21 @@ def dossier_markdown(db, inv_id: int, dossier: dict | None = None) -> str:
           "assessments is listed once with where it appears. Sources are "
           "reproduced verbatim so each figure can be re-rendered elsewhere.")
         A("")
-        for i, d in enumerate(flat, 1):
-            A(f"### {i}. {d['caption']}")
+        # NOTE: the loop variable must not be `d` -- that name holds the
+        # whole dossier payload, and later sections read runs/scores from it.
+        for i, fig in enumerate(flat, 1):
+            A(f"### {i}. {fig['caption']}")
             A("")
-            where = ", ".join(d["seen_in"][:8])
-            more = (f" (+{len(d['seen_in']) - 8} more)"
-                    if len(d["seen_in"]) > 8 else "")
-            A(f"*{d['origin']} — appears in {where}{more}.*")
+            where = ", ".join(fig["seen_in"][:8])
+            more = (f" (+{len(fig['seen_in']) - 8} more)"
+                    if len(fig["seen_in"]) > 8 else "")
+            A(f"*{fig['origin']} — appears in {where}{more}.*")
             A("")
             # A label the PDF figure specs recognise is drawn as a vector
             # figure; anything else is shown as source, so no diagram is
             # silently dropped or drawn as the wrong figure.
-            A(f"```mermaid {d['label']}" if d.get("label") else "```mermaid")
-            A(d["source"])
+            A(f"```mermaid {fig['label']}" if fig.get("label") else "```mermaid")
+            A(fig["source"])
             A("```")
             A("")
 
@@ -1344,11 +1506,108 @@ def dossier_markdown(db, inv_id: int, dossier: dict | None = None) -> str:
                 A("**Documents referenced.** " + ", ".join(ans["documents"]) + ".")
                 A("")
 
+    # --- what was not closed ---
+    # A report that only states conclusions invites treating declared
+    # controls as tested ones and a LOW headline as covering every threat.
+    # This register names each gap, why it matters, and where it surfaced.
+    A("## 8. Open questions and evidence gaps")
+    A("")
+    A("What the investigation did not close. Work through this section before "
+      "acting on the headline score: every item is something the next run, "
+      "review, or vendor conversation still has to verify.")
+    A("")
+    bad_runs = [r for r in (d.get("runs") or [])
+                if (r.get("status") or "") != "done"]
+    if bad_runs:
+        A("### Interrupted runs")
+        A("")
+        for r in bad_runs:
+            A(f"- **Run #{r['id']}** ({r.get('trigger') or 'manual'}): "
+              f"{r.get('error') or 'did not finish'}. Whatever it was "
+              f"collecting or answering is missing below unless a later run "
+              f"repeated it.")
+        A("")
+    stuck = [a for a in (col.get("answers") or [])
+             if (a.get("status") or "") != "done"]
+    if stuck:
+        A("### Unanswered questions")
+        A("")
+        for a in stuck:
+            A(f"- **Explainer #{a['id']}** ({a.get('mode') or 'answer'}): "
+              f"status {a.get('status') or 'unknown'} — "
+              f"“{_short(str(a.get('question') or ''), 100)}”.")
+        A("")
+    weak: list[tuple[str, dict]] = []
+    for r in [x for x in scores["rows"] if x["is_latest"]]:
+        for t in ((r.get("detail") or {}).get("items") or []):
+            cov = t.get("coverage") if isinstance(t, dict) else None
+            if isinstance(cov, (int, float)) and cov < 70:
+                weak.append((r["label"], t))
+    weak.sort(key=lambda e: _f(e[1].get("coverage")))
+    if weak:
+        A("### Weakest coverage")
+        A("")
+        A("These threats moved the least under controls. The aggregate "
+          "headline does not describe them; in a regulated environment they "
+          "are the residual risk.")
+        A("")
+        A("| Threat | Coverage | Residual | Path |")
+        A("|---|---|---|---|")
+        for label, t in weak:
+            res = t.get("residual_score")
+            res_s = f"{res:g}/100" if isinstance(res, (int, float)) else "—"
+            A(f"| {t.get('id')} {_short(str(t.get('title') or ''), 48)} "
+              f"| {t.get('coverage'):.0f}% | {res_s} "
+              f"| {_short(label, 40)} |")
+        A("")
+    ctrl_ids: list[str] = []
+    for r in [x for x in scores["rows"] if x["is_latest"]]:
+        for t in ((r.get("detail") or {}).get("items") or []):
+            for c in (t.get("controls") or []):
+                if c and c not in ctrl_ids:
+                    ctrl_ids.append(c)
+    if ctrl_ids:
+        try:
+            from .security import _CONTROL_CATALOG
+            catalog = {c["id"]: c for c in _CONTROL_CATALOG}
+        except Exception:
+            catalog = {}
+        A("### Controls relied upon")
+        A("")
+        A("Every control below is **as-declared**: its efficacy is the value "
+          "the assessment computed with, not a measured result. Treat the "
+          "residual as provisional until each control is independently "
+          "tested — configuration samples, log evidence, or red-team "
+          "results — and confirmed in the vendor contract where it depends "
+          "on one (retention, residency, sub-processors).")
+        A("")
+        A("| Control | Efficacy | Standard | Status |")
+        A("|---|---|---|---|")
+        for cid in ctrl_ids:
+            c = catalog.get(cid, {})
+            eff = c.get("efficacy")
+            eff_s = f"{eff:.0%}" if isinstance(eff, (int, float)) else "—"
+            name = _short(str(c.get("name") or cid), 52)
+            A(f"| {cid} {name} | {eff_s} "
+              f"| {_short(str(c.get('standard') or '—'), 40)} | declared |")
+        A("")
+    if fl.get("pending"):
+        A(f"**Evidence still under review.** {fl['pending']} artifact(s) are "
+          f"pending review; findings resting on them should be re-checked "
+          f"after triage.")
+        A("")
+    A("**Blast radius not quantified.** Counts of reachable Restricted "
+      "assets, typical context sizes, and steward populations were not "
+      "recorded, so residual risk is a score, not an exposure estimate.")
+    A("")
+
     A("---")
     A("")
     A("_Every number in this dossier is read from stored rows; none is "
       "recomputed or estimated at render time. Re-running an assessment writes "
-      "a new row and leaves the superseded one above._")
+      "a new row and leaves the superseded one above. “Usable after review” "
+      "means accepted by a reviewer: pending artifacts are unjudged, not "
+      "evidence._")
     return "\n".join(L)
 
 

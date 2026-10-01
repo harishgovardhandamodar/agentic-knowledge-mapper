@@ -465,5 +465,58 @@ class TestKillSwitch(unittest.TestCase):
         os.environ.pop("AKM_WRITEGUARD", None)
 
 
+class TestSelfContradiction(unittest.TestCase):
+    """An answer must not praise a control it lists as missing."""
+
+    def setUp(self):
+        self._env = {k: os.environ.get(k) for k in
+                     ("AKM_WRITEGUARD_REPAIRS", "AKM_WRITEGUARD_JUDGE")}
+        os.environ["AKM_WRITEGUARD_REPAIRS"] = "0"
+        os.environ["AKM_WRITEGUARD_JUDGE"] = "0"
+
+    def tearDown(self):
+        for k, v in self._env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+    def test_praise_the_answer_denies_is_stripped(self):
+        a = {"summary": ("The platform ships with strict data residency "
+                         "guardrails for regulated customers."),
+             "sections": [{"heading": "Gaps",
+                           "body": ("No residency control exists in the "
+                                    "collected sources. Residency "
+                                    "requirements remain unmet.")}]}
+        rep = W.audit_answer("How is residency handled?", a, PAGES)
+        self.assertNotIn("strict data residency guardrails", a["summary"])
+        self.assertIn("No residency control exists",
+                      a["sections"][0]["body"])
+        self.assertEqual(rep["contradictions"], 1)
+        self.assertEqual(rep["by_reason"].get("self_contradiction"), 1)
+
+    def test_attributed_vendor_claim_survives(self):
+        # "According to the docs, X is enforced" next to "no X found" is the
+        # labelled vendor-claims-vs-verified voice the report wants: kept.
+        a = {"sections": [{"heading": "Findings",
+                           "body": ("According to the vendor docs, zero data "
+                                    "retention is enforced. Handling is "
+                                    "described there. No retention guarantee "
+                                    "was found in any collected source.")}]}
+        rep = W.audit_answer("How is retention handled?", a, PAGES)
+        self.assertIn("zero data retention is enforced",
+                      a["sections"][0]["body"])
+        self.assertEqual(rep["contradictions"], 0)
+
+    def test_praise_without_denial_is_untouched(self):
+        a = {"sections": [{"heading": "Findings",
+                           "body": ("The platform ships with strict data "
+                                    "residency guardrails. Latency is fine.")}]}
+        rep = W.audit_answer("How is residency handled?", a, PAGES)
+        self.assertIn("strict data residency guardrails",
+                      a["sections"][0]["body"])
+        self.assertEqual(rep["contradictions"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -150,7 +150,7 @@ class TestWhatWasInvestigated(unittest.TestCase):
                                 error="planner failed"))
             inv.db.commit()
             md = dossier_markdown(inv.db, inv.id)
-            self.assertIn("**Error.** planner failed", md)
+            self.assertIn("**Outcome.** error: planner failed", md)
         finally:
             inv.close()
 
@@ -849,6 +849,157 @@ class TestDossierBundle(unittest.TestCase):
             md = zf.read("dossier.md").decode("utf-8")
             self.assertNotIn("images/", md)
             self.assertIn("```mermaid", md)
+        finally:
+            inv.close()
+
+
+class TestReportImprovements(unittest.TestCase):
+    """Feedback pointers: condense old versions, register open questions,
+    and put the residual heat up front."""
+
+    def _two_run_inv(self):
+        inv = _Inv()
+        out1 = _run("standard", inv.db, inv.id)
+        rec1 = _store(inv.db, inv.id, out1)
+        rec1.markdown = "OLD REPORT BODY UNIQUE-STRING-1"
+        out2 = _run("standard", inv.db, inv.id)
+        rec2 = _store(inv.db, inv.id, out2)
+        rec2.markdown = "NEW REPORT BODY UNIQUE-STRING-2"
+        inv.db.commit()
+        return inv
+
+    def test_superseded_report_is_logged_not_reprinted(self):
+        inv = self._two_run_inv()
+        try:
+            md = dossier_markdown(inv.db, inv.id)
+            # Current report verbatim...
+            self.assertIn("NEW REPORT BODY UNIQUE-STRING-2", md)
+            # ...superseded one condensed to its numbers.
+            self.assertNotIn("OLD REPORT BODY UNIQUE-STRING-1", md)
+            self.assertIn("Earlier versions (change log)", md)
+            self.assertIn("Δ vs current", md)
+            # Section 4 condenses the same way: one full arithmetic only.
+            self.assertEqual(md.count("**Inputs.**"), 1)
+            self.assertIn("Superseded", md)
+        finally:
+            inv.close()
+
+    def test_open_questions_register_names_gaps(self):
+        inv = self._two_run_inv()
+        try:
+            d = investigation_dossier(inv.db, inv.id)
+            d["runs"].append({
+                "id": 99, "trigger": "explainer_gap", "status": "error",
+                "goal": "", "rationale": "", "queries": [], "stats": {},
+                "events": [], "stages": [],
+                "error": "interrupted by server restart",
+                "started_at": "", "finished_at": ""})
+            lat = [r for r in d["scores"]["rows"] if r["is_latest"]][0]
+            lat_items = (lat.get("detail") or {}).get("items") or []
+            lat_items[0]["coverage"] = 55.0
+            lat_items[0]["controls"] = ["C05"]
+            d["collection"]["flags"]["pending"] = 3
+            md = dossier_markdown(inv.db, inv.id, dossier=d)
+            sec8 = md[md.index("## 8. Open questions and evidence gaps"):]
+            self.assertIn("Run #99", sec8)
+            self.assertIn("interrupted by server restart", sec8)
+            self.assertIn("Weakest coverage", sec8)
+            self.assertIn("C05", sec8)
+            self.assertIn("as-declared", sec8)
+            self.assertIn("Evidence still under review", sec8)
+            self.assertIn("Blast radius not quantified", sec8)
+        finally:
+            inv.close()
+
+    def test_past_run_failure_reads_as_history_not_alarm(self):
+        # A bare "**Error.** interrupted ..." in section 2 reads as if the
+        # report itself broke; it is a past run's record and must say so.
+        inv = self._two_run_inv()
+        try:
+            d = investigation_dossier(inv.db, inv.id)
+            d["runs"].append({
+                "id": 99, "trigger": "manual", "status": "error",
+                "goal": "", "rationale": "", "queries": [], "stats": {},
+                "events": [], "stages": [],
+                "error": "interrupted by server restart",
+                "started_at": "", "finished_at": ""})
+            md = dossier_markdown(inv.db, inv.id, dossier=d)
+            sec2 = md[md.index("## 2. What was investigated"):
+                     md.index("## 3. What was collected")]
+            self.assertNotIn("**Error.**", sec2)
+            self.assertIn("**Outcome.** error: interrupted by server "
+                          "restart", sec2)
+            self.assertIn("section 8", sec2)
+        finally:
+            inv.close()
+
+    def test_executive_summary_carries_residual_heat(self):
+        inv = self._two_run_inv()
+        try:
+            md = dossier_markdown(inv.db, inv.id)
+            head = md[:md.index("## 1. The request")]
+            self.assertIn("Highest residual threats", head)
+            # ...and points regulated readers at the gaps register.
+            self.assertIn("section 8", head)
+        finally:
+            inv.close()
+
+
+class TestDossierQuality(unittest.TestCase):
+    """Fixture tests for the report the user actually reads."""
+
+    def _quality_inv(self):
+        inv = _Inv()
+        out = _run("standard", inv.db, inv.id)
+        rec = _store(inv.db, inv.id, out)
+        inv.db.add(AgentRun(
+            investigation_id=inv.id, status="error", trigger="explainer_gap",
+            plan=json.dumps({"goal": "Investigate open questions: residency"}),
+            error="interrupted by server restart"))
+        inv.db.add(Artifact(
+            investigation_id=inv.id, title="Kept paper", artifact_type="paper",
+            source="arxiv", relevance=0.9, review="accepted"))
+        inv.db.add(Artifact(
+            investigation_id=inv.id, title="Unjudged note", artifact_type="note",
+            source="web", relevance=0.1, review="pending"))
+        inv.db.commit()
+        return inv
+
+    def test_latest_assessment_is_self_explanatory(self):
+        inv = self._quality_inv()
+        try:
+            md = dossier_markdown(inv.db, inv.id)
+            row = [r for r in investigation_dossier(inv.db, inv.id)
+                   ["scores"]["rows"] if r["is_latest"]][0]
+            self.assertIn(f"{row['residual']}/100", md)
+            self.assertIn(row["detail"].get("posture", "").split()[0], md)
+            # Pack identity rides with the numbers whenever the assessment
+            # recorded it (offline fixtures may predate versioned packs).
+            if row.get("threat_pack_version"):
+                self.assertIn(row["threat_pack_version"], md)
+                self.assertIn(row.get("threat_pack_fingerprint") or "", md)
+        finally:
+            inv.close()
+
+    def test_failed_gap_run_surfaces_in_summary(self):
+        inv = self._quality_inv()
+        try:
+            md = dossier_markdown(inv.db, inv.id)
+            head = md[:md.index("## 1. The request")]
+            self.assertIn("Open questions.", head)
+            self.assertIn("Investigate open questions: residency", head)
+            self.assertIn("**Confidence.**", head)
+        finally:
+            inv.close()
+
+    def test_pending_does_not_inflate_usable(self):
+        inv = self._quality_inv()
+        try:
+            d = investigation_dossier(inv.db, inv.id)
+            self.assertEqual(d["collection"]["totals"]["usable"], 1)
+            md = dossier_markdown(inv.db, inv.id)
+            self.assertIn("1 accepted · 1 pending", md)
+            self.assertIn("accepted only", md)
         finally:
             inv.close()
 

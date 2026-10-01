@@ -8,9 +8,9 @@ Related: [architecture](architecture.md) · [data-model](data-model.md)
 
 ```mermaid
 flowchart TB
-    GH["repo checkout"] --> IMG["docker build\npython:3.12-slim + requirements"]
+    GH["repo checkout"] --> IMG["docker build\npython:3.12-slim + requirements\n+ chromium + vendored mermaid.js"]
     IMG --> RUN["docker compose up -d\n:8204 → dashboard"]
-    RUN --> VOL[("named volume akm_data\n/app/data → akm.db")]
+    RUN --> VOL[("named volume akm_data\n/app/data → akm.db\n+ mermaid_png/ picture cache")]
     RUN --> GW["env: LLM_BASE_URL (+ fallback)\nmesh peer or host gateway"]
     RUN --> SCH["APScheduler in-process\n1-min timetable tick\n10-min watch tick"]
 ```
@@ -35,6 +35,9 @@ LLM_BASE_URL=http://localhost:8210/v1 python -m uvicorn app.main:app --port 8204
 | `LLM_FALLBACK_URL` | `http://host.docker.internal:8210/v1` | second backend |
 | `LLM_MODEL` / `LLM_FALLBACK_MODEL` | `qwen3.8:latest` / `qwen3.8:27b` | model names per backend |
 | `LLM_TIMEOUT_S` | `180` | per-request timeout |
+| `AKM_CHROMIUM_BIN` | auto-detected (`chromium`, `chromium-browser`, `google-chrome`) | browser used to draw mermaid figures for PDF/bundle export; empty means no binary and exports fall back to source text |
+| `AKM_MERMAID_JS` | `static/vendor/mermaid.min.js` | figure renderer; falls back to the pinned CDN when the vendored file is absent |
+| `AKM_MERMAID_CACHE` | `data/mermaid_png/` (inside the `akm_data` volume) | rendered pictures, keyed by source hash; survives rebuilds, so repeat exports skip the browser |
 
 `GET /api/health` reports gateway reachability and the model inventory
 (`model_available` flag) — the header shows a green/amber/red dot.
@@ -89,6 +92,8 @@ Per-investigation timetables are edited in the sidebar
   restart") so the 429 guard never deadlocks; the scheduler then resumes.
 - Schema upgrades are additive (`ensure_columns`); the DB file persists in the
   `akm_data` volume across rebuilds. Back up `data/akm.db` (or the volume)
-  to preserve investigations.
+  to preserve investigations. The `data/mermaid_png/` picture cache beside it
+  is disposable: deleting it only makes the next PDF/bundle export re-render
+  its figures.
 - Search providers are keyless and best-effort (RSS/arXiv/DuckDuckGo HTML);
   rate-limits surface as fewer candidates, never as run failures.

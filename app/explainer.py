@@ -20,7 +20,7 @@ from bs4 import BeautifulSoup
 
 from .database import SessionLocal
 from .models import (Explanation, Artifact, CorpusPage, Investigation, Relationship,
-                     CveFinding, SecurityAssessment)
+                     CveFinding, SecurityAssessment, AgentRun)
 from . import grounding
 from . import writeguard
 from . import llm
@@ -1905,10 +1905,30 @@ def investigation_summary(db, inv_id: int) -> dict:
             synthesis, source = text, "llm"
     except Exception:
         pass
+    try:
+        run_rows = db.query(AgentRun).filter(
+            AgentRun.investigation_id == inv_id).all()
+    except Exception:
+        run_rows = []
+    failed_runs = [r for r in run_rows if (r.status or "") == "error"]
+    open_gaps = []
+    for r in run_rows:
+        if (r.trigger or "") != "explainer_gap" or \
+                (r.status or "") == "done":
+            continue
+        try:
+            goal = (json.loads(r.plan or "{}") or {}).get("goal") or ""
+        except Exception:
+            goal = ""
+        open_gaps.append({"run_id": r.id, "status": r.status or "unknown",
+                          "goal": goal[:200]})
+    run_health = {"failed_runs": len(failed_runs),
+                  "open_gaps": open_gaps}
     return {"investigation": {"id": inv.id, "title": inv.title,
                               "status": inv.status},
             "generated": datetime.now(timezone.utc).isoformat(),
             "executive_summary": synthesis, "synthesis": source,
+            "run_health": run_health,
             "query": {"title": inv.title, "keywords": inv.keywords,
                       "description": inv.description, "sources": inv.sources},
             "flags": flags,

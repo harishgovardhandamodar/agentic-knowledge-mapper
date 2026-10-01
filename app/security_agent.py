@@ -107,6 +107,31 @@ def _event(db: Session, run_id: int, stage: str, message: str, data: dict | None
     db.commit()
 
 
+def security_run_stats(result: dict, assessment_id: int,
+                       duration_ms: int | None) -> dict:
+    """The measurable trace every security run leaves in ``agent_runs.stats``.
+
+    Posture, pack identity and duration are pinned here (not just the score)
+    so the dossier can show cost and provenance even for short or failed runs
+    instead of printing "no stats recorded".
+    """
+    return {"assessment_id": assessment_id,
+            "overall_pct": result.get("overall_pct"),
+            "inherent_pct": result.get("inherent_pct"),
+            "residual_pct": result.get("residual_pct"),
+            "delta": result.get("delta"),
+            "posture": result.get("posture", ""),
+            "pack_version": threatpack.PACK_VERSION,
+            "pack_fingerprint": threatpack.pack_fingerprint(),
+            "active_controls": result.get("active_controls", []),
+            "control_count": len(result.get("active_controls", [])),
+            "confidence": result.get("confidence"),
+            "threats": len(result.get("threats", [])),
+            "evidence": len(result.get("evidence", [])),
+            "known_exploits": len(result.get("known_exploits", [])),
+            "duration_ms": duration_ms}
+
+
 def run_security_assessment(run_id: int, params: dict):
     db = SessionLocal()
     try:
@@ -325,19 +350,16 @@ def run_security_assessment(run_id: int, params: dict):
         # expire everything so later reads see fresh state.
         db.expire_all()
         run = db.query(AgentRun).filter(AgentRun.id == run_id).first()
-        stats = {"assessment_id": rec.id,
-                 "overall_pct": result["overall_pct"],
-                 "inherent_pct": result.get("inherent_pct"),
-                 "residual_pct": result.get("residual_pct"),
-                 "delta": result.get("delta"),
-                 "active_controls": result.get("active_controls", []),
-                 "confidence": result.get("confidence"),
-                 "threats": len(result.get("threats", [])),
-                 "evidence": len(result.get("evidence", [])),
-                 "known_exploits": len(result.get("known_exploits", []))}
+        finished = datetime.now(timezone.utc)
+        try:
+            duration_ms = int((finished - run.started_at).total_seconds()
+                              * 1000) if run.started_at else None
+        except Exception:
+            duration_ms = None
+        stats = security_run_stats(result, rec.id, duration_ms)
         run.stats = json.dumps(stats)
         run.status = "done"
-        run.finished_at = datetime.now(timezone.utc)
+        run.finished_at = finished
         db.commit()
         _event(db, run.id, "summary",
                f"Done: {result['product_name']} — residual risk "
@@ -350,6 +372,29 @@ def run_security_assessment(run_id: int, params: dict):
                 run.status = "error"
                 run.error = f"{e}\n{traceback.format_exc()[-2000:]}"
                 run.finished_at = datetime.now(timezone.utc)
+                # A failed assessment still leaves measurable stats: the pack
+                # it ran against and how long it lived are known even when the
+                # score is not, so the dossier can show cost and provenance
+                # instead of "no stats recorded".
+                try:
+                    prior = json.loads(run.stats or "{}")
+                    if not isinstance(prior, dict):
+                        prior = {}
+                except Exception:
+                    prior = {}
+                prior.setdefault("pack_version", threatpack.PACK_VERSION)
+                prior.setdefault("pack_fingerprint",
+                                 threatpack.pack_fingerprint())
+                try:
+                    prior.setdefault(
+                        "duration_ms",
+                        int((run.finished_at - run.started_at)
+                            .total_seconds() * 1000)
+                        if run.started_at else None)
+                except Exception:
+                    pass
+                prior["failed"] = str(e)[:200]
+                run.stats = json.dumps(prior)
                 db.commit()
                 _event(db, run.id, "summary", f"Security assessment failed: {e}")
         except Exception:

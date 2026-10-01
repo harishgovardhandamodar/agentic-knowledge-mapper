@@ -18,6 +18,7 @@ os.environ["AKM_DATABASE_URL"] = os.environ.get("AKM_TEST_DB") or (
 
 from app import database  # noqa: E402
 from app import manager as mgr  # noqa: E402
+from app import agent as agent_mod  # noqa: E402
 from app.database import SessionLocal  # noqa: E402
 from app.models import (AgentEvent, AgentRun, Artifact, Investigation,  # noqa: E402
                         ManagerRun, SecurityAssessment)
@@ -756,6 +757,153 @@ class TestManagerIntent(unittest.TestCase):
                 ("Please run research on X", "X"),
                 ("Execute a security study of payments", "payments")]:
             self.assertEqual(mgr.split_command(cmd)["topics"][0]["title"], want)
+
+
+class TestGapRequeue(unittest.TestCase):
+    """Interrupted explainer_gap runs relaunch with their goal, not vanish."""
+
+    def _gap_run(self, db, inv_id, goal="Investigate open questions: residency",
+                 attempt=1, status="running", trigger="explainer_gap"):
+        plan = {"goal": goal}
+        if attempt != 1:
+            plan["gap_attempt"] = attempt
+        r = AgentRun(investigation_id=inv_id, status=status, trigger=trigger,
+                     plan=json.dumps(plan))
+        db.add(r)
+        db.commit()
+        return r.id
+
+    def test_interrupted_gap_is_relaunched_with_goal(self):
+        db = SessionLocal()
+        try:
+            inv = Investigation(title="t", keywords="k", description="d")
+            db.add(inv)
+            db.commit()
+            calls = []
+
+            def fake_launcher(inv_id, goal, **kw):
+                calls.append((inv_id, goal, kw))
+                return 777
+
+            old_id = self._gap_run(db, inv.id)
+            got = agent_mod.requeue_interrupted_gaps(db, launcher=fake_launcher)
+            self.assertEqual([(inv.id,
+                               "Investigate open questions: residency")],
+                             [(c[0], c[1]) for c in calls])
+            self.assertEqual(calls[0][2].get("plan_extra"), {"gap_attempt": 2})
+            old = db.query(AgentRun).filter(AgentRun.id == old_id).first()
+            self.assertEqual(old.status, "error")
+            self.assertIn("re-queued as run #777", old.error)
+            self.assertIn(old_id, got)
+            self.assertIn(777, got)
+        finally:
+            db.close()
+
+    def test_second_attempt_is_not_requeued(self):
+        db = SessionLocal()
+        try:
+            inv = Investigation(title="t", keywords="k", description="d")
+            db.add(inv)
+            db.commit()
+            old_id = self._gap_run(db, inv.id, attempt=2)
+            got = agent_mod.requeue_interrupted_gaps(
+                db, launcher=mock.Mock(side_effect=AssertionError("relaunched")))
+            self.assertEqual(got, [])
+            old = db.query(AgentRun).filter(AgentRun.id == old_id).first()
+            self.assertEqual(old.status, "running")
+        finally:
+            db.close()
+
+    def test_other_triggers_are_untouched(self):
+        db = SessionLocal()
+        try:
+            inv = Investigation(title="t", keywords="k", description="d")
+            db.add(inv)
+            db.commit()
+            old_id = self._gap_run(db, inv.id, trigger="manual")
+            got = agent_mod.requeue_interrupted_gaps(
+                db, launcher=mock.Mock(side_effect=AssertionError("relaunched")))
+            self.assertEqual(got, [])
+            old = db.query(AgentRun).filter(AgentRun.id == old_id).first()
+            self.assertEqual(old.status, "running")
+        finally:
+            db.close()
+
+
+class TestSecurityRunStats(unittest.TestCase):
+    """Every security run leaves measurable stats, pass or fail."""
+
+    def test_completed_stats_carry_provenance(self):
+        from app import security_agent as sec_mod
+        stats = sec_mod.security_run_stats(
+            {"overall_pct": 24.3, "inherent_pct": 68.8, "residual_pct": 24.3,
+             "delta": -44.5, "posture": "LOW RISK", "active_controls": ["C01"],
+             "confidence": 0.5, "threats": [{"id": "T01"}],
+             "evidence": [{}, {}], "known_exploits": []},
+            assessment_id=16, duration_ms=90000)
+        for key in ("assessment_id", "overall_pct", "inherent_pct",
+                    "residual_pct", "posture", "pack_version",
+                    "pack_fingerprint", "control_count", "threats",
+                    "evidence", "duration_ms"):
+            self.assertIn(key, stats)
+        self.assertEqual(stats["assessment_id"], 16)
+        self.assertEqual(stats["control_count"], 1)
+        self.assertTrue(stats["pack_version"])
+        self.assertTrue(stats["pack_fingerprint"])
+
+
+class TestVendorDocQuery(unittest.TestCase):
+    """A product brief always gets one official-docs query family."""
+
+    @classmethod
+    def setUpClass(cls):
+        import importlib
+        # Other test modules replace agent_mod._plan_queries globally at
+        # import time; reload to get the real planner back for these tests,
+        # then restore the replacement afterwards.
+        cls._patched = agent_mod._plan_queries
+        importlib.reload(agent_mod)
+
+    @classmethod
+    def tearDownClass(cls):
+        agent_mod._plan_queries = cls._patched
+
+    def _inv(self, title, keywords="", description=""):
+        from types import SimpleNamespace
+        return SimpleNamespace(title=title, keywords=keywords,
+                               description=description, sources="rss,arxiv,web")
+
+    def _planned(self, inv, queries):
+        with mock.patch.object(
+                agent_mod.llm, "chat_json",
+                return_value={"rationale": "r", "queries": queries}):
+            return agent_mod._plan_queries(inv)["queries"]
+
+    def test_product_brief_gains_vendor_doc_query(self):
+        inv = self._inv("Collibra AI Writing Assistant on Restricted Data",
+                        keywords="Collibra AI writing assistant, LLM leakage")
+        got = self._planned(inv, [
+            {"text": "Collibra AI writing assistant", "sources": ["web"]},
+            {"text": "LLM data leakage catalog", "sources": ["arxiv"]}])
+        texts = [q["text"] for q in got]
+        self.assertTrue(any("security architecture data flow" in t
+                            for t in texts),
+                        texts)
+        self.assertLessEqual(len(got), 6)
+
+    def test_existing_docs_query_is_not_duplicated(self):
+        inv = self._inv("Collibra AI Writing Assistant on Restricted Data")
+        got = self._planned(inv, [
+            {"text": "Collibra admin security architecture", "sources": ["web"]}])
+        self.assertEqual(len(got), 1)
+
+    def test_generic_brief_is_untouched(self):
+        inv = self._inv("diffusion models capability review",
+                        keywords="diffusion, capability")
+        got = self._planned(inv, [
+            {"text": "diffusion models capability", "sources": ["arxiv"]}])
+        self.assertEqual([q["text"] for q in got],
+                         ["diffusion models capability"])
 
 
 if __name__ == "__main__":

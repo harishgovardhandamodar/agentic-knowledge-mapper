@@ -70,7 +70,9 @@ def _plan_queries(inv: Investigation) -> dict:
             "Reply JSON: {\"rationale\": str, \"queries\": "
             "[{\"text\": str, \"sources\": [\"rss\"|\"arxiv\"|\"web\"]}]}. "
             "Max 6 queries, each 2-6 words. Match sources to query type "
-            "(papers->arxiv, news/discussion->rss+web). Only use enabled sources.")
+            "(papers->arxiv, news/discussion->rss+web). Only use enabled sources. "
+            "If the brief names a specific product or vendor, devote at least "
+            "one query to official docs, security/trust, or architecture pages.")
     plan = llm.chat_json([{"role": "system", "content": sys},
                           {"role": "user", "content": user}], max_tokens=1024)
     queries = (plan.get("queries") or [])[:6]
@@ -81,8 +83,50 @@ def _plan_queries(inv: Investigation) -> dict:
             continue
         srcs = [s for s in (q.get("sources") or []) if s in enabled] or list(enabled)
         clean.append({"text": q["text"][:120], "sources": srcs})
+    _ensure_vendor_doc_query(inv, clean, enabled)
     return {"rationale": plan.get("rationale", ""), "queries": clean or
             [{"text": inv.keywords.split(",")[0].strip() or inv.title, "sources": list(enabled)}]}
+
+
+def _vendor_terms(inv: Investigation) -> list[str]:
+    """Capitalized words in the title: usually the vendor/product names."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for w in re.findall(r"[A-Z][a-zA-Z0-9]+", inv.title or ""):
+        lw = w.lower()
+        if lw not in seen and lw not in {"ai", "the", "and", "for", "with",
+                                         "from", "that", "this", "what",
+                                         "using", "used", "use"}:
+            seen.add(lw)
+            out.append(w)
+    return out[:3]
+
+
+_DOC_QUERY_RE = re.compile(
+    r"doc(s|umentation)?|security|trust|architect|data.?flow|processor|"
+    r"compliance|\bdpa\b|privacy", re.I)
+
+
+def _ensure_vendor_doc_query(inv: Investigation, clean: list[dict],
+                             enabled: set[str]) -> None:
+    """Guarantee one official-docs query when the brief names a product.
+
+    General threat-model material (OWASP, arXiv) is kept as supporting
+    evidence, but a product brief with no vendor-doc query never discovers
+    the processor list, region, or audit-log schema the report later
+    admits are missing. Mutates ``clean`` in place; capped at six queries.
+    """
+    vendors = _vendor_terms(inv)
+    if not vendors or len(clean) >= 6:
+        return
+    blob = " ".join(q.get("text") or "" for q in clean)
+    if _DOC_QUERY_RE.search(blob) or _DOC_QUERY_RE.search(inv.keywords or ""):
+        return
+    srcs = ["web"] if "web" in enabled else sorted(enabled)
+    if not srcs:
+        return
+    clean.append({"text": f"{' '.join(vendors)} security architecture "
+                          "data flow"[:120], "sources": srcs})
 
 
 def _search_one(args) -> list:
@@ -467,12 +511,62 @@ def _short_goal(goal: str, limit: int = 120) -> str:
     return (cut or goal[:limit]) + "…"
 
 
+def requeue_interrupted_gaps(db, launcher=None) -> list[int]:
+    """Relaunch explainer_gap runs killed mid-flight, once each.
+
+    Gap runs are the highest-value follow-up research and they run on bare
+    threads, so a restart used to drop them permanently. On boot, a gap run
+    still marked running is relaunched with its original goal preserved; the
+    attempt counter in the plan caps retries at two so a crash loop cannot
+    requeue forever. Returns old plus fresh run ids so callers spare both
+    from the generic interrupted marking.
+    """
+    launcher = launcher or launch_run_with_goal
+    relaunched: list[int] = []
+    fresh: list[int] = []
+    stale = db.query(AgentRun).filter(
+        AgentRun.status == "running",
+        AgentRun.trigger == "explainer_gap").all()
+    for r in stale:
+        try:
+            plan = json.loads(r.plan or "{}")
+        except Exception:
+            plan = {}
+        goal = (plan.get("goal") or "").strip()
+        attempt = plan.get("gap_attempt", 1)
+        try:
+            attempt = int(attempt)
+        except (TypeError, ValueError):
+            attempt = 1
+        if not goal or attempt >= 2:
+            continue
+        new_id = launcher(r.investigation_id, goal, max_items=12,
+                          max_rounds=1, trigger="explainer_gap",
+                          plan_extra={"gap_attempt": attempt + 1})
+        fresh.append(new_id)
+        r.status = "error"
+        r.error = (f"interrupted by server restart; re-queued as run #{new_id}")
+        r.finished_at = datetime.now(timezone.utc)
+        db.add(AgentEvent(run_id=r.id, stage="summary",
+                          message=f"Run interrupted by server restart; "
+                                  f"re-queued as run #{new_id}."))
+        relaunched.append(r.id)
+    db.commit()
+    # Both: the old rows are now error (already excluded), and the fresh rows
+    # are running *by design* -- the generic stale pass must spare them.
+    return relaunched + fresh
+
+
 def launch_run_with_goal(investigation_id: int, goal: str, max_items: int = 12,
-                         max_rounds: int = 1, trigger: str = "explainer_gap"):
+                         max_rounds: int = 1, trigger: str = "explainer_gap",
+                         plan_extra: dict | None = None):
+    plan = {"goal": goal}
+    if plan_extra:
+        plan.update(plan_extra)
     db = SessionLocal()
     try:
         run = AgentRun(investigation_id=investigation_id, status="running",
-                       trigger=trigger, plan=json.dumps({"goal": goal}))
+                       trigger=trigger, plan=json.dumps(plan))
         db.add(run)
         db.commit()
         db.refresh(run)

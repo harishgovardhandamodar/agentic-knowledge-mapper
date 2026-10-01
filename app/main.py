@@ -99,6 +99,15 @@ def on_start():
     # repaired.
     db = next(get_db())
     try:
+        # Gap runs carry the highest-value follow-ups and run on bare
+        # threads: relaunch the interrupted ones before the generic pass
+        # below marks everything still running as dead.
+        try:
+            from . import agent as agent_mod
+            recovered |= set(agent_mod.requeue_interrupted_gaps(db))
+        except Exception as exc:  # noqa: BLE001 - never block startup
+            obs.log("jobs.gap_requeue_failed", level="error",
+                    error=f"{type(exc).__name__}: {exc}")
         stale = db.query(AgentRun).filter(AgentRun.status == "running").all()
         for r in stale:
             if r.id in recovered:
@@ -1864,12 +1873,26 @@ def list_security_assessments(inv_id: int, db: Session = Depends(get_db)):
     recs = (db.query(SecurityAssessment)
             .filter(SecurityAssessment.investigation_id == inv_id)
             .order_by(SecurityAssessment.id.desc()).limit(50).all())
+    run_ids = [r.run_id for r in recs if getattr(r, "run_id", None)]
+    stats_by_run: dict[int, dict] = {}
+    if run_ids:
+        for run in db.query(AgentRun).filter(AgentRun.id.in_(run_ids)).all():
+            try:
+                stats_by_run[run.id] = json.loads(run.stats or "{}") or {}
+            except Exception:
+                stats_by_run[run.id] = {}
     items = []
     for r in recs:
         d = _security_json(r)
         d.pop("markdown", None)
         d["threat_count"] = len(d.get("threats", []))
         d["exploit_count"] = len(d.get("known_exploits", []))
+        # The GUI warns when the run behind an assessment left no measurable
+        # stats: a score with no cost, duration or pack provenance behind it.
+        st = stats_by_run.get(getattr(r, "run_id", -1) or -1, {})
+        d["stats_complete"] = bool(
+            isinstance(st, dict) and st.get("assessment_id") is not None
+            and st.get("residual_pct") is not None)
         items.append(d)
     return {"items": items}
 

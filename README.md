@@ -101,7 +101,7 @@ Two buttons in the sidebar close the loop the agent leaves open:
   Summary sub-tab's dossier states the request verbatim, every run's plan and
   queries, every collected artifact with why it was kept, and how each stored
   score was applied and what moved it — read from stored rows, so every number
-  traces to a row. Exports as Markdown or PDF.
+  traces to a row. Exports as Markdown, PDF, or a Markdown+images bundle (.zip).
 - **Find open gaps** — reads which dimensions of the brief have *nothing at
   all*, and offers to launch a targeted run at each one. An answer that finds
   its own research.
@@ -388,6 +388,7 @@ an action are provable afterwards:
 | POST | `/api/investigations/{id}/summary/regenerate` | Recompute the summary from current review flags |
 | GET | `/api/investigations/{id}/dossier` | Investigation dossier: request, runs, collection, score audit |
 | GET | `/api/investigations/{id}/dossier/markdown`, `…/pdf` | The same write-up as Markdown / PDF |
+| GET | `/api/investigations/{id}/dossier/bundle` | `.zip`: the Markdown with picture links plus every diagram as `images/*.png` |
 | GET | `/api/investigations/{id}/artifacts?review=&search=` | Review queue |
 | GET | `/api/investigations/{id}/artifacts/overview` | Collection: timeline, purpose, actor involvement shares |
 | GET | `/api/investigations/{id}/recommendations` | Coverage gaps, control leverage, stale brief, query yields |

@@ -125,7 +125,13 @@ def _page_html(sources: list[str], mermaid_js: str) -> str:
 </head><body><div id="host"></div>
 <script src="{mermaid_js}"></script>
 <script>
-window.mermaid.initialize({{startOnLoad:false, securityLevel:'strict'}});
+// One house style for every exported picture: light theme, DejaVu (present
+// in the image), explicit white background. Stored sources stay untouched;
+// this only affects the render.
+window.mermaid.initialize({{startOnLoad:false, securityLevel:'strict',
+  theme:'base', themeVariables:{{fontFamily:'"DejaVu Sans",sans-serif',
+  background:'#ffffff', primaryColor:'#ffffff',
+  primaryBorderColor:'#0969da', primaryTextColor:'#1f2328'}}}});
 var SOURCES = {json.dumps(sources)};
 SOURCES.forEach(function(src, i){{
   var d = document.createElement('div');
@@ -259,12 +265,7 @@ def render_sources(sources: list[str]) -> dict[str, bytes]:
         mermaid_js = _mermaid_js()
     except Exception:
         return got
-    for start in range(0, len(missing), BATCH_SIZE):
-        try:
-            fresh = _render_batch(binary, mermaid_js,
-                                  missing[start:start + BATCH_SIZE])
-        except Exception:
-            continue
+    def _keep(fresh: dict[str, bytes]) -> None:
         for src, blob in fresh.items():
             got[src] = blob
             if cache:
@@ -274,4 +275,19 @@ def render_sources(sources: list[str]) -> dict[str, bytes]:
                         fh.write(blob)
                 except Exception:
                     pass
+
+    for start in range(0, len(missing), BATCH_SIZE):
+        try:
+            _keep(_render_batch(binary, mermaid_js,
+                                missing[start:start + BATCH_SIZE]))
+        except Exception:
+            continue
+    # A figure taller than the page is clipped out of its batch and reported
+    # as missing: give each survivor the whole page to itself rather than
+    # falling back to source text.
+    for src in [s for s in missing if s not in got]:
+        try:
+            _keep(_render_batch(binary, mermaid_js, [src]))
+        except Exception:
+            continue
     return got
