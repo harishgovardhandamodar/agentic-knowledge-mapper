@@ -285,6 +285,45 @@ class TestCompile(unittest.TestCase):
         finally:
             db.close()
 
+    def test_compile_carries_child_gaps(self):
+        from app.models import AgentRun
+        rid = self._ready_run()
+        db = _db()
+        try:
+            plan = json.loads(db.query(ManagerRun).filter(
+                ManagerRun.id == rid).first().plan_json)
+            inv_id = plan["topics"][0]["investigation_id"]
+            db.add(AgentRun(investigation_id=inv_id, status="error",
+                            trigger="explainer_gap",
+                            plan=json.dumps({"goal": "gaps"}),
+                            error="interrupted by server restart"))
+            db.add(Artifact(investigation_id=inv_id, title="Unjudged",
+                            artifact_type="note", source="web", relevance=0.1,
+                            review="pending"))
+            db.add(SecurityAssessment(
+                investigation_id=inv_id, product_name="TabPFN",
+                exposure="restricted_data", overall_pct=0.0,
+                posture="UNKNOWN", markdown="# model report",
+                scoring_json=json.dumps(
+                    {"assessment_path": "model_engineering"}),
+                threats_json=json.dumps([]),
+                model_json=json.dumps({"meta": {"model_name": "TabPFN"},
+                                       "mitigation": {"plan": [],
+                                                      "deferred": [
+                                                          {"control_id": "MM04",
+                                                           "reason": "x"}]}})))
+            db.commit()
+            with mock.patch.object(mgr.llm, "chat",
+                                   return_value="# synthesis"):
+                out = mgr.compile_run(db, rid)
+            md = out["markdown"]
+            self.assertIn("## Open gaps by topic", md)
+            self.assertIn("1 run(s) failed or interrupted", md)
+            self.assertIn("1 artifact(s) still pending review", md)
+            self.assertIn("MM04", md)
+        finally:
+            db.close()
+
     def test_unknown_run_is_lookup_error(self):
         db = _db()
         try:
@@ -904,6 +943,28 @@ class TestVendorDocQuery(unittest.TestCase):
             {"text": "payment fraud review", "sources": ["rss"]}])
         self.assertEqual([q["text"] for q in got],
                          ["payment fraud review"])
+
+    def test_vendor_host_boosts_prefilter_rank(self):
+        from types import SimpleNamespace
+        inv = SimpleNamespace(title="Collibra assistant review",
+                              keywords="Collibra", description="d")
+        found = [
+            {"title": "Random blog on catalogs", "description": "Collibra tips",
+             "url": "https://blog.example.com/x"},
+            {"title": "Admin guide", "description": "official docs",
+             "url": "https://productresources.collibra.com/docs/y"}]
+        ranked = agent_mod._prefilter(inv, found, 2)
+        self.assertIn("collibra.com", ranked[0]["url"])
+
+    def test_vendor_mention_without_vendor_host_is_no_boost(self):
+        self.assertFalse(agent_mod._is_vendor_primary(
+            {"url": "https://blog.example.com/collibra-tips",
+             "title": "Collibra tips"}, ["Collibra"]))
+        self.assertTrue(agent_mod._is_vendor_primary(
+            {"url": "https://www.collibra.com/security",
+             "title": "Trust center"}, ["Collibra"]))
+        self.assertFalse(agent_mod._is_vendor_primary(
+            {"url": "https://example.com/x"}, []))
 
     def test_diffusion_brief_is_a_model_brief(self):
         # Diffusion models are a first-class target family, so the

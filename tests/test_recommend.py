@@ -450,6 +450,64 @@ class TestControlLeverage(unittest.TestCase):
             db.close()
 
 
+class TestStaleAssessment(unittest.TestCase):
+    def test_newer_artifacts_flag_the_score(self):
+        inv = new_inv()
+        aid, _ = make_assessment(inv)
+        db = SessionLocal()
+        try:
+            db.add(Artifact(investigation_id=inv, title="Fresh evidence",
+                            artifact_type="paper", source="arxiv",
+                            relevance=0.8, review="accepted"))
+            db.commit()
+            recs = R.stale_assessment(db, inv)
+            self.assertEqual(len(recs), 1)
+            self.assertEqual(recs[0]["kind"], "stale_assessment")
+            self.assertEqual(recs[0]["assessment_id"], aid)
+        finally:
+            db.close()
+
+    def test_nothing_newer_is_quiet(self):
+        inv = new_inv()
+        make_assessment(inv)
+        db = SessionLocal()
+        try:
+            self.assertEqual(R.stale_assessment(db, inv), [])
+        finally:
+            db.close()
+
+
+class TestUnevidencedLeverage(unittest.TestCase):
+    def test_top_control_without_evidence_is_flagged(self):
+        inv = new_inv()
+        aid, _ = make_assessment(inv)
+        db = SessionLocal()
+        try:
+            recs = R.unevidenced_leverage(db, inv, assessment_id=aid)
+            self.assertEqual(len(recs), 1)
+            self.assertEqual(recs[0]["kind"], "unevidenced_leverage")
+            top = R.control_leverage(db, inv, assessment_id=aid)[0]
+            self.assertEqual(recs[0]["control_id"], top["control_id"])
+        finally:
+            db.close()
+
+    def test_evidenced_control_is_quiet(self):
+        inv = new_inv()
+        aid, _ = make_assessment(inv)
+        db = SessionLocal()
+        try:
+            top = R.control_leverage(db, inv, assessment_id=aid)[0]
+            db.add(Artifact(investigation_id=inv,
+                            title=f"Vendor doc for {top['control_id']} rollout",
+                            artifact_type="paper", source="web",
+                            relevance=0.9, review="accepted"))
+            db.commit()
+            self.assertEqual(
+                R.unevidenced_leverage(db, inv, assessment_id=aid), [])
+        finally:
+            db.close()
+
+
 class TestBarrenQueries(unittest.TestCase):
     def test_repeatedly_fruitless_shapes_are_reported(self):
         from app import yield_ as yld

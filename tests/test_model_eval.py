@@ -71,7 +71,7 @@ class TestW1Scoring(unittest.TestCase):
         self.assertAlmostEqual(r["coverage_pct"], 25.0, places=1)
 
     def test_fingerprint_is_stable(self):
-        self.assertEqual(me.model_adv_fingerprint(), "436f053c8ce3")
+        self.assertEqual(me.model_adv_fingerprint(), "34d1e949c36c")
         self.assertEqual(me.MODEL_ADV_VERSION, "1.0.0")
 
 
@@ -100,7 +100,7 @@ class TestW2Scoring(unittest.TestCase):
         self.assertIn("LOW", me.posture_for(10.0))
 
     def test_fingerprint_is_stable(self):
-        self.assertEqual(me.adoption_fingerprint(), "af947c3e80bc")
+        self.assertEqual(me.adoption_fingerprint(), "429c1576c12e")
         self.assertEqual(me.ADOPTION_VERSION, "1.0.0")
 
 
@@ -117,7 +117,7 @@ class TestMitigationCatalog(unittest.TestCase):
                         "residual_limitations"):
                 self.assertIn(key, c, c["id"])
             self.assertIn(c["cost_burden"], ("low", "medium", "high"))
-        self.assertEqual(me.mitigation_fingerprint(), "e932cc326fae")
+        self.assertEqual(me.mitigation_fingerprint(), "478f15fc184f")
         self.assertEqual(me.MITIGATION_VERSION, "1.0.0")
 
     def test_tabular_open_defers_watermarking(self):
@@ -374,11 +374,15 @@ class TestModelDossierW3(unittest.TestCase):
                 {"attack_id": "MA-01", "title": "Extraction",
                  "attack_class": "extraction", "applies_to": "model_specific",
                  "confidence": 0.8, "prerequisites": ["open weights"],
+                 "mitigations": [], "residual_notes": ""},
+                {"attack_id": "MA-09", "title": "Novel exfiltration",
+                 "attack_class": "other", "applies_to": "family",
+                 "confidence": 0.9, "prerequisites": ["query access"],
                  "mitigations": [], "residual_notes": ""}]),
             model_json=json.dumps({
                 "meta": me.normalize_model_meta(dict(TABULAR)),
                 "mitigation": {"plan": plan, "deferred": deferred,
-                               "uncovered_risks": [],
+                               "uncovered_risks": ["other"],
                                "roadmap": {"30d": ["plant canaries"],
                                            "60d": [], "90d": []}},
                 "w1": scoring["w1"], "w2": scoring["w2"],
@@ -395,7 +399,8 @@ class TestModelDossierW3(unittest.TestCase):
             md = dossier_markdown(db, inv_id)
             for s in ("**W3 — Mitigation plan", "MM05", "MM04 deferred",
                       "mitigation-residual 1.0.0",
-                      "Top recommended controls:"):
+                      "Top recommended controls:",
+                      "Still uncovered", "Top residual risks after plan:"):
                 self.assertIn(s, md)
         finally:
             db.close()

@@ -911,6 +911,30 @@ class TestReportImprovements(unittest.TestCase):
         finally:
             inv.close()
 
+    def test_stage_durations_surface_from_events(self):
+        from datetime import timedelta
+        from app.models import AgentEvent
+        inv = _Inv()
+        try:
+            inv.db.add(AgentRun(investigation_id=inv.id, status="done",
+                                plan=json.dumps({})))
+            inv.db.commit()
+            run = inv.db.query(AgentRun).filter(
+                AgentRun.investigation_id == inv.id).order_by(
+                AgentRun.id.desc()).first()
+            base = run.started_at
+            inv.db.add(AgentEvent(
+                run_id=run.id, stage="search", message="a",
+                created_at=base))
+            inv.db.add(AgentEvent(
+                run_id=run.id, stage="search", message="b",
+                created_at=base + timedelta(seconds=125)))
+            inv.db.commit()
+            md = dossier_markdown(inv.db, inv.id)
+            self.assertIn("search ×2 (2m05s)", md)
+        finally:
+            inv.close()
+
     def test_past_run_failure_reads_as_history_not_alarm(self):
         # A bare "**Error.** interrupted ..." in section 2 reads as if the
         # report itself broke; it is a past run's record and must say so.
@@ -992,6 +1016,44 @@ class TestDossierQuality(unittest.TestCase):
         finally:
             inv.close()
 
+    def test_control_evidence_status_marks_declared_vs_evidenced(self):
+        from app.dossier import _control_evidence_status
+        arts = [{"title": "C01 rollout doc", "description": "", "tags": "",
+                 "url": "", "review": "accepted"},
+                {"title": "Pending vendor PDF on C02", "description": "",
+                 "tags": "", "url": "", "review": "pending"}]
+        got = _control_evidence_status(["C01", "C02", "C99"], arts)
+        self.assertEqual(got, {"C01": "evidenced", "C02": "declared",
+                               "C99": "unknown"})
+
+    def test_declared_only_reductions_are_named(self):
+        inv = _Inv()
+        try:
+            with _offline(), _offline_json():
+                out = sec.build_assessment(
+                    product_name="Acme Widget", product_url="",
+                    exposure="confidential_data",
+                    use_case="sorts customer support tickets for triage",
+                    focus=["triage"], db=inv.db, investigation_id=inv.id,
+                    declared_controls=[], assessment_mode="standard")
+            self.assertEqual(out["scoring"].get("assessment_path", "standard"),
+                             "standard")
+            rec = _store(inv.db, inv.id, out)
+            scoring = json.loads(rec.scoring_json)
+            scoring["active_controls"] = ["C01"]
+            threats = json.loads(rec.threats_json)
+            threats[0]["coverage"] = 50.0
+            threats[0]["controls"] = ["C01"]
+            rec.scoring_json = json.dumps(scoring)
+            rec.threats_json = json.dumps(threats)
+            inv.db.commit()
+            md = dossier_markdown(inv.db, inv.id)
+            self.assertIn("C01 (declared)", md)
+            self.assertIn("Reductions resting on declared-only controls",
+                          md)
+        finally:
+            inv.close()
+
     def test_pending_does_not_inflate_usable(self):
         inv = self._quality_inv()
         try:
@@ -1000,6 +1062,90 @@ class TestDossierQuality(unittest.TestCase):
             md = dossier_markdown(inv.db, inv.id)
             self.assertIn("1 accepted · 1 pending", md)
             self.assertIn("accepted only", md)
+        finally:
+            inv.close()
+
+
+class TestStatsCompleteness(unittest.TestCase):
+    """Every security job leaves measurable stats, surfaced everywhere."""
+
+    STATS = {"assessment_id": 7, "overall_pct": 24.3, "inherent_pct": 68.8,
+             "residual_pct": 24.3, "posture": "LOW RISK — routine controls",
+             "pack_version": "2.1.0", "pack_fingerprint": "abc123",
+             "threats": 12, "evidence": 8, "duration_ms": 90000}
+
+    def _run_with_stats(self, inv, stats=None, status="done", trigger="security"):
+        inv.db.add(AgentRun(investigation_id=inv.id, status=status,
+                            trigger=trigger,
+                            plan=json.dumps({"goal": "AI security assessment"}),
+                            stats=json.dumps(stats if stats is not None
+                                             else self.STATS)))
+        inv.db.commit()
+
+    def test_section2_names_residual_posture_and_pack(self):
+        inv = _Inv()
+        try:
+            self._run_with_stats(inv)
+            md = dossier_markdown(inv.db, inv.id)
+            sec2 = md[md.index("## 2. What was investigated"):
+                     md.index("## 3. What was collected")]
+            self.assertIn("assessment #7", sec2)
+            self.assertIn("residual 24.3/100", sec2)
+            self.assertIn("LOW RISK", sec2)
+            self.assertIn("pack 2.1.0 (fp abc123)", sec2)
+        finally:
+            inv.close()
+
+    def test_history_flags_complete_and_incomplete_stats(self):
+        from app.main import list_security_assessments
+        from app.models import SecurityAssessment
+        inv = _Inv()
+        try:
+            self._run_with_stats(inv)
+            run = inv.db.query(AgentRun).first()
+            for aid in (11, 12):
+                inv.db.add(SecurityAssessment(
+                    investigation_id=inv.id, run_id=run.id,
+                    product_name="Widget", exposure="confidential_data",
+                    overall_pct=24.3, posture="LOW", markdown="m",
+                    scoring_json=json.dumps({"assessment_path": "standard"}),
+                    threats_json=json.dumps([])))
+            inv.db.commit()
+            recs = inv.db.query(SecurityAssessment).filter(
+                SecurityAssessment.investigation_id == inv.id).order_by(
+                SecurityAssessment.id).all()
+            self.assertEqual(len(recs), 2)
+            # First run's stats lack assessment keys (old row shape).
+            inv.db.query(AgentRun).update(
+                {"stats": json.dumps({"rounds": 1})})
+            inv.db.commit()
+            items = list_security_assessments(inv.id, inv.db)["items"]
+            by_id = {i["id"]: i for i in items}
+            self.assertFalse(by_id[recs[0].id]["stats_complete"])
+            # Second stats write carries the assessment keys.
+            inv.db.query(AgentRun).update(
+                {"stats": json.dumps(self.STATS)})
+            inv.db.commit()
+            items = list_security_assessments(inv.id, inv.db)["items"]
+            by_id = {i["id"]: i for i in items}
+            self.assertTrue(by_id[recs[1].id]["stats_complete"])
+        finally:
+            inv.close()
+
+    def test_summary_run_health_names_failures_and_gaps(self):
+        from app.explainer import investigation_summary
+        inv = _Inv()
+        try:
+            inv.db.add(AgentRun(
+                investigation_id=inv.id, status="error",
+                trigger="explainer_gap",
+                plan=json.dumps({"goal": "Investigate open questions: DLP"}),
+                error="interrupted by server restart"))
+            inv.db.commit()
+            health = investigation_summary(inv.db, inv.id)["run_health"]
+            self.assertEqual(health["failed_runs"], 1)
+            self.assertEqual(len(health["open_gaps"]), 1)
+            self.assertIn("DLP", health["open_gaps"][0]["goal"])
         finally:
             inv.close()
 
