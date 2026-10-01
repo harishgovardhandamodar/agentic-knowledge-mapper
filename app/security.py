@@ -2877,6 +2877,13 @@ def render_markdown(**ctx: Any) -> str:
 # "detour-below" (same-row back edge, e.g. gateway → employee),
 # "detour-left" (same-column upward edge, e.g. approve? → redraft).
 
+# The diagram types a mermaid block can open with -- used to tell a diagram
+# from an ordinary code block.
+_FENCE_MERMAID_RE = re.compile(
+    r"^(graph|flowchart|sequenceDiagram|classDiagram|stateDiagram|erDiagram"
+    r"|journey|gantt|pie|mindmap|timeline|quadrantChart|C4Context)\b",
+    re.IGNORECASE)
+
 _FIGURE_SPECS = {
     "dataflow": {
         "caption": "Data-flow and trust boundary",
@@ -3144,6 +3151,7 @@ def build_pdf(markdown_text: str, title: str = "AI Security Assessment",
         from reportlab.platypus.tableofcontents import TableOfContents
         from reportlab.lib import colors
         from reportlab.lib.enums import TA_LEFT
+        from reportlab.pdfbase.pdfmetrics import stringWidth
     except ImportError as exc:
         raise RuntimeError("PDF export needs the 'reportlab' package (pip install reportlab).") from exc
 
@@ -3170,6 +3178,12 @@ def build_pdf(markdown_text: str, title: str = "AI Security Assessment",
         seg = html.escape(_clean(s))
         seg = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", seg)
         seg = re.sub(r"`([^`]+)`", r"\1", seg)
+        # Single * and _ italics, word-boundary aware. Without the lookarounds
+        # this mangles snake_case identifiers -- `scoring_method` is not an
+        # emphasis span, it is a field name -- and the report prints the
+        # underscores as if they were part of the prose.
+        seg = re.sub(r"(?<![\w*])\*([^*\n]+)\*(?![\w*])", r"<i>\1</i>", seg)
+        seg = re.sub(r"(?<![\w_])_([^_\n]+)_(?![\w_])", r"<i>\1</i>", seg)
         return seg
 
     SEV_COLORS = {"Critical": "#C0392B", "High": "#B9770E",
@@ -3187,6 +3201,8 @@ def build_pdf(markdown_text: str, title: str = "AI Security Assessment",
     sec_h2 = ParagraphStyle("SecH2", parent=styles["Heading2"],
                             fontSize=11, leading=14, spaceBefore=10,
                             spaceAfter=4, keepWithNext=True)
+    sec_h3 = ParagraphStyle("SecH3", parent=sec_h2, fontSize=9.5, leading=12,
+                            spaceBefore=7, spaceAfter=3, textColor=colors.HexColor("#2b3138"))
     sec_title = ParagraphStyle("SecTitle", parent=styles["Title"],
                                fontSize=22, leading=26, spaceAfter=2)
     sec_sub = ParagraphStyle("SecSub", parent=styles["Normal"],
@@ -3195,10 +3211,15 @@ def build_pdf(markdown_text: str, title: str = "AI Security Assessment",
     body = styles["BodyText"]
     bullet = ParagraphStyle("SecBullet", parent=body, leftIndent=14,
                             firstLineIndent=0, spaceBefore=2)
+    bullet_nested = ParagraphStyle("SecBulletNested", parent=bullet,
+                                   leftIndent=26, fontSize=8.5, leading=11)
     cell_style = ParagraphStyle("SecCell", parent=body, fontSize=7,
                                 leading=9, alignment=TA_LEFT)
     cell_head = ParagraphStyle("SecCellHead", parent=cell_style,
                                textColor=colors.white)
+    # For an emphasised column in a *data* row: bold like a header, but in the
+    # body's own colour so it stays visible against the white cell.
+    cell_id = ParagraphStyle("SecCellId", parent=cell_style)
     caption_style = ParagraphStyle("SecCaption", parent=body, fontSize=9,
                                    leading=11, spaceBefore=8, spaceAfter=4,
                                    keepWithNext=True,
@@ -3307,27 +3328,187 @@ def build_pdf(markdown_text: str, title: str = "AI Security Assessment",
     # ---- body ----
     in_table = False
     table_rows: list[list] = []
+    table_rows_raw: list[list] = []
     table_head_raw: list[str] = []
     in_fence = False
     pending_fig = ""
+    pending_lang = ""
+    pending_code: list[str] = []
     fig_no = 0
 
-    def _cell(text: str, head: bool = False):
+    code_style = ParagraphStyle("SecCode", parent=body, fontName="Courier",
+                                fontSize=5.6, leading=6.8, alignment=TA_LEFT,
+                                textColor=colors.HexColor("#1b1f23"))
+
+    def _code_block(lines: list[str]) -> Table:
+        """A mermaid source we have no vector spec for.
+
+        The alternative -- dropping the block and printing "[see the
+        illustrated dashboard view]" -- loses the figure entirely, and the
+        reader has no way to tell a figure that was never drawn from one that
+        does not exist. Showing the source keeps the document complete and
+        losslessly reproducible."""
+        body_paras = []
+        for ln in lines:
+            shown = ln.rstrip().replace("<", "&lt;").replace(">", "&gt;")
+            body_paras.append(Paragraph(shown or " ", code_style))
+        t = Table([[body_paras]], colWidths=[FRAME_W])
+        t.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#f6f8fa")),
+            ("BOX", (0, 0), (-1, -1), 0.6, colors.HexColor("#d0d7de")),
+            ("LEFTPADDING", (0, 0), (-1, -1), 6),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+            ("TOPPADDING", (0, 0), (-1, -1), 5),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ]))
+        return t
+
+    def _cell(text: str, head: bool = False, first: bool = False):
         plain = re.sub(r"\*+", "", text).strip()
         inner = _inline(text)
         if plain in SEV_COLORS:
             inner = f'<font color="{SEV_COLORS[plain]}">{inner}</font>'
         if head:
             inner = f"<b>{inner}</b>"
+        if first and not head:
+            # The ID column reads as a label, but it must keep the body text
+            # colour: `cell_head` is white for the header band's dark fill, and
+            # applying it to a data row printed that column invisible.
+            inner = f"<b>{inner}</b>"
+            return Paragraph(inner, cell_id)
         return Paragraph(inner, cell_head if head else cell_style)
 
+    def _natural_widths(cells: list, avail: float) -> list[float]:
+        """How wide each column wants to be if nothing had to fit.
+
+        Measured with ``stringWidth`` rather than ``Paragraph.wrap``: wrap
+        reports the width it was *given*, so asking for 20000pt tells you
+        every column is 20000pt wide and squeezes the real table down to its
+        minimums."""
+        widths = []
+        for col in zip(*cells):
+            w = 0.0
+            for cell in col:
+                try:
+                    style = cell.style
+                    text = (cell.getPlainText() or "").replace("<b>", "").replace("</b>", "")
+                    for line in (text.splitlines() or [""]):
+                        w = max(w, stringWidth(line, style.fontName,
+                                               style.fontSize))
+                except Exception:
+                    pass
+            widths.append(w)
+        return widths
+
+    def _min_widths(cells: list, avail: float) -> list[float]:
+        """The narrowest a column can be before its longest word breaks.
+
+        ``minWidth`` is the widest unbreakable token, so a column never has to
+        be squeezed narrower than a single word. That floor is what stops a
+        wide prose column from starving its neighbours into one letter per
+        line -- the reason a "fitted" table can still read as blank columns.
+        A single unbreakable token wider than the frame (a long path, a base64
+        blob) is clamped: it must wrap somewhere or nothing can be shown."""
+        widths = []
+        for col in zip(*cells):
+            w = 0.0
+            for cell in col:
+                try:
+                    w = max(w, cell.minWidth())
+                except Exception:
+                    pass
+            widths.append(min(w, avail * 0.55))
+        return widths
+
     def flush_table() -> None:
-        nonlocal in_table, table_rows, table_head_raw
+        nonlocal in_table, table_rows, table_head_raw, table_rows_raw
         if table_rows:
             header, *rows = table_rows
+            ncols = len(header)
+            # A markdown row may not match the header's arity. reportlab then
+            # raises and the whole document fails to render, so pad or trim to
+            # the header's width rather than shipping a table that cannot be
+            # drawn.
+            fixed = [header]
+            for r in rows:
+                r = list(r)
+                if len(r) < ncols:
+                    r += [_cell("", first=len(r) == 0)] * (ncols - len(r))
+                elif len(r) > ncols:
+                    r = r[:ncols]
+                fixed.append(r)
+            rows = fixed
             kw: dict = {"repeatRows": 1}
-            if len(header) == 8 and table_head_raw[:1] == ["ID"]:
+            if ncols == 8 and table_head_raw[:1] == ["ID"]:
                 kw["colWidths"] = [26, 150, 62, 92, 16, 16, 30, 60]
+            else:
+                allc = [header] + rows
+                nat = [max(w, 1.0) for w in _natural_widths(allc, FRAME_W)]
+                lo = [max(w, 12.0) for w in _min_widths(allc, FRAME_W)]
+                lo = [min(l, n) for l, n in zip(lo, nat)]
+                # One prose column may wrap as much as it likes, but it may not
+                # take so much that its neighbours fall below their word floor
+                # and print one letter per line. Cap the share before fitting.
+                want = [min(n, FRAME_W * 0.40) for n in nat]
+                want = [max(w, l) for w, l in zip(want, lo)]
+                total = sum(want)
+                if total <= FRAME_W:
+                    # Spare room: share it out so the table fills the frame.
+                    scale = FRAME_W / total
+                    widths = [w * scale for w in want]
+                else:
+                    # Over budget. Take the excess from the column that can
+                    # best spare it -- the widest one still above its word
+                    # floor -- rather than shaving every column equally.
+                    widths = list(want)
+                    over = total - FRAME_W
+                    while over > 0.5:
+                        slack = [i for i in range(ncols)
+                                 if widths[i] - lo[i] > 0.5]
+                        if not slack:
+                            break
+                        pool = sum(widths[i] - lo[i] for i in slack)
+                        if pool <= 0:
+                            break
+                        for i in slack:
+                            share = (widths[i] - lo[i]) / pool
+                            take = min(over * share, widths[i] - lo[i])
+                            widths[i] -= take
+                            over -= take
+                            if over <= 0.5:
+                                break
+                    if sum(widths) > FRAME_W:
+                        # Every column is at its floor: the content genuinely
+                        # cannot fit, so share what is left proportionally.
+                        scale = FRAME_W / sum(widths)
+                        widths = [w * scale for w in widths]
+                kw["colWidths"] = widths
+            # reportlab wraps a word narrower than one character by never
+            # terminating the line, so the row's computed height explodes and
+            # the whole document dies with a LayoutError. Too many columns
+            # for the frame is not something clever sizing can solve, so fall
+            # back to the same content laid out as labelled blocks, which
+            # always fits.
+            safe = stringWidth("W", cell_style.fontName, cell_style.fontSize) + 10
+            if len(widths) * safe > FRAME_W or min(widths) < safe:
+                for r in table_rows_raw:
+                    head_text = table_head_raw[0] if table_head_raw else "row"
+                    parts = []
+                    for label, val in zip(table_head_raw, r):
+                        val = str(val).strip()
+                        if val:
+                            parts.append(
+                                f"<b>{_inline(str(label).strip())}</b>: "
+                                f"{_inline(val)}")
+                    if parts:
+                        story.append(Paragraph(" · ".join(parts), cell_style))
+                        story.append(Spacer(1, 2))
+                table_rows = []
+                table_rows_raw = []
+                table_head_raw = []
+                in_table = False
+                return
             t = Table([header] + rows, **kw)
             t.setStyle(TableStyle([
                 ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#21262d")),
@@ -3341,6 +3522,7 @@ def build_pdf(markdown_text: str, title: str = "AI Security Assessment",
             story.append(t)
             story.append(Spacer(1, 0.4 * cm))
             table_rows = []
+            table_rows_raw = []
             table_head_raw = []
         in_table = False
 
@@ -3351,11 +3533,15 @@ def build_pdf(markdown_text: str, title: str = "AI Security Assessment",
         if stripped.startswith("```"):
             if not in_fence:
                 info = stripped[3:].strip().split()
-                pending_fig = info[1] if len(info) > 1 and info[0] == "mermaid" else ""
+                pending_lang = info[0].lower() if info else ""
+                pending_fig = info[1] if len(info) > 1 and pending_lang == "mermaid" else ""
+                pending_code = []
                 if in_table:
                     flush_table()
             else:
                 spec = _FIGURE_SPECS.get(pending_fig or "")
+                src_is_mermaid = (pending_lang == "mermaid" or _FENCE_MERMAID_RE.match(
+                    next((l.strip() for l in pending_code if l.strip()), "")) is not None)
                 if spec is not None:
                     fig_no += 1
                     cap = Paragraph(
@@ -3363,15 +3549,30 @@ def build_pdf(markdown_text: str, title: str = "AI Security Assessment",
                     fig = _fit_drawing(_flow_drawing(spec), FRAME_W)
                     story.append(KeepTogether([cap, fig]))
                     story.append(Spacer(1, 0.3 * cm))
-                else:
-                    story.append(Paragraph(
-                        "<i>" + _inline("[Diagram - see the illustrated dashboard view.]")
-                        + "</i>", body))
-                    story.append(Spacer(1, 0.2 * cm))
+                elif pending_code:
+                    # An unlabelled diagram: keep the source visible rather
+                    # than printing a pointer and losing the figure. A non-
+                    # mermaid fence is shown as an ordinary code block -- it is
+                    # not a diagram and must not be numbered as one.
+                    head = next((l.strip() for l in pending_code
+                                 if l.strip()), "")
+                    if src_is_mermaid:
+                        fig_no += 1
+                        cap = Paragraph(_inline(
+                            f"Figure {fig_no}: {head} (mermaid source)"),
+                            caption_style)
+                    else:
+                        cap = Paragraph(_inline(
+                            f"{pending_lang or 'code'} block"), caption_style)
+                    story.append(KeepTogether([cap, _code_block(pending_code)]))
+                    story.append(Spacer(1, 0.3 * cm))
                 pending_fig = ""
+                pending_lang = ""
+                pending_code = []
             in_fence = not in_fence
             continue
         if in_fence:
+            pending_code.append(line)
             continue
         if line.startswith("|"):
             cells = [c.strip() for c in line.strip().strip("|").split("|")]
@@ -3380,8 +3581,9 @@ def build_pdf(markdown_text: str, title: str = "AI Security Assessment",
             is_header = not table_rows
             if is_header:
                 table_head_raw = list(cells)
-            table_rows.append([_cell(c, head=is_header or idx == 0)
+            table_rows.append([_cell(c, head=is_header, first=idx == 0)
                                for idx, c in enumerate(cells)])
+            table_rows_raw.append(list(cells))
             in_table = True
             continue
         elif in_table:
@@ -3393,8 +3595,19 @@ def build_pdf(markdown_text: str, title: str = "AI Security Assessment",
             story.append(Paragraph(_inline(line[3:]), sec_h1))
         elif line.startswith("### "):
             story.append(Paragraph(_inline(line[4:]), sec_h2))
+        elif line.startswith("#### "):
+            # Reports nest to h4 (per-claim, per-threat). Without a style here
+            # the hashes print literally, so the reader sees markdown source
+            # where a heading should be.
+            story.append(Paragraph(_inline(line[5:]), sec_h3))
         elif line.startswith(("- ", "* ", "> ")):
             story.append(Paragraph("- " + _inline(line[2:]), bullet))
+        elif stripped == ">":
+            # A bare ">" continues a blockquote; rendering it as a paragraph
+            # printed the character itself.
+            story.append(Spacer(1, 0.1 * cm))
+        elif line.startswith("  - ") or line.startswith("\t- "):
+            story.append(Paragraph("- " + _inline(line.strip()[2:]), bullet_nested))
         elif re.match(r"^\d+[.)]\s", line):
             story.append(Paragraph(_inline(line), bullet))
         elif line.startswith("---"):

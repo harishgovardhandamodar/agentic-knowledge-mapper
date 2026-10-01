@@ -26,6 +26,7 @@ the on-screen preview cannot drift apart.
 from __future__ import annotations
 
 import json
+import re
 from collections import Counter
 from datetime import datetime, timezone
 from typing import Any
@@ -57,6 +58,111 @@ def _f(val: Any, default: float = 0.0) -> float:
         return default
 
 
+def _mermaid_fences(md: str) -> list[tuple[str, str]]:
+    """Every ```mermaid block in a report, as (key, source).
+
+    A fence's key rides in its info string -- ```` ```mermaid workflow ```` --
+    and tells the PDF renderer which figure to draw. A bare ```` ```mermaid ````
+    is an unlabelled block: equally real, and it must not be skipped just
+    because no label was written.
+    """
+    out: list[tuple[str, str]] = []
+    key, buf, inside = "", [], False
+    for raw in (md or "").splitlines():
+        line = raw.rstrip()
+        s = line.strip()
+        if s.startswith("```"):
+            if not inside:
+                info = s[3:].strip().split()
+                key = info[1] if len(info) > 1 and info[0] == "mermaid" else ""
+                buf = []
+            else:
+                src = "\n".join(buf).strip()
+                if src and _looks_mermaid(src):
+                    out.append((key, src))
+                buf = []
+            inside = not inside
+            continue
+        if inside:
+            buf.append(line)
+    return out
+
+
+def _looks_mermaid(src: str) -> bool:
+    """A mermaid block opens with a diagram-type keyword."""
+    return bool(re.match(
+        r"\s*(graph|flowchart|sequenceDiagram|classDiagram|stateDiagram|erDiagram"
+        r"|journey|gantt|pie|mindmap|timeline|quadrantChart|C4Context)\b", src,
+        re.IGNORECASE))
+
+
+def _assessment_diagrams(rec: Any) -> list[dict[str, str]]:
+    """All mermaid for one assessment: the stored figure set plus anything
+    fenced inside its own report.
+
+    Both are read from the row, never regenerated: the diagram a reader saw is
+    the one in the report."""
+    out: list[dict[str, str]] = []
+    seen: set[str] = set()
+    stored = _load(getattr(rec, "diagrams_json", None), {}) or {}
+    if isinstance(stored, dict):
+        for key, src in stored.items():
+            src = str(src or "").strip()
+            if src:
+                out.append({"key": str(key), "caption": str(key).replace("_", " "),
+                            "source": src, "origin": "stored figure set"})
+                seen.add(str(key))
+    for key, src in _mermaid_fences(getattr(rec, "markdown", "") or ""):
+        if key in seen and src == next(
+                (d["source"] for d in out if d["key"] == key), None):
+            continue          # same figure as the stored set: one copy only
+        out.append({"key": key or "(unlabelled)",
+                    "caption": (key.replace("_", " ") if key
+                                else _first_line(src)),
+                    "source": src,
+                    "origin": "report body" if key else "report body (unlabelled)"})
+        if key:
+            seen.add(key)
+    return out
+
+
+def _first_line(src: str, limit: int = 60) -> str:
+    line = next((l.strip() for l in (src or "").splitlines() if l.strip()), "")
+    return line if len(line) <= limit else line[: limit - 1] + "…"
+
+
+def _explainer_diagrams(exp: Any) -> list[dict[str, str]]:
+    """Mermaid an explainer produced, from both places it can live: the
+    payload's own ``diagrams`` object and any fenced blocks in its answer."""
+    out: list[dict[str, str]] = []
+    meta = _load(getattr(exp, "meta", None), {}) or {}
+    packs: list[tuple[str, Any]] = []
+    if isinstance(meta, dict):
+        packs.append(("explainer payload", meta.get("diagrams")))
+    ans = _load(getattr(exp, "answer", None), {}) or {}
+    if isinstance(ans, dict):
+        for key, val in (ans.get("diagrams") or {}).items() if isinstance(
+                ans.get("diagrams"), dict) else []:
+            packs.append((f"answer · {key}", val))
+    for origin, pack in packs:
+        if isinstance(pack, dict):
+            for key, val in pack.items():
+                val = val.get("mermaid") if isinstance(val, dict) else val
+                src = str(val or "").strip()
+                if src:
+                    out.append({"key": str(key), "caption": str(key).replace("_", " "),
+                                "source": src, "origin": origin})
+        elif isinstance(pack, str) and pack.strip():
+            out.append({"key": "", "caption": _first_line(pack),
+                        "source": pack.strip(), "origin": origin})
+    for key, src in _mermaid_fences(
+            (ans.get("summary") if isinstance(ans, dict) else "") or ""):
+        out.append({"key": key or "(unlabelled)",
+                    "caption": key.replace("_", " ") if key else _first_line(src),
+                    "source": src, "origin": "answer body"})
+    return out
+
+
 def _iso(dt: Any) -> str | None:
     return dt.isoformat() if dt else None
 
@@ -70,22 +176,26 @@ def _short(text: str, limit: int = 240) -> str:
     return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
 
 
-def _demote_headings(md: str) -> str:
-    """Push an embedded report's headings down one level so its ``#`` title
-    cannot restart the dossier's own outline or hijack the PDF's table of
-    contents. Nothing else is touched: the text stays verbatim."""
-    return "\n".join(_one(ln) for ln in (md or "").splitlines())
+def _flatten_headings(md: str) -> str:
+    """Compress a report's heading levels into the dossier's own band.
 
-
-def _one(ln: str) -> str:
-    """Add one # to an ATX heading, saturating at h6. A leading '#' with no
-    space (a code fence marker) is left alone."""
-    if not ln.startswith("#") or len(ln) > 1 and ln[1] not in " #":
-        return ln
-    level = len(ln) - len(ln.lstrip("#"))
-    if level >= 6:
-        return ln
-    return "#" + ln
+    An appended report may nest four or five levels deep; demoting each one
+    saturates at h6, where a run of claims and threats all read as the same
+    depth and the structure is lost. Mapping the report's shallowest heading
+    to ``###`` and everything below it proportionally keeps the internal
+    hierarchy visible while leaving the dossier's ``##`` outline untouched."""
+    levels = sorted({len(l) - len(l.lstrip("#"))
+                     for l in (md or "").splitlines()
+                     if l.startswith("#") and (len(l) == 1 or l[1] == " ")})
+    if not levels:
+        return md or ""
+    top = levels[0]
+    shift = 3 - top          # the report's own h1 lands on the dossier's h3
+    return "\n".join(
+        ("#" * min(6, len(ln) - len(ln.lstrip("#")) + shift)) + ln.lstrip("#")
+        if ln.startswith("#") and (len(ln) == 1 or ln[1] == " ")
+        else ln
+        for ln in (md or "").splitlines())
 
 
 # --------------------------------------------------------------------------
@@ -214,6 +324,7 @@ def _collection_section(db, inv_id: int) -> dict[str, Any]:
             "depth": e.depth or "balanced",
             "audience": e.audience or "intermediate",
             "hops": e.hops or 0,
+            "diagrams": _explainer_diagrams(e),
             "excerpt": _answer_excerpt(e),
             "key_points": [str(k) for k in (ans.get("key_points") or [])][:6]
                           if isinstance(ans, dict) else [],
@@ -392,6 +503,89 @@ def _hypothesis_scoring(scoring: dict, items: list[dict]) -> dict[str, Any]:
     }
 
 
+def _figure_label(key: str, src: str, product: str = "") -> str:
+    """The figure key only when the source really is that figure.
+
+    Every path stores its diagrams under the same three names -- ``dataflow``,
+    ``threat_paths``, ``workflow`` -- but a model path's ``dataflow`` is a model
+    flow or a hypothesis map, not the catalogue data-flow. Trusting the key
+    alone hands the PDF renderer a catalogue figure to draw over an unrelated
+    diagram, so the label is only honoured when the source matches the figure
+    the renderer can actually draw.
+    """
+    from .security import mermaid_dataflow, mermaid_threat_paths, mermaid_workflow
+    canon = {
+        "dataflow": mermaid_dataflow(product),
+        "threat_paths": mermaid_threat_paths(),
+        "workflow": mermaid_workflow(product),
+    }
+    wanted = canon.get(key)
+    if wanted and _norm_mermaid(wanted) == _norm_mermaid(src):
+        return key
+    return ""
+
+
+def _norm_mermaid(src: str) -> str:
+    """Collapse whitespace so an exact-source comparison is not defeated by
+    re-indentation alone."""
+    return re.sub(r"\s+", " ", (src or "")).strip()
+
+
+def _diagram_index(rows: list[dict], answers: list[dict]) -> list[dict]:
+    """Every diagram the investigation produced, deduplicated by source.
+
+    One product's figure set is repeated verbatim by every assessment that
+    shares it, and the report body fences the same figures again. Listing each
+    copy would pad the PDF with identical drawings and read as a bug, so a
+    source appears once with the places it came from recorded beside it. The
+    catalogue is otherwise unaltered -- nothing is dropped, only repeated.
+    """
+    order = list(_PATH_ORDER)
+    ordered = sorted(
+        [r for r in rows if r.get("diagrams")],
+        key=lambda r: (order.index(r["path"]) if r["path"] in order
+                       else len(order),
+                       not r.get("is_latest"), r.get("id") or 0))
+    seen: dict[str, dict] = {}
+    groups: list[dict] = []
+
+    def _add(grp_title: str, src: str, cap: str, key: str, label: str,
+             origin: str, where: str) -> None:
+        sig = _norm_mermaid(src)
+        if not sig:
+            return
+        if sig in seen:
+            seen[sig]["seen_in"].append(where)
+            return
+        entry = {"key": key, "caption": cap, "source": src, "origin": origin,
+                 "label": label, "seen_in": [where]}
+        seen[sig] = entry
+        groups.append({"title": grp_title, "diagrams": [entry]})
+
+    for r in ordered:
+        title = f"{r['label']} — assessment #{r['id']}"
+        for d in r["diagrams"]:
+            key = d["key"] if d["key"] not in ("", "(unlabelled)") else ""
+            label = _figure_label(key, d["source"],
+                                  r.get("product_name") or "") if key else ""
+            cap = (key.replace("_", " ") if key else _first_line(d["source"]))
+            _add(title, d["source"], cap, key, label, d["origin"],
+                 f"assessment #{r['id']}")
+    for a in answers:
+        if not a.get("diagrams"):
+            continue
+        title = f"Explainer #{a['id']} — {a.get('status') or 'unknown'}"
+        for d in a["diagrams"]:
+            key = d["key"] if d["key"] not in ("", "(unlabelled)") else ""
+            cap = (key.replace("_", " ") if key else _first_line(d["source"]))
+            _add(title, d["source"], cap, key, "", d["origin"],
+                 f"explainer #{a['id']}")
+    # One flat section: the heading per source is the caption, so the grouping
+    # titles are dropped and every figure sits in a single ordered list.
+    return [{"title": "", "diagrams": [d for g in groups for d in g["diagrams"]]}] \
+        if any(g["diagrams"] for g in groups) else []
+
+
 def _score_audit(db, inv_id: int) -> dict[str, Any]:
     """Per-assessment score audit: inputs, arithmetic, and what moved the
     number. ``latest`` marks the row that currently stands for each path."""
@@ -463,6 +657,7 @@ def _score_audit(db, inv_id: int) -> dict[str, Any]:
             # were reached; this is the report the user actually read, kept
             # unedited so the two can be compared rather than reconciled.
             "report_markdown": rec.markdown or "",
+            "diagrams": _assessment_diagrams(rec),
             "provenance": {
                 "a2a_task_id": trace.get("task_id") or "",
                 "hops": [h for h in (trace.get("trace") or [])
@@ -873,7 +1068,36 @@ def dossier_markdown(db, inv_id: int, dossier: dict | None = None) -> str:
         for row in current:
             A(f"### {row['label']} — assessment #{row['id']}")
             A("")
-            A(_demote_headings(row["report_markdown"]))
+            A(_flatten_headings(row["report_markdown"]))
+            A("")
+
+    # --- every mermaid source the investigation produced ---
+    figs = _diagram_index(scores["rows"], col.get("answers") or [])
+    flat = [d for g in figs for d in g["diagrams"]]
+    if flat:
+        A("## 6. Diagrams")
+        A("")
+        A(f"{len(flat)} distinct diagram source"
+          f"{'s' if len(flat) != 1 else ''} across this investigation. The stored "
+          "figure set, anything fenced inside a report, and anything an "
+          "explainer produced are all included; a source shared by several "
+          "assessments is listed once with where it appears. Sources are "
+          "reproduced verbatim so each figure can be re-rendered elsewhere.")
+        A("")
+        for i, d in enumerate(flat, 1):
+            A(f"### {i}. {d['caption']}")
+            A("")
+            where = ", ".join(d["seen_in"][:8])
+            more = (f" (+{len(d['seen_in']) - 8} more)"
+                    if len(d["seen_in"]) > 8 else "")
+            A(f"*{d['origin']} — appears in {where}{more}.*")
+            A("")
+            # A label the PDF figure specs recognise is drawn as a vector
+            # figure; anything else is shown as source, so no diagram is
+            # silently dropped or drawn as the wrong figure.
+            A(f"```mermaid {d['label']}" if d.get("label") else "```mermaid")
+            A(d["source"])
+            A("```")
             A("")
 
     A("---")

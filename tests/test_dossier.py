@@ -532,5 +532,160 @@ class TestWriteupIntegrity(unittest.TestCase):
             inv.close()
 
 
+class TestPdfRendersProse(unittest.TestCase):
+    """The PDF is a report, not a transcript of the markdown it was given."""
+
+    def _text(self, md: str) -> str:
+        try:
+            pdf = sec.build_pdf(md, title="Render")
+        except RuntimeError:
+            self.skipTest("reportlab not installed")
+        import io
+        import pypdf
+        return "\n".join(p.extract_text()
+                         for p in pypdf.PdfReader(io.BytesIO(pdf)).pages)
+
+    def test_italics_render_and_snake_case_survives(self):
+        text = self._text("_Exposure tier:_ Confidential · field scoring_method "
+                          "and a2a_task_id stay literal")
+        self.assertNotRegex(text, r"(?<![\w])_[^_\n]{2,60}_(?![\w])")
+        self.assertIn("Exposure tier:", text)
+        # Word-boundary aware: an identifier is not an emphasis span.
+        self.assertIn("scoring_method", text)
+        self.assertIn("a2a_task_id", text)
+
+    def test_fourth_level_heading_is_not_printed_as_hashes(self):
+        text = self._text("#### H01 -- a held-out rows claim\n\nbody text")
+        self.assertNotIn("####", text)
+        self.assertIn("H01", text)
+        self.assertIn("body text", text)
+
+    def test_unlabelled_mermaid_is_shown_not_dropped(self):
+        # The old renderer printed a pointer to the dashboard and discarded
+        # the figure, so the report silently lost content it had been given.
+        src = "flowchart TD\n P[premise] --> C[claim]"
+        text = self._text("```mermaid\n" + src + "\n```")
+        self.assertNotIn("illustrated dashboard view", text)
+        self.assertIn("premise", text)
+        self.assertIn("claim", text)
+
+    def test_labeled_mermaid_is_drawn_not_dumped(self):
+        md = "```mermaid dataflow\n" + sec.mermaid_dataflow("Acme") + "\n```"
+        text = self._text(md)
+        self.assertIn("Figure 1", text)
+        # A figure we can draw must not also spill its source into the page.
+        self.assertNotIn("flowchart LR", text)
+
+    def test_non_mermaid_fences_are_shown_but_not_called_a_figure(self):
+        # A yaml/python block is not a diagram: it must not be numbered as a
+        # Figure or captioned "mermaid source", but it is still shown rather
+        # than dropped along with a misleading dashboard pointer.
+        text = self._text("```yaml\nkey: value\n```")
+        self.assertIn("key: value", text)
+        self.assertNotIn("mermaid source", text)
+        self.assertNotIn("Figure 1", text)
+        self.assertIn("yaml block", text)
+
+    def test_table_fits_the_frame_and_keeps_every_column_visible(self):
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib.units import cm
+        wide = " ".join(["manifest build pipeline"] * 30)
+        md = ("| Read from | Driven by | Category | Source | Confidence |\n"
+              "|---|---|---|---|---|\n"
+              f"| parquet | {wide} | training | manifest.json | 0.88 |\n")
+        try:
+            pdf = sec.build_pdf(md, title="Fit")
+        except RuntimeError:
+            self.skipTest("reportlab not installed")
+        import io
+        import re as _re
+        import pypdf
+        reader = pypdf.PdfReader(io.BytesIO(pdf))
+        limit = 2 * cm + (A4[0] - 2 * 2 * cm)
+        widest = 0.0
+        for page in reader.pages:
+            data = page.get_contents().get_data().decode("latin-1")
+            for m in _re.finditer(r"([\d.-]+) ([\d.-]+) ([\d.-]+) ([\d.-]+) re", data):
+                widest = max(widest, float(m.group(3)))
+        self.assertLessEqual(widest, limit + 1)
+        text = "\n".join(p.extract_text() for p in reader.pages)
+        # Every header cell must still be on the page: an over-wide table used
+        # to push the trailing columns off it.
+        for head in ("Read from", "Driven by", "Category", "Source",
+                     "Confidence"):
+            self.assertIn(head, text)
+
+    def test_first_column_of_a_data_row_is_not_white_on_white(self):
+        # The header band's white text style used to leak into data rows, so
+        # the whole ID column printed invisible against the white cell.
+        text = self._text("| ID | Risk | Severity |\n|---|---|---|\n"
+                          "| T01 | accidental paste | Critical |\n")
+        self.assertIn("T01", text)
+        self.assertIn("Critical", text)
+
+    def test_ragged_table_row_does_not_break_the_render(self):
+        # A short row made reportlab raise, losing the entire document.
+        md = ("| A | B | C |\n|---|---|---|\n| only one cell |\n| 1 | 2 | 3 |\n")
+        text = self._text(md)
+        self.assertIn("only one cell", text)
+
+
+class TestDiagramCollection(unittest.TestCase):
+    """Every mermaid the investigation produced belongs in the report."""
+
+    def test_stored_figures_and_report_fences_both_collected(self):
+        from app.dossier import _assessment_diagrams
+        rec = mock.Mock()
+        rec.diagrams_json = json.dumps({"workflow": sec.mermaid_workflow("Acme")})
+        rec.markdown = ("```mermaid\nflowchart TD\n A-->B\n```\n\n"
+                        "```python\nprint(1)\n```\n")
+        got = _assessment_diagrams(rec)
+        keys = [d["key"] for d in got]
+        self.assertIn("workflow", keys)
+        self.assertIn("(unlabelled)", keys)
+        # A python fence is not a diagram and must not be collected as one.
+        self.assertNotIn("print(1)", " ".join(d["source"] for d in got))
+
+    def test_figure_label_rejects_a_mislabelled_diagram(self):
+        from app.dossier import _figure_label
+        # A model path stores a hypothesis map under the key 'dataflow'. The
+        # renderer can only draw the catalogue data-flow, so honouring the key
+        # would draw the wrong figure.
+        self.assertEqual(_figure_label("dataflow", "flowchart TD\n P-->C", "Acme"),
+                         "")
+        self.assertEqual(_figure_label("dataflow",
+                                       sec.mermaid_dataflow("Acme"), "Acme"),
+                         "dataflow")
+
+    def test_dossier_includes_a_diagrams_section(self):
+        inv = _Inv()
+        try:
+            out = _run("standard", inv.db, inv.id)
+            rec = _store(inv.db, inv.id, out)
+            md = dossier_markdown(inv.db, inv.id)
+            self.assertIn("## 6. Diagrams", md)
+            self.assertIn("flowchart LR", md)
+            # The stored figure set must reach the write-up, not just the JSON.
+            self.assertIn(rec.diagrams_json and "dataflow", md)
+        finally:
+            inv.close()
+
+    def test_shared_diagram_is_listed_once(self):
+        inv = _Inv()
+        try:
+            shared = sec.mermaid_dataflow(NAME)
+            for _ in range(2):
+                out = _run("standard", inv.db, inv.id)
+                out["diagrams"] = {"dataflow": shared}
+                _store(inv.db, inv.id, out)
+            md = dossier_markdown(inv.db, inv.id)
+            # One product's figure set repeated across assessments is one
+            # diagram; listing each copy padded the report with duplicates.
+            self.assertEqual(md.count("flowchart LR"), 1)
+            self.assertIn("appears in", md)
+        finally:
+            inv.close()
+
+
 if __name__ == "__main__":
     unittest.main()
