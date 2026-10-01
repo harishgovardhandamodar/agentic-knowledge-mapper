@@ -162,7 +162,8 @@ string as a claim of CVSS conformance. Impact of 0 scores 0 — clamping it up t
 ## The evalkit
 
 Eight pinned cases plus a set of invariants that must hold whatever the catalog
-contains. The cases catch a *moved number*; the invariants catch a class of bug
+contains — and six pinned model cases with four model invariants for the
+W1/W2/W3 methods (see the model-catalogs section below). The cases catch a *moved number*; the invariants catch a class of bug
 a pinned number cannot — a broken edit to the control-combination maths shows
 up there even if every expected value happened to be updated in the same commit.
 
@@ -176,6 +177,15 @@ up there even if every expected value happened to be updated in the same commit.
 | `all-threats-irrelevant-falls-back` | an empty scope falls back to all rows rather than scoring 0 |
 | `unknown-control-ids-ignored` | an id outside the pack is dropped, not trusted |
 | `empty-threat-set` | no threats means no risk, and must not divide by zero |
+
+The gate also covers the model methods in `app/model_eval.py`: 4 W1 cases
+(open-weights diffusion with extraction literature → 46.6/25.0%; API-only
+model with no attacks → no score), 2 W2 cases (sensitive tabular with high
+memorization → 60.0/50.0% uncertainty; fully-rated low → 25.0/0.0%), 2
+mitigation-ranking cases (tabular+open weights prioritises DP/canaries and
+defers watermarking; API-only generative excludes weight-level controls),
+plus invariants (unknown never lowers risk, model-specific outranks family,
+empty means no score).
 
 Run it:
 
@@ -199,6 +209,21 @@ PACK_FRAMEWORKS = {
 Recorded so an assessment can be read against the revision it was scored with,
 and so re-basing the catalog on a new OWASP release is a deliberate act with a
 diff.
+
+## Model catalogs (not the threat pack)
+
+Product threats live above. Model assessments score against three separate
+versioned catalogs in `app/model_eval.py` — never the T01–T12 rows:
+
+| Catalog | Id / version | Contents |
+|---|---|---|
+| Attack taxonomy | `akm-model-adversarial 1.0.0` | 9 classes (membership inference, extraction, inversion, evasion, poisoning, injection, theft, cascade, other) with severities; scope weights model_specific 1.0 / family 0.6 / modality 0.4 |
+| Adoption dimensions | `akm-adoption-risk 1.0.0` | 8 dimensions with weights (memorization 0.20 …); `unknown` raises uncertainty, never lowers risk |
+| Mitigation catalog | `akm-model-mitigations 1.0.0` | MM01–MM15 with attack/dimension links, family fit, access requirements, efficacy hints, burden, limitations |
+
+Each has a fingerprint function (`model_adv_fingerprint`,
+`adoption_fingerprint`, `mitigation_fingerprint`); the evalkit pins above
+fail CI on silent edits, same rule as the pack.
 
 ## Changing the pack
 

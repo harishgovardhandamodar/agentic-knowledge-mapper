@@ -34,6 +34,10 @@ model paths:
 | `hypothesis-analyst` | `draft_hypotheses` | `POST /api/agents/invoke` |
 | `hypothesis-verifier` | `verify_hypotheses` | `POST /api/agents/invoke` |
 | `hypothesis-reporter` | `write_hypothesis_report` | `POST /api/agents/invoke` |
+| `model-adv-intel` | `map_model_attacks` | `POST /api/agents/invoke` |
+| `model-adoption-analyst` | `rate_adoption` | `POST /api/agents/invoke` |
+| `model-mitigation-analyst` | `propose_model_mitigations` | `POST /api/agents/invoke` |
+| `model-eval-reporter` | `write_model_eval_report` | `POST /api/agents/invoke` |
 
 `model-profiler` and `research-collector` are shared: one subject profile and
 one graph search serve all three model flows, so the same evidence graph is
@@ -283,6 +287,64 @@ Rules this path holds to:
   that predate the markers are still re-derived (target or standard only).
 
 Like the other two model paths, it skips standards mapping and refuses the
+what-if re-scorer (422).
+
+## Model-engineering path (W1 adversarial + W2 adoption + W3 mitigations)
+
+A fourth mode for when the subject is a **model**, not a product workflow:
+`assessment_mode=model_engineering` with structured metadata (name, family,
+modality, weights source, training-data posture, deployment pattern, focus
+terms, workflow subset). One stored row carries all three workflows:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant ORC as model-eval-orchestrator
+    participant COL as research-collector
+    participant AI as model-adv-intel
+    participant AA as model-adoption-analyst
+    participant MA as model-mitigation-analyst
+    participant ENG as scoring engine
+    participant MR as model-eval-reporter
+    ORC->>COL: collect_research (W1 attack literature)
+    ORC->>AI: map_model_attacks
+    AI-->>ORC: MA-… findings (class, scope, confidence)
+    ORC->>COL: collect_research (W2 cards + primary sources)
+    ORC->>AA: rate_adoption
+    AA-->>ORC: 8 dimension ratings (unknown = gap, never safe)
+    ORC->>COL: collect_research (W3 mitigation literature)
+    ORC->>MA: propose_model_mitigations
+    MA-->>ORC: ranked MM* plan + deferrals + roadmap
+    ORC->>ENG: coverage + risk + residual methods
+    ENG-->>ORC: W1 risk · W2 risk + uncertainty · W3 indicative residual
+    ORC->>MR: write_model_eval_report
+```
+
+Rules this path holds to:
+
+- **Scores may be null.** No evidence means "— (no evidence)" in every
+  surface (Markdown, preview, PDF, synthesis), never a zero that would read
+  as "secure". W1 and W2 score independently; the headline is the W2
+  adoption risk, falling back to W1, falling back to null.
+- **Family-level evidence is labeled.** A finding whose evidence names only
+  the family (not the checkpoint) ships as `family`, with lower scope
+  weight — never upgraded to `model_specific`.
+- **Unknowns raise uncertainty.** W2 dimensions with no evidence rate
+  `unknown` and accumulate into `uncertainty_pct` instead of diluting risk.
+- **Mitigations are recommended, never implemented.** The MM01–MM15 catalog
+  carries efficacy priors and burden ratings; the analyst ranks by driver
+  pressure minus burden, defers inapplicable controls with reasons, and
+  residuals stay indicative. Catalog and methods are versioned and
+  fingerprinted (`akm-model-mitigations 1.0.0`).
+- **W3 alone still collects risk context.** Requesting only mitigations runs
+  the W1/W2 collectors for signals first; proposing controls with zero risk
+  context is refused, explicitly.
+- **Approval parks on the MM* plan.** With `require_approval`, the run stops
+  after the mitigation analyst (`stop_after="analyst"`) and waits for a
+  second person; the decision lands on the ledger naming both people, and an
+  unstamped plan re-parks instead of proceeding.
+
+Like the other model paths, it skips standards mapping and refuses the
 what-if re-scorer (422).
 
 ## Threat model (STRIDE × OWASP LLM)
