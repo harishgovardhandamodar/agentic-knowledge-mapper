@@ -84,8 +84,73 @@ def _plan_queries(inv: Investigation) -> dict:
         srcs = [s for s in (q.get("sources") or []) if s in enabled] or list(enabled)
         clean.append({"text": q["text"][:120], "sources": srcs})
     _ensure_vendor_doc_query(inv, clean, enabled)
+    _ensure_model_queries(inv, clean, enabled)
     return {"rationale": plan.get("rationale", ""), "queries": clean or
             [{"text": inv.keywords.split(",")[0].strip() or inv.title, "sources": list(enabled)}]}
+
+
+_MODEL_FAMILY_HINTS = (
+    ("tabular", "tabular foundation model"),
+    ("tabpfn", "TabPFN"),
+    ("diffusion", "diffusion model"),
+    ("stable diffusion", "Stable Diffusion"),
+    ("embedding", "embedding model"),
+    ("time series", "time-series foundation model"),
+    ("multimodal", "multimodal model"),
+    ("llm", "large language model"),
+    ("gpt", "GPT"), ("llama", "LLaMA"), ("mistral", "Mistral"),
+    ("bert", "BERT"), ("clip", "CLIP"),
+)
+
+
+def _ensure_model_queries(inv: Investigation, clean: list[dict],
+                          enabled: set[str]) -> None:
+    """W1/W2 query families when the brief targets a model.
+
+    A model brief needs adversarial literature (W1: memorization, membership
+    inference, extraction, poisoning) and primary model documentation (W2:
+    model card, weights, limitations) alongside general material. General
+    OWASP/arXiv queries already planned are kept; these families are added,
+    capped at six queries total.
+    """
+    try:
+        from . import security as _sec
+        prof = _sec.profile_model_subject(
+            inv.title or "", inv.description or "",
+            (inv.keywords or "").split(","))
+        is_model = bool(prof.get("is_model_query"))
+    except Exception:
+        is_model = False
+    if not is_model:
+        return
+    blob = " ".join(q.get("text") or "" for q in clean).lower()
+    brief = f"{inv.title or ''} {inv.keywords or ''}".lower()
+    family = ""
+    for hint, name in _MODEL_FAMILY_HINTS:
+        if hint in brief:
+            family = name
+            break
+    subject = family or " ".join(_vendor_terms(inv)) or "foundation model"
+    srcs = ["web", "arxiv"]
+    srcs = [s for s in srcs if s in enabled] or sorted(enabled)
+    if not srcs:
+        return
+    if len(clean) < 6 and not re.search(
+            r"memorization|membership inference|extraction|poisoning|"
+            r"adversarial", blob):
+        clean.append({"text": f"{subject} memorization membership "
+                              f"inference extraction"[:120], "sources": srcs})
+    if len(clean) < 6 and not re.search(
+            r"model card|huggingface|weights|checkpoint|red.?team|"
+            r"benchmark", blob):
+        clean.append({"text": f"{subject} model card weights "
+                              f"limitations"[:120], "sources": srcs})
+    if len(clean) < 6 and not re.search(
+            r"differential privacy|unlearning|watermark|robustness|"
+            r"mitigat", blob):
+        clean.append({"text": f"differential privacy unlearning "
+                              f"watermarking {subject}"[:120],
+                      "sources": srcs})
 
 
 def _vendor_terms(inv: Investigation) -> list[str]:
@@ -187,10 +252,14 @@ def _run_searches(queries: list, seen_urls: set) -> list:
     return found
 
 
-def _analyze_batch(inv: Investigation, batch: list, existing: list) -> list:
+def _analyze_batch(inv: Investigation, batch: list, existing: list,
+                 model_subject: bool = False) -> list:
     """LLM relevance + attribute extraction for up to ANALYZE_BATCH candidates."""
     sys = ("You are a research analyst. Judge candidates against the brief. "
            "Reply with JSON only: a list with one object per candidate.")
+    type_list = ("news|paper|essay|research|tweet|interview|book"
+                 + ("|adversarial_paper|model_card|benchmark|cve_advisory|"
+                    "weights_release|known_issue" if model_subject else ""))
     items = []
     for i, c in enumerate(batch):
         items.append(f"[{i}] {c['title']}\nURL: {c.get('url','')}\n"
@@ -202,7 +271,7 @@ def _analyze_batch(inv: Investigation, batch: list, existing: list) -> list:
     user = (f"Brief: {inv.title} | {inv.keywords} | {inv.description}\n{ctx}\n\n"
             f"Candidates:\n" + "\n\n".join(items) +
             "\n\nReply JSON list: [{\"index\": i, \"relevance\": 0..1, \"keep\": bool, "
-            "\"reason\": str, \"artifact_type\": news|paper|essay|research|tweet|interview|book, "
+            "\"reason\": str, \"artifact_type\": " + type_list + ", "
             "\"tags\": [max 5 lowercase], \"sentiment\": -1..1, \"summary\": str (1-2 sentences), "
             "\"projection\": null | {\"type\": utopian|dystopian|cautionary|accelerationist|neutral, "
             "\"confidence\": 0..1, \"timeframe\": str, \"summary\": str}, "
@@ -328,6 +397,14 @@ def run_investigation_agent(investigation_id: int, max_items: int = 25,
                 raise RuntimeError(f"planner failed: {e}")
             if goal:
                 plan["goal"] = plan.get("goal") or goal
+            try:
+                from . import security as _sec
+                _prof = _sec.profile_model_subject(
+                    inv.title or "", inv.description or "",
+                    (inv.keywords or "").split(","))
+                plan["model_subject"] = bool(_prof.get("is_model_query"))
+            except Exception:
+                plan["model_subject"] = False
             run.plan = json.dumps(plan)
             db.commit()
             _event(db, run.id, "plan",
@@ -375,7 +452,9 @@ def run_investigation_agent(investigation_id: int, max_items: int = 25,
                     batch = found[i:i + ANALYZE_BATCH]
                     batches += 1
                     llm_calls_spent += 1
-                    verdicts = _analyze_batch(inv, batch, existing)
+                    verdicts = _analyze_batch(inv, batch, existing,
+                                              model_subject=bool(
+                                                  plan.get("model_subject")))
                     by_idx = {v.get("index"): v for v in verdicts
                               if isinstance(v, dict) and isinstance(v.get("index"), int)}
                     for j, cand in enumerate(batch):

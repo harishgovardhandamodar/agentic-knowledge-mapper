@@ -849,7 +849,8 @@ def resolve_model_mode(product: str, use_case: str = "",
     slightly different ones -- otherwise an auto-mode request could slip past
     the lock held by the explicit run it actually resolves to.
     """
-    if requested in ("target", "adversarial", "hypothesis"):
+    if requested in ("target", "adversarial", "hypothesis",
+                       "model_engineering"):
         return requested
     profile = subject_profile or profile_model_subject(product, use_case,
                                                       focus or [])
@@ -1607,7 +1608,8 @@ def build_assessment(
     investigation_id: Any = None,
                     declared_controls: Optional[list[str]] = None,
                     control_plan_override: Optional[dict[str, Any]] = None,
-                    assessment_mode: str = "") -> dict[str, Any]:
+                    assessment_mode: str = "",
+                    model_meta: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     exposure = (exposure or "confidential_data").strip()
     if exposure not in EXPOSURE_META:
         exposure = "confidential_data"
@@ -1646,6 +1648,20 @@ def build_assessment(
     focus = focus or ["accidental_copy", "misclassification"]
     model_profile = profile_model_subject(product_name or "", use_case or "",
                                           focus)
+    if assessment_mode == "model_engineering":
+        # A model subject, not a product workflow: W1 adversarial research +
+        # W2 adoption risk, gated only on this mode so product paths cannot
+        # fall in here by wording accident.
+        from . import model_eval as _me
+        meta = _me.normalize_model_meta(model_meta or {})
+        if not meta["model_name"]:
+            meta["model_name"] = product_name or "Target model"
+        return _build_model_engineering_assessment(
+            model_meta=meta,
+            product_url=product_url or "",
+            exposure=exposure, meta=EXPOSURE_META[exposure],
+            use_case=use_case or "", focus=focus, db=db,
+            investigation_id=investigation_id)
     if assessment_mode == "hypothesis":
         # The third flow reads the first two, so it is checked before the
         # model branch below: it synthesises a model subject's two assessments,
@@ -2002,6 +2018,171 @@ def render_adversarial_markdown(product_name: str, product_url: str,
       "signals so the owning team can close them; no step here is an instruction "
       "to run one._")
     return "\n".join(L)
+
+
+def _build_model_engineering_assessment(
+    model_meta: dict[str, Any], product_url: str, exposure: str,
+    meta: dict[str, Any], use_case: str = "",
+    focus: list[str] | None = None, db: Any = None,
+    investigation_id: Any = None,
+) -> dict[str, Any]:
+    """Assemble a model-engineering assessment: W1 + W2 in one stored row.
+
+    Same result keys as the other builders so persistence, the report UI and
+    the dossier work unchanged. ``threats`` carries the W1 attack findings
+    (MA-…); the W2 dimension register rides in ``scoring["w2"]``. The
+    headline is the W2 adoption risk (the go/no-go number), falling back to
+    W1 coverage risk, falling back to ``None`` -- never a fake low.
+    """
+    from . import model_eval as _me
+    from .agents import run_model_engineering_a2a_workflow
+    name = model_meta.get("model_name") or "Target model"
+    a2a = run_model_engineering_a2a_workflow(
+        model_meta=model_meta, use_case=use_case or "",
+        focus_terms=list(model_meta.get("focus_terms") or []) +
+        list(focus or []),
+        db=db, investigation_id=investigation_id, exposure=exposure,
+        exposure_label=meta["label"],
+    )
+    w1 = a2a.get("scoring", {}).get("w1", {}) or {}
+    w2 = a2a.get("scoring", {}).get("w2", {}) or {}
+    overall = w2.get("overall_pct")
+    if overall is None:
+        overall = w1.get("overall_pct")
+    posture = _me.posture_for(overall)
+    if w2.get("overall_pct") is None and w1.get("overall_pct") is not None:
+        # Half-evidenced: the number is W1-only, so the posture must say so
+        # rather than printing an unqualified LOW.
+        posture += " (W1 only — adoption risk unevidenced)"
+    findings = a2a.get("model_attacks", []) or []
+    dimensions = a2a.get("adoption_dimensions", []) or []
+    blockers = [d for d in dimensions
+                if d.get("rating") in ("high", "critical")]
+    top_classes = sorted(
+        {f.get("attack_class") for f in findings if f.get("attack_class")})
+    _mit = a2a.get("mitigation", {}) or {}
+    _plan = _mit.get("plan") or []
+    _mit_perspective = {
+        "key": "mitigations", "label": "Mitigations (W3)",
+        "icon": "fa-shield-halved",
+        "headline": (f"{name}: {len(_plan)} proposed controls, "
+                     f"{len(_mit.get('deferred', []))} deferred"),
+        "metrics": [
+            {"k": "Proposed", "v": len(_plan)},
+            {"k": "Deferred", "v": len(_mit.get("deferred", []))},
+            {"k": "Uncovered risks",
+             "v": len(_mit.get("uncovered_risks", []))},
+        ],
+        "bullets": [
+            {"text": ("Top controls: " + "; ".join(
+                f"{p['control_id']}" for p in _plan[:3]) + "."
+                if _plan else "No applicable controls for this deployment.")},
+        ],
+        "focus": ["Controls", "Burden", "Residual"]}
+    perspectives = [
+        {"key": "adversarial", "label": "Adversarial research (W1)",
+         "icon": "fa-crosshairs",
+         "headline": (f"{name}: {len(findings)} attack class(es), "
+                      f"{w1.get('coverage_pct', 0):g}% class coverage"),
+         "metrics": [
+             {"k": "W1 risk", "v": _pct_or_dash(w1.get("overall_pct")),
+              "tone": "high" if (w1.get("overall_pct") or 0) >= 60 else "medium"},
+             {"k": "Findings", "v": len(findings)},
+             {"k": "Top classes", "v": ", ".join(top_classes[:3]) or "—"},
+         ],
+         "bullets": [
+             {"text": ("No model-specific literature found -- family-level "
+                       "only." if findings and all(
+                           f.get("applies_to") != "model_specific"
+                           for f in findings)
+                       else "No adversarial evidence found as of this run."
+                       if not findings else
+                       f"Top classes: {', '.join(top_classes[:3])}.")},
+         ],
+         "focus": ["Attack surface", "Applicability", "Confidence"]},
+        {"key": "adoption", "label": "Adoption risk (W2)",
+         "icon": "fa-gears",
+         "headline": (f"{name}: adoption risk "
+                      f"{_pct_or_dash(w2.get('overall_pct'))} "
+                      f"({w2.get('uncertainty_pct', 0):g}% uncertainty)"),
+         "metrics": [
+             {"k": "W2 risk", "v": _pct_or_dash(w2.get("overall_pct")),
+              "tone": "high" if (w2.get("overall_pct") or 0) >= 60 else "medium"},
+             {"k": "Blockers", "v": len(blockers)},
+             {"k": "Uncertainty", "v": f"{w2.get('uncertainty_pct', 0):g}%"},
+         ],
+         "bullets": [
+             {"text": ("Blockers: " + "; ".join(
+                 f"{b['dimension']} ({b['rating']})" for b in blockers[:3]) + "."
+                 if blockers else "No high-or-critical dimensions rated.")},
+         ],
+         "focus": ["Dimensions", "Unknowns", "Backlog"]},
+        _mit_perspective,
+    ]
+    w3 = a2a.get("w3_scoring", {}) or {}
+    mitigation = a2a.get("mitigation", {}) or {}
+    scoring = {"overall_pct": overall,
+               "inherent_pct": overall, "residual_pct": overall,
+               "delta": 0.0,
+               "assessment_path": "model_engineering",
+               "method": "model_engineering_v1",
+               "w1": w1, "w2": w2, "w3": w3,
+               "model_adv_version": _me.MODEL_ADV_VERSION,
+               "model_adv_fingerprint": _me.model_adv_fingerprint(),
+               "adoption_version": _me.ADOPTION_VERSION,
+               "adoption_fingerprint": _me.adoption_fingerprint(),
+               "mitigation_version": _me.MITIGATION_VERSION,
+               "mitigation_fingerprint": _me.mitigation_fingerprint()}
+    return {
+        "product_name": name,
+        "product_url": product_url,
+        "exposure": exposure,
+        "exposure_label": meta["label"],
+        "overall_pct": overall if overall is not None else 0.0,
+        "inherent_pct": overall if overall is not None else 0.0,
+        "residual_pct": overall if overall is not None else 0.0,
+        "delta": 0.0,
+        "confidence": w1.get("coverage_pct", 0) / 100.0,
+        "posture": posture,
+        "threats": findings,
+        "scoring": scoring,
+        "perspectives": perspectives,
+        "control_plan": {"declared_controls": [], "proposed_controls": [],
+                         "confidence": 0.5,
+                         "source": ("model path: engineering controls are not "
+                                    "in the product control catalogue")},
+        "active_controls": [],
+        "evidence_confidence": {},
+        "diagrams": {"dataflow": mermaid_dataflow(name),
+                     "threat_paths": "", "workflow": ""},
+        "pages": [],
+        "fetched_count": 0,
+        "markdown": a2a.get("report_markdown", ""),
+        "evidence": a2a.get("evidence", []),
+        "queries_run": a2a.get("queries_run", []),
+        "artifact_count": 0,
+        "scope": a2a.get("scope", ""),
+        "known_exploits": [],
+        "exec_paragraph": a2a.get("exec_paragraph", ""),
+        "a2a_trace": a2a.get("a2a_trace", []),
+        "a2a_task_id": a2a.get("task_id", ""),
+        "openshell": [],
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "model_meta": model_meta,
+        "model_attacks": findings,
+        "adoption_dimensions": dimensions,
+        "mitigation": mitigation,
+        "report_markdown": a2a.get("report_markdown", ""),
+        "recommendations": a2a.get("recommendations", []),
+    }
+
+
+def _pct_or_dash(value: Any) -> str:
+    """A score for display: ``None`` (no evidence) is a dash, never zero."""
+    try:
+        return f"{float(value):g}" if value is not None else "—"
+    except (TypeError, ValueError):
+        return "—"
 
 
 def _build_adversarial_assessment(product_name: str, product_url: str,

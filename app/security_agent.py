@@ -188,6 +188,14 @@ def run_security_assessment(run_id: int, params: dict):
                    "Ignored an approved control plan with no recorded approver; "
                    "parking at the gate instead.")
             approved_plan = None
+        approved_mplan = params.get("approved_mitigation_plan") or None
+        if approved_mplan is not None and not (
+                params.get("approved_by")
+                and params.get("approved_at")):
+            _event(db, run.id, "gate",
+                   "Ignored an approved mitigation plan with no recorded "
+                   "approver; parking at the gate instead.")
+            approved_mplan = None
         if params.get("require_approval") and not approved_plan:
             # The gate approves a catalog control plan, so a model subject has
             # nothing to park on: its path scores dimension weights and maps no
@@ -198,7 +206,36 @@ def run_security_assessment(run_id: int, params: dict):
             _gate_profile = _sec.profile_model_subject(
                 params.get("product_name") or "", params.get("use_case") or "",
                 params.get("focus") or [])
-            if _gate_profile["is_model_query"] or _mode == "hypothesis":
+            if _mode == "model_engineering" and (
+                    params.get("model_meta") or {}).get("workflows") and \
+                    "mitigation_controls" in (
+                        params.get("model_meta") or {}).get("workflows") and \
+                    not approved_mplan:
+                # W3 proposes a real MM* plan, so there IS something to park
+                # on: run through the mitigation analyst, then wait for a
+                # human. Other model paths still skip (nothing to approve).
+                from .agents import run_model_engineering_a2a_workflow
+                preview = run_model_engineering_a2a_workflow(
+                    params.get("model_meta") or {},
+                    use_case=params.get("use_case") or "",
+                    db=db, investigation_id=inv.id,
+                    exposure=params.get("exposure") or "confidential_data",
+                    stop_after="analyst")
+                plan = preview.get("mitigation") or {}
+                run.status = "awaiting_approval"
+                run.stats = json.dumps({"pending_gate": "model_mitigation_plan",
+                                        "mitigation_plan": plan,
+                                        "params": params})
+                db.commit()
+                _event(db, run.id, "gate",
+                       f"Awaiting approval: mitigation-analyst proposes "
+                       f"{len(plan.get('plan', []))} control(s), "
+                       f"{len(plan.get('deferred', []))} deferred. "
+                       f"Approve or reject in the Security tab to continue.",
+                       {"mitigation_plan": plan})
+                return
+            if _gate_profile["is_model_query"] or _mode == "hypothesis" or \
+                    _mode == "model_engineering":
                 _event(db, run.id, "gate",
                        "Approval gate skipped: no catalog control plan exists "
                        "on this path (dimension weights / hypotheses instead). "
@@ -240,6 +277,7 @@ def run_security_assessment(run_id: int, params: dict):
             declared_controls=params.get("declared_controls") or [],
             control_plan_override=approved_plan,
             assessment_mode=params.get("assessment_mode") or "",
+            model_meta=params.get("model_meta") or {},
         )
 
         plan = result.get("control_plan", {})
@@ -275,6 +313,20 @@ def run_security_assessment(run_id: int, params: dict):
             _event(db, run.id, "map",
                    f"hypothesis-verifier/reporter: {v.get('note', 'claims verified')}.",
                    {"hop": v})
+        elif _path == "model_engineering":
+            _w1 = (result.get("scoring", {}) or {}).get("w1", {}) or {}
+            _w2 = (result.get("scoring", {}) or {}).get("w2", {}) or {}
+            _event(db, run.id, "analyze",
+                   f"model-adv-intel: {len(result.get('model_attacks', []))} "
+                   f"W1 attack findings "
+                   f"(coverage {_w1.get('coverage_pct', 0):g}%).",
+                   {"findings": [f.get("attack_id")
+                                 for f in result.get("model_attacks", [])]})
+            _event(db, run.id, "map",
+                   f"model-adoption-analyst: "
+                   f"{sum(1 for d in result.get('adoption_dimensions', []) if d.get('rating') != 'unknown')}/"
+                   f"{len(result.get('adoption_dimensions', []))} W2 dimensions rated "
+                   f"(uncertainty {_w2.get('uncertainty_pct', 0):g}%).")
         else:
             _event(db, run.id, "controls",
                    f"control-analyst: {len(plan.get('declared_controls', []))} declared control(s), "
@@ -290,14 +342,26 @@ def run_security_assessment(run_id: int, params: dict):
             _event(db, run.id, "map",
                    f"report-writer: Known Exploits section + executive summary drafted "
                    f"(A2A task {result.get('a2a_task_id')}).")
-        _event(db, run.id, "score",
-               f"Deterministic scoring: inherent {result.get('inherent_pct', 0):g}/100 → "
-               f"residual {result.get('residual_pct', 0):g}/100 "
-               f"({result.get('delta', 0):+g}) — {result.get('posture', '')[:60]}.",
-               {"inherent_pct": result.get("inherent_pct"),
-                "residual_pct": result.get("residual_pct"),
-                "active_controls": result.get("active_controls", []),
-                "breakdown": result.get("scoring", {}).get("breakdown", {})})
+        if _path == "model_engineering":
+            _w1s = (result.get("scoring", {}) or {}).get("w1", {}) or {}
+            _w2s = (result.get("scoring", {}) or {}).get("w2", {}) or {}
+            _event(db, run.id, "score",
+                   f"Deterministic scoring: W1 "
+                   f"{_w1s.get('overall_pct', '—')}/100 "
+                   f"(coverage {_w1s.get('coverage_pct', 0):g}%) · W2 "
+                   f"{_w2s.get('overall_pct', '—')}/100 "
+                   f"(uncertainty {_w2s.get('uncertainty_pct', 0):g}%) — "
+                   f"{result.get('posture', '')[:60]}.",
+                   {"w1": _w1s, "w2": _w2s})
+        else:
+            _event(db, run.id, "score",
+                   f"Deterministic scoring: inherent {result.get('inherent_pct', 0):g}/100 → "
+                   f"residual {result.get('residual_pct', 0):g}/100 "
+                   f"({result.get('delta', 0):+g}) — {result.get('posture', '')[:60]}.",
+                   {"inherent_pct": result.get("inherent_pct"),
+                    "residual_pct": result.get("residual_pct"),
+                    "active_controls": result.get("active_controls", []),
+                    "breakdown": result.get("scoring", {}).get("breakdown", {})})
         _event(db, run.id, "search",
                f"research-collector: {len(result.get('evidence', []))} evidence items "
                f"({result.get('queries_run') and len(result['queries_run'])} queries).",
@@ -341,6 +405,27 @@ def run_security_assessment(run_id: int, params: dict):
             }),
             threat_pack_version=threatpack.PACK_VERSION,
             threat_pack_fingerprint=threatpack.pack_fingerprint(),
+            model_json=json.dumps({
+                "meta": result.get("model_meta") or {},
+                "attacks": result.get("model_attacks") or [],
+                "dimensions": result.get("adoption_dimensions") or [],
+                "mitigation": result.get("mitigation") or {},
+                "w1": (result.get("scoring", {}) or {}).get("w1", {}),
+                "w2": (result.get("scoring", {}) or {}).get("w2", {}),
+                "w3": (result.get("scoring", {}) or {}).get("w3", {}),
+                "approved_mitigation_plan":
+                    params.get("approved_mitigation_plan"),
+                "approved_by": params.get("approved_by"),
+                "approved_at": params.get("approved_at"),
+                "model_adv_version": (result.get("scoring", {}) or {}).get(
+                    "model_adv_version"),
+                "model_adv_fingerprint": (result.get("scoring", {}) or {}).get(
+                    "model_adv_fingerprint"),
+                "adoption_version": (result.get("scoring", {}) or {}).get(
+                    "adoption_version"),
+                "adoption_fingerprint": (result.get("scoring", {}) or {}).get(
+                    "adoption_fingerprint"),
+            }) if result.get("model_meta") else None,
         )
         db.add(rec)
         db.commit()
@@ -421,6 +506,7 @@ def launch_security_assessment(investigation_id: int, params: dict,
                                         "exposure": params.get("exposure", ""),
                                         "controls": params.get("declared_controls", []),
                                         "assessment_mode": params.get("assessment_mode", ""),
+                                        "model_meta": params.get("model_meta") or {},
                                         "require_approval": bool(params.get("require_approval"))}))
         db.add(run)
         db.commit()
@@ -458,9 +544,11 @@ def resume_security_assessment(run_id: int, *, approved_by: str = "",
             stats = json.loads(run.stats or "{}")
         except Exception:
             stats = {}
-        plan = stats.get("control_plan", {})
+        gate = stats.get("pending_gate") or "control_plan"
+        plan = stats.get("control_plan" if gate == "control_plan"
+                         else "mitigation_plan", {})
         # Restore the original request params (use_case, workflow, docs, focus)
-        # so the resumed run is identical apart from the approved control plan.
+        # so the resumed run is identical apart from the approved plan.
         params = dict(stats.get("params") or {})
         try:
             run_plan = json.loads(run.plan or "{}")
@@ -468,8 +556,11 @@ def resume_security_assessment(run_id: int, *, approved_by: str = "",
             run_plan = {}
         params.setdefault("product_name", run_plan.get("product", ""))
         params.setdefault("exposure", run_plan.get("exposure", "confidential_data"))
-        params["declared_controls"] = plan.get("declared_controls", [])
-        params["approved_control_plan"] = plan
+        if gate == "model_mitigation_plan":
+            params["approved_mitigation_plan"] = plan
+        else:
+            params["declared_controls"] = plan.get("declared_controls", [])
+            params["approved_control_plan"] = plan
         params["require_approval"] = False
         params["approved_by"] = approvals.normalise_actor(approved_by)
         params["approved_at"] = datetime.now(timezone.utc).isoformat()

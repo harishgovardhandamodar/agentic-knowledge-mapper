@@ -126,6 +126,34 @@ AGENT_CARDS: list[dict[str, Any]] = [
         "endpoint": "/api/agents/invoke",
     },
     {
+        "name": "model-adv-intel",
+        "protocol": PROTOCOL,
+        "description": (
+            "Maps published attacks onto a model or family from collected "
+            "evidence, with class, scope, confidence and prerequisites. "
+            "Evidence-keyed rules when the model is unreachable."
+        ),
+        "skills": ["map_model_attacks"],
+        "endpoint": "/api/agents/invoke",
+    },
+    {
+        "name": "model-adoption-analyst",
+        "protocol": PROTOCOL,
+        "description": (
+            "Rates engineering adoption dimensions from primary sources; "
+            "missing evidence rates unknown, never safe."
+        ),
+        "skills": ["rate_adoption"],
+        "endpoint": "/api/agents/invoke",
+    },
+    {
+        "name": "model-eval-reporter",
+        "protocol": PROTOCOL,
+        "description": "Drafts the dual-section model evaluation report.",
+        "skills": ["write_model_eval_report"],
+        "endpoint": "/api/agents/invoke",
+    },
+    {
         "name": "model-adversary",
         "protocol": PROTOCOL,
         "description": (
@@ -2916,7 +2944,807 @@ _HYPOTHESIS_CAVEAT = (
 )
 
 
+# --------------------------------------- model-engineering assessment ---
+# W1 (adversarial research) + W2 (adoption risk) for a model subject.
+# Same envelope discipline as the other model flows: LLM first, deterministic
+# fallbacks that never invent evidence, never raises.
+
+
+def _model_w1_terms(meta: dict[str, Any]) -> list[str]:
+    terms = [meta.get("model_name") or "", meta.get("model_family") or ""]
+    terms += ["memorization", "membership inference", "training data extraction",
+              "model inversion", "adversarial examples", "poisoning backdoor",
+              "prompt injection", "model stealing distillation"]
+    terms += list(meta.get("focus_terms") or [])[:6]
+    return [t for t in terms if t]
+
+
+def _model_w2_terms(meta: dict[str, Any]) -> list[str]:
+    terms = [meta.get("model_name") or "", meta.get("model_family") or ""]
+    terms += ["model card", "weights release limitations", "training data",
+              "privacy memorization", "bias limitations", "known incidents CVEs",
+              "deployment on-prem API", "eval harness monitoring"]
+    terms += list(meta.get("focus_terms") or [])[:6]
+    return [t for t in terms if t]
+
+
+_W1_FALLBACK_MATCH: list[tuple[str, tuple[str, ...]]] = [
+    ("membership_inference", ("membership inference", "member inference")),
+    ("extraction", ("training data extraction", "data extraction",
+                    "memorization", "memorized", "extract training")),
+    ("inversion", ("model inversion", "invert", "attribute inference")),
+    ("evasion", ("adversarial example", "evasion", "perturbation")),
+    ("poisoning", ("poison", "backdoor", "trojan")),
+    ("injection", ("prompt injection", "injection", "jailbreak")),
+    ("theft", ("distill", "model stealing", "steal weights", "side channel",
+                "side-channel")),
+    ("cascade", ("downstream", "cascade", "deployed")),
+]
+
+_W1_FALLBACK_MITIGATIONS: dict[str, list[str]] = {
+    "membership_inference": ["differential-privacy training or output perturbation",
+                             "limit per-entity query volume"],
+    "extraction": ["deduplicate training data", "canary sets to detect leakage"],
+    "inversion": ["return labels not confidences where possible",
+                  "rate-limit query access"],
+    "evasion": ["input validation at the edge", "adversarial eval gates"],
+    "poisoning": ["training-data provenance checks", "eval gates per release"],
+    "injection": ["delimit untrusted conditioning content",
+                  "instruction hierarchy"],
+    "theft": ["weight access control", "query rate limits", "watermarking"],
+    "cascade": ["human-in-the-loop on high-stakes decisions",
+                "monitor downstream decision distribution"],
+}
+
+
+def _w1_fallback_findings(meta: dict[str, Any],
+                          evidence: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Evidence-keyed W1 findings without an LLM: a class is reported only
+    when collected evidence actually names it. Nothing matched means no
+    findings -- which scores as no-evidence, never as secure."""
+    name = (meta.get("model_name") or "").lower()
+    weights = meta.get("weights_source") or "unknown"
+    prereq = (["open weights"] if weights == "open_weights"
+              else ["query access"] if weights == "api_only"
+              else ["model access (weights or API)"])
+    out: list[dict[str, Any]] = []
+    for cls, keys in _W1_FALLBACK_MATCH:
+        hits = []
+        for e in evidence or []:
+            text = f"{e.get('title') or ''} {e.get('snippet') or ''}".lower()
+            if any(k in text for k in keys):
+                scope = ("model_specific" if name and name in text
+                         else "family")
+                hits.append((e.get("artifact_id"), scope))
+        if not hits:
+            continue
+        aids = [h[0] for h in hits if h[0] is not None]
+        scope = "model_specific" if any(h[1] == "model_specific"
+                                        for h in hits) else "family"
+        out.append({
+            "attack_id": f"MA-{len(out) + 1:02d}",
+            "title": f"{cls.replace('_', ' ')} ({scope})",
+            "attack_class": cls,
+            "applies_to": scope,
+            "confidence": 0.7 if scope == "model_specific" else 0.45,
+            "prerequisites": prereq,
+            "evidence_artifact_ids": aids,
+            "mitigations": _W1_FALLBACK_MITIGATIONS.get(cls, []),
+            "residual_notes": ("family-level literature only; no "
+                                "model-specific evidence collected"
+                                if scope == "family" else ""),
+        })
+    return out
+
+
+def model_adv_intel_handle(env: dict[str, Any],
+                           db: Any = None) -> dict[str, Any]:
+    """Intent ``map_model_attacks``: W1 attack findings from evidence.
+
+    Analyst guidance (encoded, not suggested): prefer primary literature and
+    model cards; separate capability (attacks in the literature) from
+    exploitability in this deployment (weights/API, rate limits); cite family
+    evidence explicitly; never claim "this checkpoint memorizes row X" without
+    support; never claim "no risk" -- only "no evidence found as of" a date.
+    LLM first, evidence-keyed fallback on failure.
+    """
+    from . import model_eval as _me
+    payload = env.get("payload", {})
+    meta = payload.get("model_meta") or {}
+    evidence = payload.get("evidence") or []
+    name = meta.get("model_name") or "the model"
+    family = meta.get("model_family") or "unknown"
+    findings = _w1_fallback_findings(meta, evidence)
+    source = "evidence-keyed rules (no LLM)"
+    try:
+        from . import llm as _llm
+        classes = ", ".join(sorted(_me.ATTACK_CLASSES))
+        ev_lines = "\n".join(
+            f"- [{e.get('artifact_id')}] {e.get('title') or ''}: "
+            f"{(e.get('snippet') or '')[:200]}" for e in evidence[:20])
+        sys_p = (
+            "You map published attacks onto a machine-learning model. "
+            "Reply with STRICT JSON only: {\"findings\": [{\"attack_class\": one of "
+            f"{classes}, \"title\": str, \"applies_to\": "
+            "model_specific|family|modality, \"confidence\": 0..1, "
+            "\"prerequisites\": [str], \"evidence_artifact_ids\": [int], "
+            "\"mitigations\": [str], \"residual_notes\": str}]}. "
+            "Rules: use model_specific ONLY for evidence naming this model; "
+            "otherwise family or modality. Prefer primary literature and model "
+            "cards over blogs. Separate capability (attacks published) from "
+            "exploitability in this deployment "
+            f"(weights: {meta.get('weights_source') or 'unknown'}). "
+            "Never claim this checkpoint does something unsourced; never claim "
+            "\"no risk\" -- at most \"no evidence found\". Fewer findings, not "
+            "invented ones.")
+        user_p = (f"Model: {name}\nFamily: {family}\nEvidence:\n{ev_lines or '(none)'}")
+        raw = _llm.chat([{"role": "system", "content": sys_p},
+                         {"role": "user", "content": user_p}],
+                        temperature=0.1, max_tokens=2000).strip()
+        m = re.search(r"\{.*\}", raw, re.S)
+        if not m:
+            raise ValueError("model did not return a findings object")
+        data = json.loads(m.group(0))
+        valid_ids = {e.get("artifact_id") for e in evidence}
+        llm_findings = []
+        for i, f in enumerate(data.get("findings") or [], 1):
+            if not isinstance(f, dict):
+                continue
+            cls = str(f.get("attack_class") or "other")
+            if cls not in _me.ATTACK_CLASSES:
+                cls = "other"
+            scope = str(f.get("applies_to") or "family")
+            if scope not in ("model_specific", "family", "modality"):
+                scope = "family"
+            try:
+                conf = max(0.0, min(1.0, float(f.get("confidence", 0.5))))
+            except (TypeError, ValueError):
+                conf = 0.5
+            llm_findings.append({
+                "attack_id": str(f.get("attack_id") or f"MA-{i:02d}"),
+                "title": str(f.get("title") or cls)[:160],
+                "attack_class": cls, "applies_to": scope, "confidence": conf,
+                "prerequisites": [str(p)[:120] for p in
+                                  (f.get("prerequisites") or [])][:6],
+                "evidence_artifact_ids": [
+                    a for a in (f.get("evidence_artifact_ids") or [])
+                    if a in valid_ids][:12],
+                "mitigations": [str(x)[:200] for x in
+                                (f.get("mitigations") or [])][:6],
+                "residual_notes": str(f.get("residual_notes") or "")[:300]})
+        if llm_findings:
+            findings = llm_findings
+            source = "model-adv-intel via LLM gateway"
+    except Exception as exc:
+        source = f"evidence-keyed rules (LLM unavailable: {exc})"
+    return reply_envelope(
+        env, "model-adv-intel", "model_attacks_mapped",
+        {"findings": findings, "source": source},
+        note=f"{len(findings)} W1 attack findings ({source})",
+    )
+
+
+def model_adoption_analyst_handle(env: dict[str, Any],
+                                 db: Any = None) -> dict[str, Any]:
+    """Intent ``rate_adoption``: W2 dimension ratings from evidence.
+
+    Missing evidence rates ``unknown`` with an explicit documentation gap --
+    the same honesty rule as product assessments. LLM first, all-unknown
+    fallback on failure.
+    """
+    from . import model_eval as _me
+    payload = env.get("payload", {})
+    meta = payload.get("model_meta") or {}
+    evidence = payload.get("evidence") or []
+    name = meta.get("model_name") or "the model"
+    dims = [{"dimension": d_id,
+             "rating": "unknown",
+             "rationale": "no collected evidence addresses this dimension",
+             "evidence_artifact_ids": [],
+             "adoption_implications": ["verify before production adoption"]}
+            for d_id, _, _ in _me.ADOPTION_DIMENSIONS]
+    source = "all-unknown fallback (no LLM)"
+    try:
+        from . import llm as _llm
+        dim_list = ", ".join(d[0] for d in _me.ADOPTION_DIMENSIONS)
+        ev_lines = "\n".join(
+            f"- [{e.get('artifact_id')}] {e.get('title') or ''}: "
+            f"{(e.get('snippet') or '')[:200]}" for e in evidence[:20])
+        sys_p = (
+            "You rate engineering adoption risk for a machine-learning model. "
+            "Reply with STRICT JSON only: {\"dimensions\": [{\"dimension\": one of "
+            f"{dim_list}, \"rating\": low|medium|high|critical|unknown, "
+            "\"rationale\": str, \"evidence_artifact_ids\": [int], "
+            "\"adoption_implications\": [str]}]}. "
+            "Rate unknown with a documentation-gap rationale whenever evidence "
+            "is absent -- never assume safe. Name downstream decision types "
+            "(credit, medical, safety-critical generation) when the use case "
+            "implies them. Fewer rated dimensions, not invented ones.")
+        user_p = (f"Model: {name}\nFamily: {meta.get('model_family')}\n"
+                  f"Weights: {meta.get('weights_source')}\n"
+                  f"Training data: {meta.get('training_data_posture')}\n"
+                  f"Deployment: {meta.get('deployment_pattern')}\n"
+                  f"Use case: {payload.get('use_case') or ''}\n"
+                  f"Evidence:\n{ev_lines or '(none)'}")
+        raw = _llm.chat([{"role": "system", "content": sys_p},
+                         {"role": "user", "content": user_p}],
+                        temperature=0.1, max_tokens=2400).strip()
+        m = re.search(r"\{.*\}", raw, re.S)
+        if not m:
+            raise ValueError("model did not return a dimensions object")
+        data = json.loads(m.group(0))
+        valid_ids = {e.get("artifact_id") for e in evidence}
+        valid_dims = {d[0] for d in _me.ADOPTION_DIMENSIONS}
+        by_id = {d["dimension"]: d for d in dims}
+        for d in data.get("dimensions") or []:
+            if not isinstance(d, dict) or d.get("dimension") not in valid_dims:
+                continue
+            rating = str(d.get("rating") or "unknown").lower()
+            if rating not in ("low", "medium", "high", "critical", "unknown"):
+                rating = "unknown"
+            by_id[d["dimension"]] = {
+                "dimension": d["dimension"], "rating": rating,
+                "rationale": str(d.get("rationale") or "")[:400],
+                "evidence_artifact_ids": [
+                    a for a in (d.get("evidence_artifact_ids") or [])
+                    if a in valid_ids][:12],
+                "adoption_implications": [
+                    str(x)[:200] for x in
+                    (d.get("adoption_implications") or [])][:6]}
+        dims = [by_id[d[0]] for d in _me.ADOPTION_DIMENSIONS]
+        source = "model-adoption-analyst via LLM gateway"
+    except Exception as exc:
+        source = f"all-unknown fallback (LLM unavailable: {exc})"
+    return reply_envelope(
+        env, "model-adoption-analyst", "adoption_rated",
+        {"dimensions": dims, "source": source},
+        note=(f"{sum(1 for d in dims if d['rating'] != 'unknown')}/"
+              f"{len(dims)} dimensions rated ({source})"),
+    )
+
+
+def _model_eval_recommendations(meta: dict[str, Any],
+                                findings: list[dict[str, Any]],
+                                dimensions: list[dict[str, Any]]) -> list[str]:
+    """Deterministic engineering backlog from the rated risks."""
+    from . import model_eval as _me
+    recs: list[str] = []
+    rated = {d["dimension"]: d for d in dimensions or [] if isinstance(d, dict)}
+    for d_id, _, _ in _me.ADOPTION_DIMENSIONS:
+        d = rated.get(d_id, {})
+        if d.get("rating") in ("high", "critical"):
+            recs.append(f"30-day: contain {d_id.replace('_', ' ')} -- "
+                        f"{(d.get('adoption_implications') or ['mitigate before production'])[0]}")
+    for f in findings or []:
+        if isinstance(f, dict) and (f.get("mitigations") or []):
+            recs.append(f"60-day: {f.get('mitigations')[0]} "
+                        f"({f.get('attack_id')}: {f.get('title') or ''})"[:160])
+    unknowns = [d_id for d_id, _, _ in _me.ADOPTION_DIMENSIONS
+                if rated.get(d_id, {}).get("rating", "unknown") == "unknown"]
+    for d_id in unknowns[:4]:
+        recs.append(f"90-day: close the evidence gap on "
+                    f"{d_id.replace('_', ' ')} before broad enablement")
+    return recs[:12]
+
+
+def model_eval_reporter_handle(env: dict[str, Any],
+                               db: Any = None) -> dict[str, Any]:
+    """Intent ``write_model_eval_report``: dual-section report + exec summary.
+
+    Deterministic template from findings and dimensions; the LLM is only
+    asked for the executive paragraph, with the template paragraph as the
+    fallback -- the report never depends on phrasing luck.
+    """
+    from . import model_eval as _me
+    payload = env.get("payload", {})
+    meta = payload.get("model_meta") or {}
+    name = meta.get("model_name") or "the model"
+    findings = payload.get("findings") or []
+    dimensions = payload.get("dimensions") or []
+    w1 = payload.get("w1_scoring") or {}
+    w2 = payload.get("w2_scoring") or {}
+    mitigation = payload.get("mitigation") or {"plan": [], "deferred": [],
+                                               "uncovered_risks": [],
+                                               "roadmap": {}}
+    w3 = payload.get("w3_scoring") or {}
+    L: list[str] = []
+    A = L.append
+    A(f"# Model engineering assessment — {name}")
+    A("")
+    A(f"_Family:_ {meta.get('model_family')} · _Modality:_ {meta.get('modality')} · "
+      f"_Weights:_ {meta.get('weights_source')} · _Training data:_ "
+      f"{meta.get('training_data_posture')} · _Deployment:_ "
+      f"{meta.get('deployment_pattern')}_")
+    A("")
+    A("## W1 — Adversarial research evaluation")
+    A("")
+    if findings:
+        A("| Attack | Class | Applies to | Confidence | Prerequisites |")
+        A("|---|---|---|---|---|")
+        for f in findings:
+            A(f"| {f.get('attack_id')} {f.get('title') or ''} "
+              f"| {f.get('attack_class')} | {f.get('applies_to')} "
+              f"| {float(f.get('confidence', 0)):.0%} "
+              f"| {'; '.join(f.get('prerequisites') or ['unstated'])} |")
+        A("")
+        for f in findings:
+            A(f"### {f.get('attack_id')} — {f.get('title') or ''}")
+            A("")
+            if f.get("mitigations"):
+                A("**Mitigations.** " + "; ".join(f["mitigations"]) + ".")
+                A("")
+            if f.get("residual_notes"):
+                A(f"**Residual notes.** {f['residual_notes']}")
+                A("")
+    else:
+        A("No adversarial evidence found in the collected corpus as of this "
+          "run. That is a statement about the evidence, not about the model: "
+          "absence of literature is not evidence of safety.")
+        A("")
+    A("## W2 — Adoption risk evaluation")
+    A("")
+    if dimensions:
+        A("| Dimension | Rating | Rationale |")
+        A("|---|---|---|")
+        for d in dimensions:
+            A(f"| {d.get('dimension')} | {d.get('rating')} "
+              f"| {(d.get('rationale') or '')[:160]} |")
+        A("")
+    unknowns = [d.get("dimension") for d in dimensions
+                if d.get("rating") == "unknown"]
+    if unknowns:
+        A("**Unknown dimensions.** " + ", ".join(unknowns) + ": no evidence "
+          "was collected, so these raise uncertainty rather than lowering "
+          "risk. See the evidence gaps.")
+        A("")
+    recs = _model_eval_recommendations(meta, findings, dimensions)
+    if recs:
+        A("## Engineering backlog")
+        A("")
+        for r in recs:
+            A(f"- {r}")
+        A("")
+    plan = mitigation.get("plan") or []
+    from . import model_eval as _me
+    w3_requested = "mitigation_controls" in (
+        meta.get("workflows") or list(_me.WORKFLOWS))
+    if w3_requested and not plan:
+        A("## W3 — Mitigation plan")
+        A("")
+        A("No mitigations proposed: no drivers and no mitigation literature "
+          "to plan against. This is insufficient evidence, not a clean bill "
+          "of health.")
+        A("")
+    if plan or mitigation.get("deferred"):
+        A("## W3 — Mitigation plan")
+        A("")
+        A(f"Method {w3.get('method') or 'mitigation_residual_v1'}, catalog "
+          f"{w3.get('mitigation_version') or '1.0.0'}. Residuals below are "
+          f"indicative planning aids: efficacy hints are priors, not "
+          f"measurements, and the Mapper recommends and tracks this plan -- "
+          f"it does not implement these controls.")
+        A("")
+        if plan:
+            A("| # | Control | Burden | Residual effect | Limitations |")
+            A("|---|---|---|---|---|")
+            for p in plan:
+                resid = (w3.get("per_class") or {})
+                A(f"| {p.get('priority')} | **{p.get('control_id')}** "
+                  f"{(p.get('rationale') or '')[:90]} | {p.get('burden')} | "
+                  f"indicative | {(p.get('residual_limitations') or '')[:90]} |")
+            A("")
+            for p in plan:
+                if p.get("implementation_notes"):
+                    A(f"- **{p.get('control_id')} notes.** "
+                      f"{p['implementation_notes']}")
+            if any(p.get("implementation_notes") for p in plan):
+                A("")
+        for d in mitigation.get("deferred") or []:
+            A(f"- **{d.get('control_id')} deferred.** {d.get('reason')}.")
+        if mitigation.get("deferred"):
+            A("")
+        if mitigation.get("uncovered_risks"):
+            A("**Still uncovered.** "
+              + "; ".join(mitigation["uncovered_risks"]) + ".")
+            A("")
+        roadmap = mitigation.get("roadmap") or {}
+        if any(roadmap.get(k) for k in ("30d", "60d", "90d")):
+            A("**Roadmap.**")
+            A("")
+            for k in ("30d", "60d", "90d"):
+                for item in roadmap.get(k) or []:
+                    A(f"- **{k}:** {item}")
+            A("")
+    report = "\n".join(L)
+    exec_paragraph = (
+        f"{name} ({meta.get('model_family')}) shows "
+        f"{len(findings)} documented adversarial attack class(es) and "
+        f"{sum(1 for d in dimensions if d.get('rating') in ('high', 'critical'))} "
+        f"high-or-critical adoption dimension(s); "
+        f"{len(unknowns)} dimension(s) could not be rated from collected evidence.")
+    try:
+        from . import llm as _llm
+        raw = _llm.chat([
+            {"role": "system",
+             "content": ("You write one executive paragraph for a model "
+                         "security assessment. Ground every claim in the data "
+                         "given. Never claim 'no risk'. Reply with the "
+                         "paragraph only.")},
+            {"role": "user",
+             "content": (f"Model: {name}\nW1 findings: {len(findings)}\n"
+                         f"W2 high/critical: {sum(1 for d in dimensions if d.get('rating') in ('high', 'critical'))}\n"
+                         f"Unknown dimensions: {unknowns}\n"
+                         f"Template: {exec_paragraph}")}],
+            temperature=0.2, max_tokens=300).strip()
+        if raw:
+            exec_paragraph = raw
+    except Exception:
+        pass
+    return reply_envelope(
+        env, "model-eval-reporter", "model_eval_report_written",
+        {"report_markdown": report, "exec_paragraph": exec_paragraph,
+         "recommendations": recs},
+        note=f"W1 {len(findings)} findings, W2 "
+             f"{sum(1 for d in dimensions if d.get('rating') != 'unknown')}/"
+             f"{len(dimensions)} rated",
+    )
+
+
+def run_model_engineering_a2a_workflow(
+    model_meta: dict[str, Any],
+    use_case: str = "",
+    focus_terms: list[str] | None = None,
+    db: Any = None,
+    investigation_id: Any = None,
+    exposure: str = "confidential_data",
+    exposure_label: str = "",
+    stop_after: str | None = None,
+) -> dict[str, Any]:
+    """Model-engineering workflow: W1 research+intel, W2 research+analyst,
+    W3 mitigation, deterministic scoring, reporter. Never raises.
+
+    Workflows run independently per the requested subset; a skipped workflow
+    leaves its section explicitly empty rather than silently absent. W3 alone
+    still runs the W1/W2 collectors for signals: mitigations with zero risk
+    context are not proposed. ``stop_after="analyst"`` ends after the
+    mitigation analyst so the approval gate can park on the plan.
+    """
+    from . import model_eval as _me
+    from . import security as sec
+    task_id = new_task_id(prefix="mev")
+    trace: list[dict[str, Any]] = [{
+        "agent": "model-eval-orchestrator", "intent": "plan_model_assessment",
+        "at": _now(),
+        "note": (f"task {task_id}: model metadata → W1 research-collector → "
+                 "model-adv-intel → W2 research-collector → "
+                 "model-adoption-analyst → scoring engine → "
+                 "model-eval-reporter"),
+    }]
+    workflows = model_meta.get("workflows") or list(_me.WORKFLOWS)
+    if "mitigation_controls" in workflows and not (
+            "adversarial_research" in workflows
+            or "adoption_risk" in workflows):
+        # W3 without risk context is not proposed: run the collectors for
+        # signals so the plan has drivers, and say so on the trace.
+        workflows = list(workflows) + ["adversarial_research",
+                                       "adoption_risk"]
+        trace.append({"agent": "model-eval-orchestrator",
+                      "intent": "context_signals",
+                      "at": _now(),
+                      "note": "W3 requested alone: W1/W2 collectors run for "
+                              "signals so mitigations have risk context"})
+    name = model_meta.get("model_name") or "the model"
+    evidence_w1: list[dict[str, Any]] = []
+    evidence_w2: list[dict[str, Any]] = []
+    evidence_w3: list[dict[str, Any]] = []
+    queries_run: list[str] = []
+    findings: list[dict[str, Any]] = []
+    dimensions: list[dict[str, Any]] = []
+    w1: dict[str, Any] = {"method": "adversarial_coverage_v1",
+                          "overall_pct": None}
+    w2: dict[str, Any] = {"method": "adoption_risk_v1", "overall_pct": None}
+    w3: dict[str, Any] = {"method": "mitigation_residual_v1"}
+    mitigation: dict[str, Any] = {"plan": [], "deferred": [],
+                                  "uncovered_risks": [],
+                                  "roadmap": {"30d": [], "60d": [], "90d": []}}
+    report_markdown = ""
+    exec_paragraph = ""
+    recommendations: list[str] = []
+    try:
+        weight = (sec.EXPOSURE_META.get(exposure, {}) or {}).get("weight", 1.0)
+        if "adversarial_research" in workflows:
+            env = new_envelope(
+                "model-eval-orchestrator", "research-collector",
+                "collect_research",
+                {"product_name": name, "use_case": use_case,
+                 "threat_titles": _model_w1_terms(model_meta), "top_k": 10,
+                 "investigation_id": investigation_id},
+                task_id=task_id, trace=trace,
+                note="W1 adversarial literature from the app graph",
+            )
+            res = dispatch(env, db)
+            trace = res["trace"]
+            evidence_w1 = res["payload"].get("evidence", [])
+            queries_run += res["payload"].get("queries_run", [])
+            env = new_envelope(
+                "model-eval-orchestrator", "model-adv-intel", "map_model_attacks",
+                {"model_meta": model_meta, "evidence": evidence_w1},
+                task_id=task_id, trace=trace,
+                note="map published attacks onto this model",
+            )
+            res = dispatch(env, db)
+            trace = res["trace"]
+            findings = res["payload"].get("findings", [])
+            _hop_io(trace, "model-adv-intel", "map_model_attacks",
+                    f"{len(evidence_w1)} evidence items",
+                    f"{len(findings)} attack findings")
+            w1 = _me.score_adversarial(findings, weight)
+        if "adoption_risk" in workflows:
+            env = new_envelope(
+                "model-eval-orchestrator", "research-collector",
+                "collect_research",
+                {"product_name": name, "use_case": use_case,
+                 "threat_titles": _model_w2_terms(model_meta), "top_k": 10,
+                 "investigation_id": investigation_id},
+                task_id=task_id, trace=trace,
+                note="W2 model cards and primary sources from the app graph",
+            )
+            res = dispatch(env, db)
+            trace = res["trace"]
+            evidence_w2 = res["payload"].get("evidence", [])
+            queries_run += res["payload"].get("queries_run", [])
+            env = new_envelope(
+                "model-eval-orchestrator", "model-adoption-analyst",
+                "rate_adoption",
+                {"model_meta": model_meta, "use_case": use_case,
+                 "evidence": evidence_w2},
+                task_id=task_id, trace=trace,
+                note="rate adoption dimensions from primary sources",
+            )
+            res = dispatch(env, db)
+            trace = res["trace"]
+            dimensions = res["payload"].get("dimensions", [])
+            _hop_io(trace, "model-adoption-analyst", "rate_adoption",
+                    f"{len(evidence_w2)} evidence items",
+                    f"{sum(1 for d in dimensions if d.get('rating') != 'unknown')}/"
+                    f"{len(dimensions)} rated")
+            w2 = _me.score_adoption(dimensions, weight)
+        if "mitigation_controls" in workflows:
+            env = new_envelope(
+                "model-eval-orchestrator", "research-collector",
+                "collect_research",
+                {"product_name": name, "use_case": use_case,
+                 "threat_titles": _model_w3_terms(model_meta), "top_k": 10,
+                 "investigation_id": investigation_id},
+                task_id=task_id, trace=trace,
+                note="W3 mitigation literature for this family",
+            )
+            res = dispatch(env, db)
+            trace = res["trace"]
+            evidence_w3 = res["payload"].get("evidence", [])
+            queries_run += res["payload"].get("queries_run", [])
+            env = new_envelope(
+                "model-eval-orchestrator", "model-mitigation-analyst",
+                "propose_model_mitigations",
+                {"model_meta": model_meta, "use_case": use_case,
+                 "findings": findings, "dimensions": dimensions,
+                 "evidence": evidence_w3},
+                task_id=task_id, trace=trace,
+                note="ranked MM* plan tied to W1/W2 drivers",
+            )
+            res = dispatch(env, db)
+            trace = res["trace"]
+            mitigation = res["payload"]
+            w3 = _me.score_mitigation_residual(
+                findings, dimensions, mitigation.get("plan", []), weight)
+            _hop_io(trace, "model-mitigation-analyst",
+                    "propose_model_mitigations",
+                    f"{len(evidence_w3)} evidence items",
+                    f"{len(mitigation.get('plan', []))} proposed, "
+                    f"{len(mitigation.get('deferred', []))} deferred")
+            if stop_after == "analyst":
+                return {
+                    "task_id": task_id,
+                    "evidence": evidence_w1 + evidence_w2 + evidence_w3,
+                    "queries_run": queries_run,
+                    "scoring": {"w1": w1, "w2": w2, "w3": w3,
+                                "assessment_path": "model_engineering"},
+                    "a2a_trace": trace,
+                    "model_meta": model_meta,
+                    "model_attacks": findings,
+                    "adoption_dimensions": dimensions,
+                    "mitigation": mitigation,
+                    "w3_scoring": w3,
+                }
+        env = new_envelope(
+            "model-eval-orchestrator", "model-eval-reporter",
+            "write_model_eval_report",
+            {"model_meta": model_meta, "findings": findings,
+             "dimensions": dimensions, "w1_scoring": w1, "w2_scoring": w2,
+             "mitigation": mitigation, "w3_scoring": w3},
+            task_id=task_id, trace=trace,
+            note="dual-section report + exec paragraph",
+        )
+        res = dispatch(env, db)
+        trace = res["trace"]
+        report_markdown = res["payload"].get("report_markdown", "")
+        exec_paragraph = res["payload"].get("exec_paragraph", "")
+        recommendations = res["payload"].get("recommendations", [])
+        trace.append({"agent": "model-eval-orchestrator", "intent": "score",
+                      "at": _now(),
+                      "note": (f"W1 {w1.get('overall_pct')} "
+                               f"({w1.get('method')}) · W2 {w2.get('overall_pct')} "
+                               f"({w2.get('method')}) · W3 "
+                               f"{len((mitigation.get('plan') or []))} proposed "
+                               f"({w3.get('method')})")})
+    except Exception as exc:
+        trace.append({"agent": "model-eval-orchestrator", "intent": "workflow_error",
+                      "at": _now(), "note": f"{exc}"})
+    return {
+        "task_id": task_id,
+        "evidence": evidence_w1 + evidence_w2 + evidence_w3,
+        "queries_run": queries_run,
+        "scope": f"model {name}",
+        "known_exploits": [],
+        "exploits_markdown": "",
+        "exec_evidence_lines": [],
+        "exec_evidence_refs": [],
+        "exec_paragraph": exec_paragraph,
+        "control_plan": {},
+        "applicability": {},
+        "evidence_confidence": {},
+        "scoring": {"overall_pct": w2.get("overall_pct"),
+                     "w1": w1, "w2": w2, "w3": w3,
+                     "assessment_path": "model_engineering"},
+        "a2a_trace": trace,
+        "model_meta": model_meta,
+        "model_attacks": findings,
+        "adoption_dimensions": dimensions,
+        "mitigation": mitigation,
+        "w3_scoring": w3,
+        "report_markdown": report_markdown,
+        "recommendations": recommendations,
+    }
+
+
+def _model_w3_terms(meta: dict[str, Any]) -> list[str]:
+    terms = [meta.get("model_name") or "", meta.get("model_family") or ""]
+    terms += ["differential privacy machine learning",
+              "machine unlearning", "model watermarking",
+              "membership inference defense", "robustness benchmark"]
+    terms += list(meta.get("focus_terms") or [])[:6]
+    return [t for t in terms if t]
+
+
+def model_mitigation_analyst_handle(env: dict[str, Any],
+                                    db: Any = None) -> dict[str, Any]:
+    """Intent ``propose_model_mitigations``: W3 ranked control plan.
+
+    The deterministic rank (prefilter + driver pressure − burden) is the
+    plan's spine: the LLM only writes rationale and trims to what the
+    evidence supports. Analyst guidance: propose proportionate controls
+    matched to burden and evidence strength; prefer deployable controls for
+    this weights_source/deployment; separate training/serving/governance
+    time; state DP/watermarking/unlearning limitations; never imply the
+    Mapper implements the control -- it recommends and tracks the plan.
+    """
+    from . import model_eval as _me
+    payload = env.get("payload", {})
+    meta = payload.get("model_meta") or {}
+    findings = payload.get("findings") or []
+    dimensions = payload.get("dimensions") or []
+    evidence = payload.get("evidence") or []
+    name = meta.get("model_name") or "the model"
+    base_plan = _me.rank_mitigations(meta, findings, dimensions)
+    _, deferred = _me.prefilter_mitigations(meta)
+    valid_ids = {e.get("artifact_id") for e in evidence}
+    plan = [dict(item) for item in base_plan]
+    source = "deterministic rank (no LLM)"
+    try:
+        from . import llm as _llm
+        plan_lines = "\n".join(
+            f"- {p['control_id']}: addresses "
+            f"{p['addresses']['attacks'] + p['addresses']['dimensions']}; "
+            f"burden {p['burden']}" for p in plan[:10])
+        ev_lines = "\n".join(
+            f"- [{e.get('artifact_id')}] {e.get('title') or ''}: "
+            f"{(e.get('snippet') or '')[:160]}" for e in evidence[:12])
+        sys_p = (
+            "You finalize a model-hardening plan. Reply with STRICT JSON only: "
+            "{\"items\": [{\"control_id\": str, \"rationale\": str, "
+            "\"efficacy_confidence\": 0..1, \"implementation_notes\": str, "
+            "\"evidence_artifact_ids\": [int]}], "
+            "\"uncovered_risks\": [str], "
+            "\"roadmap\": {\"30d\": [str], \"60d\": [str], \"90d\": [str]}}. "
+            "Rules: keep only controls from the proposed list, in an order that "
+            "matches burden to exposure and evidence strength; rationale per "
+            "control in one sentence naming the W1/W2 driver; efficacy is a "
+            "prior, never a guarantee -- state one limitation per control via "
+            "implementation_notes where it matters; separate training-time, "
+            "serving-time and governance-time measures across 30/60/90d; never "
+            "claim a control eliminates a risk.")
+        user_p = (f"Model: {name} ({meta.get('model_family')}, "
+                  f"{meta.get('weights_source')}, "
+                  f"{meta.get('deployment_pattern')})\n"
+                  f"Proposed plan:\n{plan_lines or '(none applicable)'}\n"
+                  f"Evidence:\n{ev_lines or '(none)'}")
+        raw = _llm.chat([{"role": "system", "content": sys_p},
+                         {"role": "user", "content": user_p}],
+                        temperature=0.1, max_tokens=2200).strip()
+        m = re.search(r"\{.*\}", raw, re.S)
+        if not m:
+            raise ValueError("model did not return a plan object")
+        data = json.loads(m.group(0))
+        by_id = {p["control_id"]: p for p in plan}
+        refined = []
+        for it in data.get("items") or []:
+            if not isinstance(it, dict) or it.get("control_id") not in by_id:
+                continue
+            base = dict(by_id[it["control_id"]])
+            if it.get("rationale"):
+                base["rationale"] = str(it["rationale"])[:300]
+            try:
+                base["efficacy_confidence"] = max(
+                    0.0, min(1.0, float(it.get("efficacy_confidence",
+                                               base["efficacy_confidence"]))))
+            except (TypeError, ValueError):
+                pass
+            if it.get("implementation_notes"):
+                base["implementation_notes"] = str(
+                    it["implementation_notes"])[:300]
+            base["evidence_artifact_ids"] = [
+                a for a in (it.get("evidence_artifact_ids") or [])
+                if a in valid_ids][:8]
+            refined.append(base)
+        if refined:
+            plan = refined
+            source = "model-mitigation-analyst via LLM gateway"
+        uncovered = [str(x)[:200] for x in
+                     (data.get("uncovered_risks") or [])][:8]
+        roadmap = {k: [str(x)[:200] for x in (data.get("roadmap") or {}).get(k, [])][:6]
+                   for k in ("30d", "60d", "90d")}
+    except Exception as exc:
+        source = f"deterministic rank (LLM unavailable: {exc})"
+        uncovered = []
+        roadmap = {"30d": [], "60d": [], "90d": []}
+    rated_dims = [d for d in dimensions
+                  if d.get("rating") not in (None, "", "unknown")]
+    if not findings and not rated_dims and not evidence:
+        # Zero risk context: an explicit empty plan, not a silent success.
+        # The reporter and dossier both render this as "insufficient
+        # evidence", never as a clean bill of health.
+        plan = []
+    if not uncovered:
+        covered_classes = {c for p in plan
+                           for c in p.get("addresses", {}).get("attacks", [])}
+        uncovered = [f.get("attack_class") for f in findings
+                     if f.get("attack_class") not in covered_classes]
+        uncovered = sorted({c for c in uncovered if c})
+    if not any((roadmap or {}).get(k) for k in ("30d", "60d", "90d")):
+        # Deterministic backlog by burden when the model wrote none:
+        # cheap controls first, structural work last.
+        roadmap = {"30d": [], "60d": [], "90d": []}
+        for p in plan:
+            bucket = {"low": "30d", "medium": "60d"}.get(
+                p.get("burden"), "90d")
+            roadmap[bucket].append(
+                f"{p.get('control_id')}: "
+                f"{(p.get('rationale') or p.get('residual_limitations') or '')[:100]}")
+    residual = _me.score_mitigation_residual(findings, dimensions, plan)
+    return reply_envelope(
+        env, "model-mitigation-analyst", "model_mitigations_proposed",
+        {"plan": plan, "deferred": deferred, "uncovered_risks": uncovered,
+         "roadmap": roadmap, "residual": residual, "source": source},
+        note=f"{len(plan)} proposed, {len(deferred)} deferred ({source})",
+    )
+
+
 _MODEL_HANDLERS = {
+    "model-adv-intel": {"map_model_attacks": model_adv_intel_handle},
+    "model-adoption-analyst": {"rate_adoption": model_adoption_analyst_handle},
+    "model-mitigation-analyst": {"propose_model_mitigations":
+                                 model_mitigation_analyst_handle},
+    "model-eval-reporter": {"write_model_eval_report": model_eval_reporter_handle},
     "model-profiler": {"profile_model": model_profiler_handle},
     "model-internals": {"review_internals": model_internals_handle},
     "model-privacy": {"assess_model_privacy": model_privacy_handle},

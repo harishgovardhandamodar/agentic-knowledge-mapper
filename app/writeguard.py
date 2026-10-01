@@ -271,6 +271,16 @@ _SELF_CONTRADICTIONS: list[tuple[str, "re.Pattern", "re.Pattern"]] = [
      re.compile(r"(immutable|comprehensive|strict).{0,30}audit (log|trail)|"
                 r"audit.{0,30}(in place|enforced)", re.I),
      re.compile(r"no audit (log|trail)|audit.{0,30}(gap|missing|absent)", re.I)),
+    # Absolute elimination claims ("DP eliminates leakage risk") next to any
+    # limitation language. Controls reduce and target; only evidence of
+    # absence -- never asserted here -- could support "eliminates".
+    ("elimination",
+     re.compile(r"(eliminat|eradicat)[a-z]*.{0,30}(risk|attack|threat|leakage|"
+                r"extraction)|zero risk|100% (safe|secure)|bulletproof|"
+                r"unhackable|completely (safe|secure|prevent)", re.I),
+     re.compile(r"limitation|trade-?off|utility loss|incomplete|residual|"
+                r"partial|does not (fully|completely)|probabilistic|"
+                r"not (a proof|proof)", re.I)),
 ]
 
 _ATTRIBUTED_RE = re.compile(

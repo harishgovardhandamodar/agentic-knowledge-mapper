@@ -1638,6 +1638,7 @@ _MODEL_FLOW_ORDER = (
     ("model", "Workflow 1 · Model internals", "model risk"),
     ("model_adversarial", "Workflow 2 · Adversarial misuse", "misuse potential"),
     ("model_hypothesis", "Hypothesis synthesis", "mean confidence"),
+    ("model_engineering", "Model engineering", "W2 adoption risk · W1 coverage"),
 )
 
 
@@ -1664,7 +1665,7 @@ def _model_flow_synthesis(db, inv_id: int):
             scoring = {}
         path = scoring.get("assessment_path")
         if path not in ("model", "model_adversarial", "model_hypothesis",
-                        "standard"):
+                        "model_engineering", "standard"):
             # Same rule as the report's path fields: an unmarked row can only
             # be re-derived as target or standard -- the adversarial and
             # hypothesis paths never existed without their marker.
@@ -1703,7 +1704,9 @@ def _model_flow_synthesis(db, inv_id: int):
         try:
             headline = float(headline)
         except (TypeError, ValueError):
-            headline = 0
+            # No-evidence rows keep a null headline: the synthesis renderer
+            # prints a dash, never a zero that would read as "secure".
+            headline = None
 
         def _num(x, keys):
             for k in keys:
@@ -1716,6 +1719,10 @@ def _model_flow_synthesis(db, inv_id: int):
         if path == "model_hypothesis":
             scored = [(_num(h, ("confidence",)), h) for h in items
                       if isinstance(h, dict)]
+            score_label = "confidence"
+        elif path == "model_engineering":
+            scored = [(_num(t, ("confidence",)), t) for t in items
+                      if isinstance(t, dict)]
             score_label = "confidence"
         else:
             scored = [(_num(t, ("inherent_score", "overall_score",
@@ -1737,6 +1744,19 @@ def _model_flow_synthesis(db, inv_id: int):
                     "residual": None, "flow": label,
                     "score": s, "score_label": score_label,
                     "detail": detail,
+                }
+        elif path == "model_engineering":
+            def _item(s, v):
+                pre = s.get("prerequisites") or []
+                pre = "; ".join(str(p)[:80] for p in pre[:2])
+                return {
+                    "id": s.get("attack_id") or s.get("id"),
+                    "title": s.get("title"),
+                    "severity": s.get("attack_class"),
+                    "residual": None, "flow": label,
+                    "score": v, "score_label": "confidence",
+                    "detail": (f"Prerequisites: {pre}" if pre
+                               else (s.get("applies_to") or "")),
                 }
         elif path == "model_adversarial":
             def _item(s, v):
@@ -1767,7 +1787,9 @@ def _model_flow_synthesis(db, inv_id: int):
             "product_name": r.product_name,
             "headline": headline, "score_meaning": meaning,
             "score_note": (scoring.get("score_meaning")
-                           or f"{headline:g}/100 {meaning}"),
+                           or (f"{headline:g}/100 {meaning}"
+                               if headline is not None
+                               else f"— (no evidence) {meaning}")),
             "item_count": len(scored),
             "exec_paragraph": (ev.get("exec_paragraph") or ""),
             "top_items": top, "all_items": everything,
