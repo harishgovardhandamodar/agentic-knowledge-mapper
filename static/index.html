@@ -1066,12 +1066,71 @@ body.pane-sec-top-collapsed .sec-topbar-sub { display: none; }
             </div>
             <div class="form-group" id="secModeWrap" hidden>
               <label>Assessment mode <span style="font-weight:400;color:var(--text2);">— model subject detected</span></label>
-              <select id="secMode" onchange="this.dataset.touched='1'">
+              <select id="secMode" onchange="this.dataset.touched='1';secToggleModelFields()">
                 <option value="target" selected>Model as target — is it sound? (internals, weights, privacy, governance)</option>
                 <option value="adversarial">Adversarial misuse — what could an attacker build WITH it? (scenarios, prerequisites, detection)</option>
                 <option value="hypothesis">Hypotheses — which of these claims is true, and what would settle it? (reads the two above)</option>
+                <option value="model_engineering">Model engineering — W1 adversarial research + W2 adoption risk for a named model</option>
                 <option value="">Read the wording above and choose for me</option>
               </select>
+              <div id="secModelFields" hidden style="margin-top:8px;padding:8px;border:1px solid var(--border);border-radius:6px;display:flex;flex-direction:column;gap:6px;">
+                <div style="font-size:11px;color:var(--text2);">Targets a <b>model</b>, not a product workflow. Family-generic: tabular, diffusion, embedding, LLM…</div>
+                <div class="form-group" style="margin:0;"><label>Model name</label><input id="secModelName" placeholder="e.g. TabPFN, Stable Diffusion XL" /></div>
+                <div class="form-group" style="margin:0;"><label>Family</label>
+                  <select id="secModelFamily">
+                    <option value="tabular_fm">tabular_fm — tabular foundation model</option>
+                    <option value="diffusion">diffusion — image/video generator</option>
+                    <option value="llm">llm — large language model</option>
+                    <option value="embedding">embedding — representation model</option>
+                    <option value="time_series_fm">time_series_fm</option>
+                    <option value="multimodal">multimodal</option>
+                    <option value="other" selected>other / describe in focus terms</option>
+                  </select>
+                </div>
+                <div class="form-group" style="margin:0;"><label>Modality</label>
+                  <select id="secModality">
+                    <option value="tabular">tabular</option>
+                    <option value="image">image</option>
+                    <option value="text">text</option>
+                    <option value="audio">audio</option>
+                    <option value="multimodal">multimodal</option>
+                    <option value="other" selected>other</option>
+                  </select>
+                </div>
+                <div class="form-group" style="margin:0;"><label>Weights</label>
+                  <select id="secWeights">
+                    <option value="open_weights">open_weights</option>
+                    <option value="api_only">api_only</option>
+                    <option value="hybrid">hybrid</option>
+                    <option value="unknown" selected>unknown</option>
+                  </select>
+                </div>
+                <div class="form-group" style="margin:0;"><label>Training data</label>
+                  <select id="secTraining">
+                    <option value="public_web">public_web</option>
+                    <option value="licensed">licensed</option>
+                    <option value="proprietary">proprietary</option>
+                    <option value="synthetic">synthetic</option>
+                    <option value="mixed">mixed</option>
+                    <option value="unknown" selected>unknown</option>
+                  </select>
+                </div>
+                <div class="form-group" style="margin:0;"><label>Deployment</label>
+                  <select id="secDeploy">
+                    <option value="on_prem">on_prem</option>
+                    <option value="vpc">vpc</option>
+                    <option value="saas_api">saas_api</option>
+                    <option value="edge">edge</option>
+                    <option value="unknown" selected>unknown</option>
+                  </select>
+                </div>
+                <div class="form-group" style="margin:0;"><label>Focus terms (optional, comma separated)</label><input id="secModelFocus" placeholder="membership inference, training data extraction" /></div>
+                <div style="font-size:12px;display:flex;gap:10px;flex-wrap:wrap;">
+                  <label><input type="checkbox" id="secWfW1" checked /> W1 adversarial research</label>
+                  <label><input type="checkbox" id="secWfW2" checked /> W2 adoption risk</label>
+                  <label><input type="checkbox" id="secWfW3" checked /> W3 mitigation plan</label>
+                </div>
+              </div>
               <div style="font-size:11.5px;color:var(--text2);margin-top:6px;">
                 Three separate assessments with their own agents, weights and scores — run
                 whichever you need, or all of them. They are never averaged: a well-built model
@@ -1863,7 +1922,7 @@ function secDossierRender() {
     `collecting ${tot.artifacts || 0} artifact(s) and answering ${tot.answered || 0} of ${tot.answers || 0} question(s).</p>`;
   if (latest0.length) {
     h += `<div class="dos-table-wrap"><table class="dos-table"><thead><tr><th>Path</th><th>Score</th><th>What it means</th></tr></thead><tbody>` +
-      latest0.map(r => `<tr><td>${escHtml(r.label)}</td><td><b>${r.score}/100</b></td><td class="dos-wrap">${escHtml(r.score_meaning || '')}</td></tr>`).join('') +
+      latest0.map(r => `<tr><td>${escHtml(r.label)}</td><td><b>${r.score == null ? '— (no evidence)' : `${r.score}/100`}</b></td><td class="dos-wrap">${escHtml(r.score_meaning || '')}</td></tr>`).join('') +
       `</tbody></table></div>`;
   } else {
     h += `<p style="color:var(--text2)">No security assessment has been run for this investigation, so there is no score to report.</p>`;
@@ -1893,6 +1952,23 @@ function secDossierRender() {
     if (weakest.length && weakest[0].t.coverage < 70)
       h += `<p style="color:var(--orange)">Lowest coverage: ${weakest.map(e => `${escHtml(e.t.id)} (${Math.round(e.t.coverage)}%)`).join(', ')} — the LOW headline does not cover these; see section 8.</p>`;
   }
+  latest0.forEach(r => {
+    if (r.path !== 'model_engineering') return;
+    const det = r.detail || {};
+    const meta0 = det.model || {};
+    const w10 = det.w1 || {};
+    const w20 = det.w2 || {};
+    const scoreT = v => (v == null ? '— (no evidence)' : `${v}/100`);
+    const name = meta0.model_name || r.product_name || 'model';
+    h += `<p><b>Model ${escHtml(name)}.</b> W1 ${scoreT(w10.overall_pct)} adversarial coverage (${(det.attacks || []).length} findings) · W2 ${scoreT(w20.overall_pct)} adoption risk (${Math.round(Number(w20.uncertainty_pct || 0))}% uncertainty).</p>`;
+    const blockers = (det.dimensions || []).filter(dm => dm.rating === 'high' || dm.rating === 'critical').slice(0, 3).map(dm => dm.id);
+    const classes = [...new Set((det.attacks || []).map(f => f.attack_class).filter(Boolean))].slice(0, 3);
+    if (blockers.length) h += `<p>Adoption blockers: ${blockers.map(escHtml).join(', ')}.</p>`;
+    if (classes.length) h += `<p>Top adversarial classes: ${classes.map(escHtml).join(', ')}.</p>`;
+    const planIds = (det.mitigation_plan || []).slice(0, 3).map(p => p.control_id).filter(Boolean);
+    if (planIds.length) h += `<p>Top recommended controls: ${planIds.map(escHtml).join(', ')}.</p>`;
+    if ((det.mitigation_uncovered || []).length) h += `<p>Top residual risks after plan: ${escHtml(det.mitigation_uncovered.slice(0, 3).join(', '))}.</p>`;
+  });
   const gaps = [];
   if (tot.known_issues) gaps.push(`${tot.known_issues} known issue(s) surfaced`);
   const unans = (tot.answers || 0) - (tot.answered || 0);
@@ -2022,12 +2098,12 @@ function secDossierRender() {
     if (!row.is_latest) {
       // Superseded rows keep score + delta, not the full arithmetic.
       const cur = curByPath[row.path];
-      const delta = cur ? `${(Number(cur.score) - Number(row.score)) >= 0 ? '+' : ''}${(Number(cur.score) - Number(row.score)).toFixed(1)} vs current (#${cur.id})` : 'path retired, no current version';
+      const delta = !cur ? 'path retired, no current version' : (cur.score == null || row.score == null) ? '— (no score)' : `${(Number(cur.score) - Number(row.score)) >= 0 ? '+' : ''}${(Number(cur.score) - Number(row.score)).toFixed(1)} vs current (#${cur.id})`;
       h += `<p style="color:var(--text2);font-size:12px">Superseded ${(row.created_at || '').slice(0, 10)} — ${escHtml(delta)}. See the §5 change log for the version history.</p>`;
       return;
     }
-    h += `<div class="dos-scope"><div class="dos-chip"><b>${Number(row.score || 0).toFixed(1)}</b>${escHtml(row.score_meaning)}</div>` +
-      (det.kind !== 'hypothesis' ? `<div class="dos-chip"><b>${Number(row.inherent || 0).toFixed(1)} → ${Number(row.residual || 0).toFixed(1)}</b>inherent → residual (Δ${Number(row.delta || 0).toFixed(1)})</div>` : '') +
+    h += `<div class="dos-scope"><div class="dos-chip"><b>${row.score == null ? '— (no evidence)' : Number(row.score).toFixed(1)}</b>${escHtml(row.score_meaning)}</div>` +
+      ((det.kind === 'hypothesis' || det.kind === 'model_engineering') ? '' : `<div class="dos-chip"><b>${Number(row.inherent || 0).toFixed(1)} → ${Number(row.residual || 0).toFixed(1)}</b>inherent → residual (Δ${Number(row.delta || 0).toFixed(1)})</div>`) +
       `</div>`;
     const inp = row.inputs || {};
     h += `<p style="color:var(--text2);font-size:11px"><b>Inputs.</b> Exposure tier ${escHtml(inp.exposure_label || row.exposure || '')}` +
@@ -2050,6 +2126,53 @@ function secDossierRender() {
       h += `<h5>Every finding</h5><ul>` +
         (det.items || []).map(it => `<li><b>${escHtml(it.id)} ${escHtml(it.title || '')}</b> — ${Math.round(Number(it.inherent_score || 0))}/100 on ${escHtml(it.dimension || 'unmapped')}${it.rationale ? ` — ${escHtml(it.rationale)}` : ''}</li>`).join('') +
         `</ul>`;
+    } else if (det.kind === 'model_engineering') {
+      const meta0 = det.model || {};
+      const w10 = det.w1 || {};
+      const w20 = det.w2 || {};
+      const scoreT = v => (v == null ? '— (no evidence)' : `${v}/100`);
+      h += `<p><b>Model identity.</b> ${escHtml(meta0.model_name || '—')} · family ${escHtml(meta0.model_family || '—')} · ${escHtml(meta0.modality || '—')} · weights ${escHtml(meta0.weights_source || '—')} · training data ${escHtml(meta0.training_data_posture || '—')} · deployment ${escHtml(meta0.deployment_pattern || '—')}</p>`;
+      if ((meta0.focus_terms || []).length) h += `<p style="color:var(--text2);font-size:11px"><b>Focus terms.</b> ${escHtml(meta0.focus_terms.join(', '))}</p>`;
+      h += `<p><b>W1 — Adversarial research (${escHtml(w10.method || 'adversarial_coverage_v1')}).</b> Risk ${scoreT(w10.overall_pct)}, class coverage ${Math.round(Number(w10.coverage_pct || 0))}%.</p>`;
+      if ((det.attacks || []).length) {
+        h += `<div class="dos-table-wrap"><table class="dos-table"><thead><tr><th>Attack</th><th>Class</th><th>Applies to</th><th>Confidence</th><th>Prerequisites</th></tr></thead><tbody>` +
+          det.attacks.map(f => `<tr><td class="dos-wrap">${escHtml(f.attack_id)} ${escHtml(f.title || '')}</td><td>${escHtml(f.attack_class)}</td><td>${escHtml(f.applies_to)}</td><td>${Math.round(Number(f.confidence || 0) * 100)}%</td><td class="dos-wrap">${escHtml((f.prerequisites || ['unstated']).join('; '))}</td></tr>`).join('') +
+          `</tbody></table></div>`;
+      } else {
+        h += `<p>No adversarial evidence found in the collected corpus as of this run — a statement about the evidence, not the model.</p>`;
+      }
+      h += `<p><b>W2 — Adoption risk (${escHtml(w20.method || 'adoption_risk_v1')}).</b> Risk ${scoreT(w20.overall_pct)}, uncertainty ${Math.round(Number(w20.uncertainty_pct || 0))}%.</p>`;
+      h += `<div class="dos-table-wrap"><table class="dos-table"><thead><tr><th>Dimension</th><th>Rating</th><th>Rationale</th></tr></thead><tbody>` +
+        (det.dimensions || []).map(dm => `<tr><td>${escHtml(dm.id)}</td><td>${escHtml(dm.rating || 'unknown')}</td><td class="dos-wrap">${escHtml(dm.rationale || '')}</td></tr>`).join('') +
+        `</tbody></table></div>`;
+      if (det.model_adv_version || det.adoption_version)
+        h += `<p style="color:var(--text2);font-size:11px"><b>Method versions.</b> model-adversarial ${escHtml(det.model_adv_version || '—')} (${escHtml(det.model_adv_fingerprint || 'no fingerprint')}) · adoption-risk ${escHtml(det.adoption_version || '—')} (${escHtml(det.adoption_fingerprint || 'no fingerprint')})${(det.w3 || {}).method ? ` · mitigation-residual ${escHtml(det.w3.mitigation_version || '—')} (${escHtml(det.w3.mitigation_fingerprint || 'no fingerprint')})` : ''}.</p>`;
+      {
+        const w3 = det.w3 || {};
+        const plan0 = det.mitigation_plan || [];
+        if (w3.method && !plan0.length) {
+          h += `<p><b>W3 — Mitigation plan (${escHtml(w3.method)}).</b> No mitigations proposed: no drivers and no mitigation literature. Insufficient evidence, not a clean bill of health.</p>`;
+        }
+        if (plan0.length || (det.mitigation_deferred || []).length) {
+          h += `<p><b>W3 — Mitigation plan (${escHtml(w3.method || 'mitigation_residual_v1')}).</b> Recommends and tracks — does not implement. Residuals are indicative priors.</p>`;
+          if (plan0.length) {
+            h += `<div class="dos-table-wrap"><table class="dos-table"><thead><tr><th>#</th><th>Control</th><th>Burden</th><th>Addresses</th><th>Limitations</th></tr></thead><tbody>` +
+              plan0.map(p => `<tr><td>${p.priority}</td><td><b>${escHtml(p.control_id)}</b> ${escHtml((p.rationale || '').slice(0, 80))}</td><td>${escHtml(p.burden || '')}</td><td>${escHtml([...((p.addresses || {}).attacks || []), ...((p.addresses || {}).dimensions || [])].join(', '))}</td><td class="dos-wrap">${escHtml((p.residual_limitations || '').slice(0, 80))}</td></tr>`).join('') +
+              `</tbody></table></div>`;
+          }
+          (det.mitigation_deferred || []).forEach(d => {
+            h += `<p style="font-size:12px;"><b>${escHtml(d.control_id)} deferred.</b> ${escHtml(d.reason || '')}</p>`;
+          });
+          if ((det.mitigation_uncovered || []).length)
+            h += `<p><b>Still uncovered.</b> ${escHtml(det.mitigation_uncovered.join('; '))}.</p>`;
+          const rm = det.mitigation_roadmap || {};
+          ['30d', '60d', '90d'].forEach(k => (rm[k] || []).forEach(item => {
+            h += `<p style="font-size:12px;"><b>${k}:</b> ${escHtml(item)}</p>`;
+          }));
+          if (det.mitigation_approved_by)
+            h += `<p><b>Approved plan.</b> Approved by ${escHtml(det.mitigation_approved_by)}.</p>`;
+        }
+      }
     } else if (det.kind === 'hypothesis') {
       h += `<p><b>Method.</b> ${escHtml(det.method)} — ${escHtml(det.score_meaning || '')}. Higher is better-evidenced, not more dangerous, so it is not comparable with the risk numbers above.</p>`;
       h += `<h5>Every claim</h5><ul>` +
@@ -2084,9 +2207,9 @@ function secDossierRender() {
         `<div class="dos-table-wrap"><table class="dos-table"><thead><tr><th>Assessment</th><th>Created</th><th>Score</th><th>Inherent → residual</th><th>Δ vs current</th></tr></thead><tbody>` +
         repOld.map(r => {
           const cur = curByPath[r.path];
-          const delta = cur ? `${(Number(cur.score) - Number(r.score)) >= 0 ? '+' : ''}${(Number(cur.score) - Number(r.score)).toFixed(1)}` : '— (path retired)';
+          const delta = !cur ? '— (path retired)' : (cur.score == null || r.score == null) ? '— (no score)' : `${(Number(cur.score) - Number(r.score)) >= 0 ? '+' : ''}${(Number(cur.score) - Number(r.score)).toFixed(1)}`;
           const span = (typeof r.inherent === 'number' && typeof r.residual === 'number') ? `${r.inherent} → ${r.residual}` : '—';
-          return `<tr><td>${escHtml(r.label)} — #${r.id}</td><td>${escHtml((r.created_at || '').slice(0, 10))}</td><td>${escHtml(String(r.score))}/100</td><td>${escHtml(span)}</td><td>${escHtml(delta)}</td></tr>`;
+          return `<tr><td>${escHtml(r.label)} — #${r.id}</td><td>${escHtml((r.created_at || '').slice(0, 10))}</td><td>${r.score == null ? '— (no evidence)' : `${escHtml(String(r.score))}/100`}</td><td>${escHtml(span)}</td><td>${escHtml(delta)}</td></tr>`;
         }).join('') + `</tbody></table></div>`;
     }
     h += `</div>`;
@@ -2183,9 +2306,11 @@ function secDossierRender() {
       if (c && !ctrlIds.includes(c)) ctrlIds.push(c);
     });
   }));
-  if (badRuns.length || stuckA.length || weakT.length || ctrlIds.length || (fl.pending)) {
+  {
     h += `<div class="dos-sec"><h4>8 · Open questions and evidence gaps</h4>` +
       `<p style="color:var(--text2);font-size:12px">What the investigation did not close. Work through this section before acting on the headline score.</p>`;
+    if (!badRuns.length && !stuckA.length && !weakT.length && !ctrlIds.length && !(fl.pending))
+      h += `<p style="color:var(--text2);font-size:12px">Nothing open: no failed runs, no unanswered questions, no sub-70% coverage, no pending artifacts.</p>`;
     if (badRuns.length) {
       h += `<h5>Interrupted runs</h5><ul>` +
         badRuns.map(r => `<li><b>Run #${r.id}</b> (${escHtml(r.trigger || 'manual')}): ${escHtml(r.error || 'did not finish')}.</li>`).join('') + `</ul>`;
@@ -5724,20 +5849,38 @@ async function runSecurityAssessment() {
     ? modeSel.value : '';
   renderSecPipeline([], 'starting', mode === 'adversarial' ? 'model_adversarial'
     : mode === 'hypothesis' ? 'model_hypothesis'
+    : mode === 'model_engineering' ? 'model_engineering'
     : mode === 'target' ? 'model' : null);
+  const body = {
+    product_name: document.getElementById('secProduct').value,
+    product_url: document.getElementById('secUrl').value,
+    exposure: document.getElementById('secExposure').value,
+    use_case: document.getElementById('secUseCase').value,
+    workflow_text: document.getElementById('secWorkflow').value,
+    doc_urls: docs, focus, declared_controls: controls,
+    require_approval: document.getElementById('secRequireApproval').checked,
+    assessment_mode: mode,
+  };
+  if (mode === 'model_engineering') {
+    const wf = [];
+    if (document.getElementById('secWfW1').checked) wf.push('adversarial_research');
+    if (document.getElementById('secWfW2').checked) wf.push('adoption_risk');
+    if (document.getElementById('secWfW3').checked) wf.push('mitigation_controls');
+    body.model_name = document.getElementById('secModelName').value;
+    body.model_family = document.getElementById('secModelFamily').value;
+    body.modality = document.getElementById('secModality').value;
+    body.weights_source = document.getElementById('secWeights').value;
+    body.training_data_posture = document.getElementById('secTraining').value;
+    body.deployment_pattern = document.getElementById('secDeploy').value;
+    body.model_focus_terms = document.getElementById('secModelFocus').value.split(',').map(s => s.trim()).filter(Boolean);
+    body.workflows = wf;
+    if (!body.model_name.trim()) { showNotif('Model engineering needs a model name', 'error'); btn.disabled = false; return; }
+    if (!wf.length) { showNotif('Select at least one workflow (W1 or W2)', 'error'); btn.disabled = false; return; }
+  }
   try {
     const res = await fetch(`${API}/investigations/${currentInv}/security/assess`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        product_name: document.getElementById('secProduct').value,
-        product_url: document.getElementById('secUrl').value,
-        exposure: document.getElementById('secExposure').value,
-        use_case: document.getElementById('secUseCase').value,
-        workflow_text: document.getElementById('secWorkflow').value,
-        doc_urls: docs, focus, declared_controls: controls,
-        require_approval: document.getElementById('secRequireApproval').checked,
-        assessment_mode: mode,
-      }),
+      body: JSON.stringify(body),
     });
     if (res.status === 429) { showNotif('An assessment of this kind is already running here', 'error'); btn.disabled = false; return; }
     if (!res.ok) throw new Error('HTTP ' + res.status);
@@ -5752,7 +5895,8 @@ async function runSecurityAssessment() {
     secTabBadge('running', 'running…');
     const _what = { model: 'internals/privacy review',
                     model_adversarial: 'adversarial misuse analysis',
-                    model_hypothesis: 'hypothesis synthesis' }[secRunPath];
+                    model_hypothesis: 'hypothesis synthesis',
+                    model_engineering: 'model engineering evaluation (W1 + W2)' }[secRunPath];
     showNotif(_what
       ? `Security agent started — ${_what}`
       : `Security agent started (${controls.length} control(s) declared) — orchestrator → control-analyst → collector → intel → writer`, 'success');
@@ -5778,6 +5922,15 @@ const SEC_MODEL_PIPELINE = [
   { agent: 'model-privacy', intent: 'assess_model_privacy' },
   { agent: 'scoring engine', intent: 'dimension weights' },
   { agent: 'model-reporter', intent: 'write_model_report' },
+];
+// Model engineering: W1 adversarial research + W2 adoption risk for a named model.
+const SEC_MODEL_ENG_PIPELINE = [
+  { agent: 'research-collector', intent: 'collect_research' },
+  { agent: 'model-adv-intel', intent: 'map_model_attacks' },
+  { agent: 'research-collector', intent: 'collect_research' },
+  { agent: 'model-adoption-analyst', intent: 'rate_adoption' },
+  { agent: 'scoring engine', intent: 'coverage + risk' },
+  { agent: 'model-eval-reporter', intent: 'write_model_eval_report' },
 ];
 // Flow 2: the model as the tool in someone else's operation. Its own agents,
 // its own weights, its own assessment row -- never a section of flow 1.
@@ -5808,6 +5961,7 @@ function renderSecPipeline(trace, currentStage, modelPath) {
   const doneAgents = new Set((trace || []).map(h => h.agent).filter(Boolean));
   const hops = modelPath === 'model_adversarial' ? SEC_ADVERSARIAL_PIPELINE
     : modelPath === 'model_hypothesis' ? SEC_HYPOTHESIS_PIPELINE
+    : modelPath === 'model_engineering' ? SEC_MODEL_ENG_PIPELINE
     : modelPath ? SEC_MODEL_PIPELINE : SEC_PIPELINE;
   box.innerHTML = hops.map((hop, i) => {
     let cls = 'wait';
@@ -5844,11 +5998,13 @@ async function pollSecurityRun() {
       if (e.stage === 'analyze') stages.push(secRunPath === 'model_adversarial'
         ? 'model-adversary'
         : secRunPath === 'model_hypothesis' ? 'hypothesis-analyst'
+        : secRunPath === 'model_engineering' ? 'model-adv-intel'
         : secRunPath === 'model' ? 'model-internals' : 'threat-intel');
       if (e.stage === 'score') stages.push('scoring engine');
       if (e.stage === 'map') stages.push(secRunPath === 'model_adversarial'
         ? 'misuse-scout'
         : secRunPath === 'model_hypothesis' ? 'hypothesis-verifier'
+        : secRunPath === 'model_engineering' ? 'model-adoption-analyst'
         : secRunPath === 'model' ? 'model-privacy' : 'report-writer');
     }
     if (stages.length) {
@@ -5856,6 +6012,7 @@ async function pollSecurityRun() {
       if (box) {
         const live = hops || (secRunPath === 'model_adversarial' ? SEC_ADVERSARIAL_PIPELINE
           : secRunPath === 'model_hypothesis' ? SEC_HYPOTHESIS_PIPELINE
+          : secRunPath === 'model_engineering' ? SEC_MODEL_ENG_PIPELINE
           : secRunPath === 'model' ? SEC_MODEL_PIPELINE : SEC_PIPELINE);
         renderSecPipeline(
           live.filter(h => stages.includes(h.agent)).map(h => ({ agent: h.agent, note: '' })),
@@ -5893,12 +6050,35 @@ function secTabBadge(kind, text) {
 }
 
 async function renderSecGate(runId, logHtml) {
-  let plan = {}, requester = '';
+  let plan = {}, requester = '', mitigationPlan = null;
   try {
     const run = await (await fetch(`${API}/runs/${runId}`)).json();
     plan = (run.stats && run.stats.control_plan) || {};
+    mitigationPlan = (run.stats && run.stats.mitigation_plan) || null;
     requester = (run.stats && run.stats.params && run.stats.params.requested_by) || '';
   } catch (e) {}
+  if (mitigationPlan) {
+    const items = mitigationPlan.plan || [];
+    const deferred = mitigationPlan.deferred || [];
+    const el = document.getElementById('secResult');
+    el.innerHTML = `
+    <div class="sec-card" style="border-color:var(--teal);">
+      <h3><i class="fas fa-user-check"></i> Approval required — model mitigation plan</h3>
+      <p>The <strong>mitigation-analyst</strong> agent finished and is waiting for a second person to confirm the MM* plan before scoring and reporting continue. The Mapper recommends and tracks this plan — it does not implement these controls.</p>
+      <h4>Proposed controls (${items.length})</h4>
+      <div style="font-size:12px;">${items.map(p => `<div style="padding:4px 0;border-bottom:1px solid var(--border)"><strong>${escHtml(p.control_id)}</strong> (priority ${p.priority}, burden ${escHtml(p.burden || '?')}) ${escHtml((p.rationale || '').slice(0, 140))}<br/><span style="color:var(--text2);">Limitations: ${escHtml((p.residual_limitations || '').slice(0, 140))}</span></div>`).join('') || '<span style="color:var(--text2)">none applicable</span>'}</div>
+      ${deferred.length ? `<h4>Deferred (${deferred.length})</h4><div style="font-size:12px;color:var(--text2);">${deferred.map(d => `<div><strong>${escHtml(d.control_id)}</strong> — ${escHtml(d.reason || '')}</div>`).join('')}</div>` : ''}
+      <h4 style="margin-top:12px;"><i class="fas fa-signature"></i> Approved by</h4>
+      <p style="font-size:12px;color:var(--text2);margin:2px 0 6px;">Requested by <code>${escHtml(requester || 'unknown')}</code> — someone else has to approve. The decision is recorded with both names.</p>
+      <input id="secApprover" placeholder="approver's name" style="width:100%;max-width:280px;margin-bottom:8px;" />
+      <div class="sec-btn-row">
+        <button class="btn btn-primary btn-sm" onclick="secGateResolve(${runId}, 'approve')"><i class="fas fa-check"></i> Approve &amp; continue</button>
+        <button class="btn btn-ghost btn-sm" onclick="secGateResolve(${runId}, 'reject')" style="color:var(--red);"><i class="fas fa-times"></i> Reject</button>
+      </div>
+    </div>
+    <div class="sec-card"><h3><i class="fas fa-terminal"></i> Agent log so far</h3><div class="sec-log">${logHtml || ''}</div></div>`;
+    return;
+  }
   const declared = plan.declared_controls || [];
   const proposed = plan.proposed_controls || [];
   const conf = plan.confidence !== undefined ? Math.round(plan.confidence * 100) + '%' : '—';
@@ -5973,13 +6153,14 @@ function secEnsureMermaid(root) {
 function secModelSynthesisHtml(ms, cls) {
   if (!ms || !ms.flows || !ms.flows.length) return '';
   cls = cls || 'sum-section';
+  const headlineT = f => (f.headline == null ? '— (no evidence)' : `${f.headline}/100`);
   let html = `<div class="${cls}"><h4><i class="fas fa-shield-halved"></i> Model security synthesis` +
     (ms.subject ? ` — ${escHtml(ms.subject)}` : '') + '</h4>' +
-    '<p style="font-size:12px;color:var(--text2);">Three workflows, three answers. ' +
+    '<p style="font-size:12px;color:var(--text2);">Each workflow answers its own question. ' +
     'Each number has its own meaning — they are reported side by side, never merged.</p>';
   ms.flows.forEach(f => {
     html += `<div style="margin:10px 0 4px;font-size:12.5px;"><strong>${escHtml(f.label)}</strong> ` +
-      `<span style="font-size:12px;">· ${escHtml(String(f.headline))}/100 ${escHtml(f.score_meaning || '')}</span> ` +
+      `<span style="font-size:12px;">· ${escHtml(headlineT(f))} ${escHtml(f.score_meaning || '')}</span> ` +
       `<span style="font-size:11px;color:var(--text2);">· ${f.item_count || 0} items · run #${f.assessment_id || '—'}</span></div>`;
     if (f.exec_paragraph) html += `<p style="font-size:12.5px;">${escHtml(f.exec_paragraph)}</p>`;
     (f.top_items || []).forEach(t => {
@@ -6034,7 +6215,7 @@ function secSubtabBar() {
   // they score dimension weights or claim confidence -- so offering the tab
   // there shows a checklist the run never consulted.
   const _modelPath = secAssessmentPath === 'model' || secAssessmentPath === 'model_adversarial'
-    || secAssessmentPath === 'model_hypothesis';
+    || secAssessmentPath === 'model_hypothesis' || secAssessmentPath === 'model_engineering';
   return '<div class="sec-subtabs">' + SEC_SUBTABS.filter(t => !(_modelPath && t.key === 'controls')).map(t => {
     const n = t.count ? counts[t.count] : null;
     return `<button class="sec-subtab${t.key === secSubTab ? ' on' : ''}" data-key="${t.key}" onclick="secSwitchSubTab('${t.key}')">` +
@@ -6049,7 +6230,7 @@ function secSwitchSubTab(key) {
   // assessment) would render an empty pane. Fall back to Overview instead.
   const _p = secAssessmentPath;
   if (key === 'controls' && (_p === 'model' || _p === 'model_adversarial'
-      || _p === 'model_hypothesis')) key = 'overview';
+      || _p === 'model_hypothesis' || _p === 'model_engineering')) key = 'overview';
   secSubTab = key;
   if (!secSubPanes) {
     // No assessment view rendered (none stored for this investigation). The
@@ -6279,9 +6460,9 @@ async function secLoadInvSummary() {
       // full per-flow findings and every diagram live one click away in the
       // Summary tab, rendered from this same payload.
       html += '<div style="font-size:12px;margin:6px 0 2px;"><strong>Model synthesis</strong> ' +
-        '<span style="color:var(--text2);">· three workflows, three answers, never merged</span></div>' +
+        '<span style="color:var(--text2);">· side by side, never merged</span></div>' +
         ms.flows.map(f => `<div style="font-size:12px;padding:2px 0;"><strong>${escHtml(f.label)}</strong> ` +
-          `${escHtml(String(f.headline))}/100 ${escHtml(f.score_meaning || '')} ` +
+          `${escHtml(f.headline == null ? '— (no evidence)' : `${f.headline}/100`)} ${escHtml(f.score_meaning || '')} ` +
           `<span style="color:var(--text2);">· ${f.item_count || 0} items · run #${f.assessment_id || '—'}</span></div>`).join('') +
         `<div style="font-size:11.5px;color:var(--text2);margin-top:2px;">${(ms.diagrams || []).length} diagram(s) and per-flow findings in the Summary tab.</div>`;
     }
@@ -6418,8 +6599,9 @@ function renderSecurityReport(data) {
   // declaration, hoisted to the top, so no pane can read a flag in TDZ.
   const _isAdv = data.assessment_path === 'model_adversarial';
   const _isHyp = data.assessment_path === 'model_hypothesis';
+  const _isModelEng = data.assessment_path === 'model_engineering';
   const _hypPath = _isHyp;      // the score strip reads it; same flag, one name in use
-  const _anyModelPath = data.assessment_path === 'model' || _isAdv || _isHyp;
+  const _anyModelPath = data.assessment_path === 'model' || _isAdv || _isHyp || _isModelEng;
   secPerspectives = Array.isArray(data.perspectives) ? data.perspectives : [];
   secA2ATaskId = data.a2a_task_id || '';
   if (!secPerspectives.some(p => p && p.key === secAudience)) {
@@ -6495,7 +6677,28 @@ function renderSecurityReport(data) {
            • each dimension score comes from the findings collected for it; the aggregate is their weighted sum<br/>
            • the number is <strong>dimension weighting</strong>, not the L×I of the catalog path, and the two are not comparable`}
     </div>`;
-  const gauge = _modelScored ? _dimStrip : `
+  // ---- model-engineering strip ----
+  // Two numbers, two meanings: W1 adversarial coverage and W2 adoption risk.
+  // Either can be null (no evidence) -- a dash, never a zero.
+  const _w1 = ((data.scoring || {}).w1) || {};
+  const _w2 = ((data.scoring || {}).w2) || {};
+  const _meNum = v => (v == null ? '—' : v);
+  const _meStrip = `
+    <div class="sec-gauge" style="border:none;padding:0;background:none;">
+      <div class="sec-metric"><div class="sec-metric-v" style="color:${secSeverityColor(_w1.overall_pct || 0)};font-size:20px;">${_meNum(_w1.overall_pct)}</div><div class="sec-metric-k">W1 adversarial</div></div>
+      <div class="sec-metric"><div class="sec-metric-v" style="font-size:20px;">${Math.round(Number(_w1.coverage_pct || 0))}%</div><div class="sec-metric-k">class coverage</div></div>
+      <div class="sec-metric"><div class="sec-metric-v" style="color:${secSeverityColor(_w2.overall_pct || 0)};font-size:20px;">${_meNum(_w2.overall_pct)}</div><div class="sec-metric-k">W2 adoption risk</div></div>
+      <div class="sec-metric"><div class="sec-metric-v" style="font-size:20px;">${Math.round(Number(_w2.uncertainty_pct || 0))}%</div><div class="sec-metric-k">uncertainty</div></div>
+      <div class="sec-metric"><div class="sec-metric-v" style="font-size:14px;">${threats.length}</div><div class="sec-metric-k">attack findings</div></div>
+    </div>
+    <div class="sec-formula">
+      <strong>How these scores are derived</strong> (deterministic — same inputs, same numbers):<br/>
+      • W1 <code>adversarial_coverage_v1</code>: each finding contributes <code>severity × scope × confidence</code> (model-specific 1.0, family 0.6, modality 0.4); headline is the mean of the top three, exposure-scaled<br/>
+      • no findings means <strong>no score</strong> (—), not a low one: absence of literature is not evidence of safety<br/>
+      • W2 <code>adoption_risk_v1</code>: weighted dimension ratings; <code>unknown</code> dimensions raise <strong>uncertainty</strong> instead of diluting risk; all-unknown means no score<br/>
+      • methods: model-adversarial ${escHtml(_w1.model_adv_version || (data.scoring || {}).model_adv_version || '—')} · adoption-risk ${escHtml(_w2.adoption_version || (data.scoring || {}).adoption_version || '—')}
+    </div>`;
+  const gauge = _isModelEng ? _meStrip : _modelScored ? _dimStrip : `
     <div class="sec-gauge">
       <div class="sec-metric"><div class="sec-metric-v" style="color:${inhColor}">${inhColor ? inherent : '—'}</div><div class="sec-metric-k">inherent</div></div>
       <div class="sec-gauge-track" title="inherent ${inherent} → residual ${residual}">
@@ -6557,6 +6760,16 @@ function renderSecurityReport(data) {
         <td><span class="sev-${sev}">${sev}</span></td>
       </tr>`;
     }
+    if (_isModelEng) {
+      return `<tr>
+        <td><strong>${escHtml(t.attack_id || t.id)}</strong></td>
+        <td>${escHtml(t.title || '')}</td>
+        <td>${escHtml(t.attack_class || '')}</td>
+        <td>${escHtml(t.applies_to || '')}</td>
+        <td style="white-space:nowrap;"><strong>${t.confidence != null ? Math.round(Number(t.confidence) * 100) + '%' : '—'}</strong></td>
+        <td style="min-width:200px;">${escHtml((t.prerequisites || []).join('; ') || '—')}</td>
+      </tr>`;
+    }
     return `<tr${app_ ? '' : ' style="opacity:0.55;"'}>
       <td><strong>${escHtml(t.id)}</strong>${app_ ? '' : '<br/><span style="font-size:9.5px;color:var(--text2)">out of scope</span>'}</td>
       <td>${escHtml(t.title)}<br/><span style="color:var(--text2);font-size:10.5px;">${escHtml(t.owasp || '')}</span></td>
@@ -6591,6 +6804,15 @@ function renderSecurityReport(data) {
         ${(t.detections || []).length ? `<p style="color:var(--teal)"><i class="fas fa-radar"></i> <strong>Would show up as:</strong> ${escHtml(t.detections.join('; '))}</p>` : ''}
         ${(t.mitigations || []).length ? `<ul style="margin-left:18px;"><li>${escHtml(t.mitigations.join('; '))}</li></ul>` : ''}
         <p style="font-size:11px;color:var(--text2);margin-top:6px;">Defensive use only — stated so the owning team can close the prerequisite, not to run the chain.</p></div>`;
+    }
+    if (_isModelEng) {
+      return `<div class="sec-card"><h4>${escHtml(t.attack_id || t.id)} — ${escHtml(t.title || '')}</h4>
+        <p style="color:var(--text2)"><em>${escHtml(t.attack_class || '')} · applies to ${escHtml(t.applies_to || '')} · confidence ${t.confidence != null ? Math.round(Number(t.confidence) * 100) + '%' : '—'}</em></p>
+        ${(t.prerequisites || []).length ? `<p><strong>Prerequisites:</strong> ${escHtml(t.prerequisites.join('; '))}</p>` : ''}
+        ${(t.mitigations || []).length ? `<p><strong>Mitigations:</strong></p><ul style="margin-left:18px;">${t.mitigations.map(m => `<li>${escHtml(m)}</li>`).join('')}</ul>` : ''}
+        ${t.residual_notes ? `<p style="color:var(--orange)">${escHtml(t.residual_notes)}</p>` : ''}
+        ${(t.evidence_artifact_ids || []).length ? `<p style="color:var(--teal)"><strong>In-app evidence:</strong> ${t.evidence_artifact_ids.map(a => '#' + escHtml(String(a))).join(', ')}</p>` : ''}
+        <p style="font-size:11px;color:var(--text2);margin-top:6px;">Capability in the literature, not a measured exploit against this checkpoint.</p></div>`;
     }
     return `<div class="sec-card"><h4>${escHtml(t.id)} — ${escHtml(t.title)} <span class="sev-${sev}">${sev}</span></h4>
       <p style="color:var(--text2)"><em>${escHtml(t.stride || '')} · ${escHtml(t.owasp || '')} · inherent ${secThreatInherent(t)} → residual ${secThreatScore(t)} (${secThreatCoverage(t)}% covered${t.applicability !== undefined ? `, applicability ${Math.round(t.applicability * 100)}%` : ''})</em></p>
@@ -6681,7 +6903,45 @@ function renderSecurityReport(data) {
       <h4>Secure workflow</h4><div class="diagram-wrap"><div class="mermaid">${escHtml(dg.workflow || '')}</div></div>`}
     </div>`;
 
-  const paneThreats = `
+  // ---- model-engineering panes: identity + W1 attacks + W2 register ----
+  const _meMeta = data.model || {};
+  const _meDims = data.adoption_dimensions || [];
+  const paneModelEng = _isModelEng ? `
+    <div class="sec-card"><h3><i class="fas fa-cube"></i> Model identity</h3>
+      <p style="font-size:12.5px;"><strong>${escHtml(_meMeta.model_name || data.product_name || '—')}</strong> · family ${escHtml(_meMeta.model_family || '—')} · ${escHtml(_meMeta.modality || '—')} · weights ${escHtml(_meMeta.weights_source || '—')} · training data ${escHtml(_meMeta.training_data_posture || '—')} · deployment ${escHtml(_meMeta.deployment_pattern || '—')}</p>
+      ${(_meMeta.focus_terms || []).length ? `<p style="font-size:12px;color:var(--text2);">Focus: ${escHtml(_meMeta.focus_terms.join(', '))}</p>` : ''}
+    </div>
+    <div class="sec-card"><h3><i class="fas fa-triangle-exclamation"></i> W1 — Adversarial research</h3>
+      ${threats.length
+        ? `<div class="sec-aud-role">Published or plausible attacks mapped onto this model. <strong>Applies to</strong> tells you whether the evidence names this model or only its family — family-only is not a finding about this checkpoint.</div>
+           <div style="overflow-x:auto;"><table class="sec-table"><tr><th>ID</th><th>Attack</th><th>Class</th><th>Applies to</th><th>Confidence</th><th>Prerequisites</th></tr>${rows}</table></div>`
+        : `<p style="color:var(--text2)">No adversarial evidence found in the collected corpus as of this run — a statement about the evidence, not the model.</p>`}
+    </div>
+    <div class="sec-card"><h3><i class="fas fa-gears"></i> W2 — Adoption risk register</h3>
+      <div class="sec-aud-role"><strong>Unknown</strong> means no evidence was collected: it raises uncertainty, never lowers risk.</div>
+      <div style="overflow-x:auto;"><table class="sec-table"><tr><th>Dimension</th><th>Rating</th><th>Rationale</th><th>Adoption implications</th></tr>${_meDims.map(dm => `<tr><td><strong>${escHtml(dm.dimension)}</strong></td><td>${escHtml(dm.rating || 'unknown')}</td><td>${escHtml((dm.rationale || '').slice(0, 160))}</td><td>${escHtml((dm.adoption_implications || []).slice(0, 2).join('; '))}</td></tr>`).join('')}</table></div>
+    </div>
+    ${(() => {
+      const mit = data.mitigation || {};
+      const w3 = ((data.scoring || {}).w3) || {};
+      if (!((mit.plan || []).length || (mit.deferred || []).length) && !w3.method) return '';
+      const w3v = `${escHtml(w3.mitigation_version || '')}`;
+      return `<div class="sec-card"><h3><i class="fas fa-shield-halved"></i> W3 — Mitigation plan</h3>
+      <div class="sec-aud-role">The Mapper recommends and tracks this plan — it does not implement these controls. Residuals are indicative priors, not guarantees.</div>
+      ${(mit.plan || []).length
+        ? `<div style="overflow-x:auto;"><table class="sec-table"><tr><th>#</th><th>Control</th><th>Burden</th><th>Addresses</th><th>Limitations</th></tr>${mit.plan.map(p => `<tr><td>${p.priority}</td><td><strong>${escHtml(p.control_id)}</strong> ${escHtml((p.rationale || '').slice(0, 120))}</td><td>${escHtml(p.burden || '')}</td><td>${escHtml([...(p.addresses?.attacks || []), ...(p.addresses?.dimensions || [])].join(', '))}</td><td>${escHtml((p.residual_limitations || '').slice(0, 120))}</td></tr>`).join('')}</table></div>`
+        : `<p style="color:var(--text2)">No applicable controls for this deployment pattern — not a silent empty success: see deferred list.</p>`}
+      ${(mit.deferred || []).length ? `<p style="font-size:12px;color:var(--text2);"><strong>Deferred:</strong> ${mit.deferred.map(d => `${escHtml(d.control_id)} (${escHtml(d.reason || '')})`).join('; ')}</p>` : ''}
+      ${(mit.uncovered_risks || []).length ? `<p style="font-size:12px;color:var(--orange);"><strong>Still uncovered:</strong> ${escHtml(mit.uncovered_risks.join('; '))}</p>` : ''}
+      ${['30d', '60d', '90d'].some(k => ((mit.roadmap || {})[k] || []).length) ? `<p style="font-size:12px;"><strong>Roadmap:</strong> ${['30d', '60d', '90d'].map(k => ((mit.roadmap || {})[k] || []).length ? `<br/><b>${k}:</b> ${escHtml((mit.roadmap[k] || []).join('; '))}` : '').join('')}</p>` : ''}
+      ${mit.approved_by ? `<p style="font-size:12px;color:var(--teal);">Approved plan — by ${escHtml(mit.approved_by)}${mit.approved_at ? ` at ${escHtml(mit.approved_at.slice(0, 10))}` : ''}.</p>` : ''}
+      <p style="font-size:11px;color:var(--text2);">Method ${escHtml(w3.method || 'mitigation_residual_v1')} · catalog ${escHtml(w3v)} (${escHtml(w3.mitigation_fingerprint || 'no fingerprint')}).</p>
+      </div>`;
+    })()}` : '';
+  const paneThreats = _isModelEng ? paneModelEng + `
+    <div class="sec-card"><h3><i class="fas fa-triangle-exclamation"></i> Attack findings in detail</h3>
+      ${details}
+    </div>` : `
     <div class="sec-card"><h3><i class="fas fa-triangle-exclamation"></i> ${_isHyp ? 'Hypothesis register' : _isAdv ? 'Misuse scenario register' : 'Threat &amp; risk register'}</h3>
       ${_isHyp ? `<div class="sec-aud-role">Each row is a claim someone could test and be wrong about. The <strong>refuted by</strong> column is the actionable one: it is the observation that would settle the question.</div>` : ''}
       ${_isAdv ? `<div class="sec-aud-role">These are scenarios an attacker could chain <em>with</em> this model. The prerequisite column is the one to act on — it is what you can actually close.</div>` : ''}
@@ -6862,6 +7122,11 @@ function secSetField(id, value) {
 // drift apart. Debounced because it fires per keystroke.
 let secClassifyTimer = null;
 let secClassifySeq = 0;
+function secToggleModelFields() {
+  const wrap = document.getElementById('secModelFields');
+  const sel = document.getElementById('secMode');
+  if (wrap && sel) wrap.hidden = sel.value !== 'model_engineering';
+}
 function secClassifySubject() {
   const wrap = document.getElementById('secModeWrap');
   if (!wrap) return;
@@ -6914,13 +7179,15 @@ function secPopulateForm(d) {
   const storedPath = (d.scoring && d.scoring.assessment_path) || d.assessment_path;
   if (modeWrap) {
     if (storedPath === 'model' || storedPath === 'model_adversarial'
-        || storedPath === 'model_hypothesis') {
+        || storedPath === 'model_hypothesis' || storedPath === 'model_engineering') {
       modeWrap.hidden = false;
       if (modeSel) {
         modeSel.value = { model: 'target', model_adversarial: 'adversarial',
-                          model_hypothesis: 'hypothesis' }[storedPath] || 'target';
+                          model_hypothesis: 'hypothesis',
+                          model_engineering: 'model_engineering' }[storedPath] || 'target';
         delete modeSel.dataset.touched;
       }
+      secToggleModelFields();
     } else {
       modeWrap.hidden = true;
     }
