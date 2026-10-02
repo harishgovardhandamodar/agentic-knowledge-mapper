@@ -407,6 +407,7 @@ def assess_posture(accepted_artifacts: list[dict[str, Any]]) -> dict[str, Any]:
     """
     pdp = assess_pdp(accepted_artifacts)
     safety = assess_safety(accepted_artifacts)
+    rlhf = assess_rlhf(accepted_artifacts)
     return {
         "method": "provider_posture_v1", "version": PDP_VERSION,
         "catalog": PDP_ID, "fingerprint": pdp_fingerprint(),
@@ -414,6 +415,9 @@ def assess_posture(accepted_artifacts: list[dict[str, Any]]) -> dict[str, Any]:
         "safety": safety["findings"],
         "safety_catalog": SAFETY_ID, "safety_version": SAFETY_VERSION,
         "safety_fingerprint": safety["fingerprint"],
+        "rlhf": rlhf["findings"],
+        "rlhf_catalog": RLHF_ID, "rlhf_version": RLHF_VERSION,
+        "rlhf_fingerprint": rlhf["fingerprint"],
         "note": ("Partial means a source exists, not that the practice is "
                  "confirmed. Safety findings contextualize governance and "
                  "eval practice; posture findings alone answer data use."),
@@ -442,25 +446,25 @@ def pdp_table(findings: list[dict[str, Any]]) -> str:
 #: org's own tooling (more controllable); ``indirect`` paths run through the
 #: public world (less controllable, common to all labs).
 CONTRIBUTION_PATHS: list[dict[str, Any]] = [
-    {"id": "direct-paste", "direct": True, "name": "Employee paste into consumer chat",
+    {"edge": "training_opt_in", "id": "direct-paste", "direct": True, "name": "Employee paste into consumer chat",
      "controllability": "high", "pathways": ["LP01"],
      "guidance": "Block consumer tools for confidential data; enterprise/API-only policy."},
-    {"id": "direct-api-logs", "direct": True, "name": "API logs under standard terms",
+    {"edge": "abuse_log", "id": "direct-api-logs", "direct": True, "name": "API logs under standard terms",
      "controllability": "high", "pathways": ["LP03", "LP04"],
      "guidance": "Tier selection, retention settings, deletion runbooks."},
     {"id": "direct-connectors", "direct": True, "name": "Connectors (drive, mail, tickets)",
      "controllability": "medium", "pathways": ["LP01", "LP06"],
      "guidance": "Least-privilege connectors, DLP, allowlisted apps."},
-    {"id": "direct-feedback", "direct": True, "name": "Feedback, thumbs, bug reports with content",
+    {"edge": "feedback_submitted", "id": "direct-feedback", "direct": True, "name": "Feedback, thumbs, bug reports with content",
      "controllability": "high", "pathways": ["LP03"],
      "guidance": "Disable content feedback on sensitive projects."},
-    {"id": "direct-finetune", "direct": True, "name": "Fine-tuning jobs with org data",
+    {"edge": "training_opt_in", "id": "direct-finetune", "direct": True, "name": "Fine-tuning jobs with org data",
      "controllability": "high", "pathways": ["LP04"],
      "guidance": "Contractual limits; know the fine-tune data retention term."},
-    {"id": "indirect-web", "direct": False, "name": "Public website and docs in web corpora",
+    {"edge": "crawl", "id": "indirect-web", "direct": False, "name": "Public website and docs in web corpora",
      "controllability": "low", "pathways": ["LP07"],
      "guidance": "Public-data policy; assume public is trainable."},
-    {"id": "indirect-oss", "direct": False, "name": "Open-source code, papers, social posts",
+    {"edge": "crawl", "id": "indirect-oss", "direct": False, "name": "Open-source code, papers, social posts",
      "controllability": "low", "pathways": ["LP07"],
      "guidance": "Assume published material trains someone's model."},
     {"id": "indirect-thirdparty", "direct": False, "name": "Third-party apps sending data to the same lab",
@@ -469,13 +473,13 @@ CONTRIBUTION_PATHS: list[dict[str, Any]] = [
     {"id": "indirect-supplychain", "direct": False, "name": "Vendors in your supply chain using the provider",
      "controllability": "medium", "pathways": ["LP05"],
      "guidance": "Downstream AI use belongs in vendor questionnaires."},
-    {"id": "indirect-benchmarks", "direct": False, "name": "Shared benchmarks with published data",
+    {"edge": "crawl", "id": "indirect-benchmarks", "direct": False, "name": "Shared benchmarks with published data",
      "controllability": "low", "pathways": [],
      "guidance": "Published benchmark data is training data in practice."},
-    {"id": "direct-safety-feedback", "direct": True, "name": "Org eval, red-team or bounty submissions",
+    {"edge": "feedback_submitted", "id": "direct-safety-feedback", "direct": True, "name": "Org eval, red-team or bounty submissions",
      "controllability": "high", "pathways": ["PDP06"], "safety": True,
      "guidance": "Treat external eval and red-team participation as a data-sharing decision: scope what leaves."},
-    {"id": "indirect-safety-feedback", "direct": False, "name": "Public adversarial examples and bounty writeups",
+    {"edge": "crawl", "id": "indirect-safety-feedback", "direct": False, "name": "Public adversarial examples and bounty writeups",
      "controllability": "low", "pathways": [], "safety": True,
      "guidance": "Public red-team outputs train someone's model; assume published findings are ingested."},
 ]
@@ -516,6 +520,7 @@ def contribution_map(register_rows: list[dict[str, Any]],
                  "direct": p["direct"],
                  "controllability": p["controllability"],
                  "guidance": p["guidance"],
+                 "edge": p.get("edge"),
                  "status": "active" if hit else "possible"}
         (active if hit else possible).append(entry)
     return {
@@ -802,4 +807,239 @@ def set_safety_finding(findings: list[dict[str, Any]], dim_id: str, *,
                 f["reviewed_by"] = actor
             return f
     raise ValueError(f"unknown SAF dimension: {dim_id}")
+
+
+# --------------------------------------------------------------------------
+# RLHF / preference-feedback retention (adjacent catalog)
+# --------------------------------------------------------------------------
+
+#: Preference, feedback and post-training data: the real channels by which
+#: user and org interactions still become alignment data, distinct from
+#: classic RLHF reward-model pipelines. Never collapsed into one "RLHF" row
+#: in the UI -- the umbrella label is "preference, feedback & post-training
+#: data" with the subclasses below.
+RLHF_ID = "akm-rlhf-feedback-retention"
+RLHF_VERSION = "1.0.0"
+
+#: Data classes A-F from the investigation brief. Each dimension names its
+#: class so the register, the tier table and the datapoint answers agree.
+RLHF_CLASSES = {
+    "A": "explicit preference / feedback",
+    "B": "sampled human review",
+    "C": "post-training / improve-the-model corpora",
+    "D": "safety / abuse monitoring logs",
+    "E": "contractor / labeler preference sets",
+    "F": "enterprise eval / fine-tune shares",
+}
+
+RLHF_DIMENSIONS: list[dict[str, Any]] = [
+    {"id": "RLHF01", "name": "Preference and feedback into training",
+     "question": "Do thumbs, rankings or feedback send transcripts to training? Override opt-out?",
+     "class": "A", "layer": "privacy",
+     "tiers": ["consumer", "api", "enterprise"],
+     "controls": ["C12", "C06"], "process": ["PR05", "PR01"],
+     "evidence_terms": ["feedback", "thumbs", "thumbs-up", "thumbs up",
+                        "rating", "ranking", "preference", "rate this",
+                        "/feedback", "human feedback"]},
+    {"id": "RLHF02", "name": "Feedback retention duration",
+     "question": "How long is feedback kept; what de-identification is claimed?",
+     "class": "A", "layer": "privacy",
+     "tiers": ["consumer", "api", "enterprise"],
+     "controls": ["C04", "C08"], "process": ["PR02", "PR04"],
+     "evidence_terms": ["retention", "retain", "years", "months",
+                        "de-identif", "anonym", "delete"]},
+    {"id": "RLHF03", "name": "Human-review sampling",
+     "question": "Who reviews sampled content; is it de-linked; how long kept?",
+     "class": "B", "layer": "privacy",
+     "tiers": ["consumer", "api", "enterprise"],
+     "controls": ["C06", "C12"], "process": ["PR01", "PR05"],
+     "evidence_terms": ["human review", "reviewer", "contractor",
+                        "sampling", "sampled", "de-linked", "delinked"]},
+    {"id": "RLHF04", "name": "Post-training opt-in and opt-out defaults",
+     "question": "Consumer default on or off; commercial default?",
+     "class": "C", "layer": "privacy",
+     "tiers": ["consumer", "api", "enterprise"],
+     "controls": ["C04", "C01"], "process": ["PR02"],
+     "evidence_terms": ["opt-out", "opt out", "default", "improve the model",
+                        "model improvement", "setting", "training"]},
+    {"id": "RLHF05", "name": "Safety-log retention vs training",
+     "question": "Abuse and safety window; flagged extension; separate from training claims?",
+     "class": "D", "layer": "privacy",
+     "tiers": ["api", "enterprise"],
+     "controls": ["C08", "C04"], "process": ["PR04"],
+     "evidence_terms": ["abuse", "monitoring", "safety", "flagged",
+                        "30 days", "monitoring logs"]},
+    {"id": "RLHF06", "name": "ZDR vs frontier safety retention",
+     "question": "Can zero-retention coexist with mandatory safety retention on covered models?",
+     "class": "D", "layer": "privacy",
+     "tiers": ["api", "enterprise"],
+     "controls": ["C04"], "process": ["PR02"],
+     "evidence_terms": ["zero retention", "ZDR", "covered model",
+                        "mandatory retention", "safety retention"]},
+    {"id": "RLHF07", "name": "Deletion efficacy",
+     "question": "Does deleting a chat exclude future training; do review copies remain?",
+     "class": "A", "layer": "privacy",
+     "tiers": ["consumer", "api"],
+     "controls": ["C04", "C08"], "process": ["PR04"],
+     "evidence_terms": ["delete", "deletion", "erase", "remove", "copy",
+                        "remain"]},
+    {"id": "RLHF08", "name": "Enterprise explicit share paths",
+     "question": "Eval, fine-tune and feedback opt-in shares: what, where, revocable?",
+     "class": "F", "layer": "privacy",
+     "tiers": ["enterprise"],
+     "controls": ["C04", "C11"], "process": ["PR02"],
+     "evidence_terms": ["eval", "share", "fine-tune", "fine tune",
+                        "opt-in", "opt in", "playground"]},
+]
+
+RLHF_BY_ID = {d["id"]: d for d in RLHF_DIMENSIONS}
+
+
+def rlhf_fingerprint() -> str:
+    """The RLHF catalog fingerprint cited on stored findings."""
+    return _fingerprint({"id": RLHF_ID, "version": RLHF_VERSION,
+                         "dimensions": RLHF_DIMENSIONS})
+
+
+def blank_rlhf() -> list[dict[str, Any]]:
+    """One unknown RLHF finding per dimension. The starting point."""
+    return [{"id": d["id"], "dimension": d["name"],
+             "class": d["class"],
+             "class_name": RLHF_CLASSES[d["class"]],
+             "claim_class": "data_handling", "standing": "unknown",
+             "summary": "No accepted feedback-retention source assessed yet.",
+             "evidence_ids": [], "tiers": list(d["tiers"])}
+            for d in RLHF_DIMENSIONS]
+
+
+def assess_rlhf(accepted_artifacts: list[dict[str, Any]]) -> dict[str, Any]:
+    """Derive RLHF standings from accepted sources only.
+
+    Same discipline as PDP and SAF: a dimension with a matching accepted
+    source reads ``partial``; everything else stays ``unknown``. ``supported``
+    needs a human who read the duration, tier and override terms. Safety logs
+    (RLHF05/06) stand on their own evidence -- "API not used for training"
+    never satisfies them, and the test pins exactly that.
+    """
+    textual = []
+    for a in accepted_artifacts or []:
+        if not isinstance(a, dict) or a.get("review") != "accepted":
+            continue
+        textual.append({"id": a.get("id"), "blob": _artifact_blob(a),
+                        "title": a.get("title") or "",
+                        "url": a.get("url") or "",
+                        "published": a.get("date_published") or ""})
+    findings = []
+    for d in RLHF_DIMENSIONS:
+        hits = [t for t in textual
+                if any(term.strip().lower() in t["blob"]
+                       for term in d["evidence_terms"] if term.strip())]
+        if hits:
+            first = hits[0]
+            findings.append({
+                "id": d["id"], "dimension": d["name"],
+                "class": d["class"],
+                "class_name": RLHF_CLASSES[d["class"]],
+                "claim_class": "data_handling", "standing": "partial",
+                "summary": f"{len(hits)} accepted source(s) touch this "
+                           f"dimension; durations, tiers and opt-out "
+                           f"override unverified.",
+                "evidence_ids": [t["id"] for t in hits if t["id"]],
+                "tiers": list(d["tiers"]),
+                "as_of": first["published"] or None,
+                "source_urls": [t["url"] for t in hits if t["url"]][:4]})
+        else:
+            findings.append({
+                "id": d["id"], "dimension": d["name"],
+                "class": d["class"],
+                "class_name": RLHF_CLASSES[d["class"]],
+                "claim_class": "data_handling", "standing": "unknown",
+                "summary": "No accepted feedback-retention source assessed yet.",
+                "evidence_ids": [], "tiers": list(d["tiers"]),
+                "as_of": None, "source_urls": []})
+    return {"method": "rlhf_feedback_retention_v1",
+            "version": RLHF_VERSION, "catalog": RLHF_ID,
+            "fingerprint": rlhf_fingerprint(), "findings": findings,
+            "note": ("Partial means a source exists, not that the duration "
+                     "or override is confirmed. Never applied across tiers: "
+                     "a consumer row says nothing about the API tier.")}
+
+
+def set_rlhf_finding(findings: list[dict[str, Any]], dim_id: str, *,
+                     standing: str, summary: str = "",
+                     evidence_ids: list[int] | None = None,
+                     actor: str = "") -> dict[str, Any]:
+    """Human override of one RLHF dimension. The only path to supported."""
+    if standing not in STANDINGS:
+        raise ValueError(f"unknown standing: {standing}")
+    for f in findings or []:
+        if f.get("id") == dim_id:
+            f["standing"] = standing
+            if summary:
+                f["summary"] = summary
+            if evidence_ids is not None:
+                f["evidence_ids"] = list(evidence_ids)
+            if actor:
+                f["reviewed_by"] = actor
+            return f
+    raise ValueError(f"unknown RLHF dimension: {dim_id}")
+
+
+def rlhf_tier_table(provider: str,
+                    findings: list[dict[str, Any]]) -> str:
+    """Per-tier compare rows: dimension, class, applicable tiers, standing.
+
+    For the provider report and the cross-lab synthesis. Tier cells name
+    which tiers the question applies to; the standing never varies by tier
+    unless a human recorded tier notes -- one row per dimension, no invented
+    tier splits.
+    """
+    by_id = {f.get("id"): f for f in findings or []}
+    lines = ["| Dimension | Class | Tiers | Standing | Evidence |",
+             "|---|---|---|---|---|"]
+    for d in RLHF_DIMENSIONS:
+        f = by_id.get(d["id"]) or {}
+        n = len(f.get("evidence_ids") or [])
+        lines.append(f"| {d['id']} {d['name']} | {d['class']} | "
+                     f"{', '.join(d['tiers'])} | "
+                     f"{f.get('standing', 'unknown')} | "
+                     f"{n} source(s) |")
+    return "\n".join(lines)
+
+
+def datapoint_answers(provider: str, rlhf: list[dict[str, Any]],
+                      pdp: list[dict[str, Any]] | None = None
+                      ) -> dict[str, str]:
+    """Capability vs safety datapoint answers, kept separate by construction.
+
+    Three answers with three different burdens of proof. A silent tier is an
+    unknown, never a no.
+    """
+    by_rlhf = {f.get("id"): f for f in rlhf or []}
+    g = lambda i: (by_rlhf.get(i) or {}).get("standing", "unknown")
+    cap_bits = []
+    if g("RLHF01") != "unknown" or g("RLHF04") != "unknown":
+        cap_bits.append(
+            f"consumer feedback and training defaults read "
+            f"{g('RLHF01')}/{g('RLHF04')} -- check the tier terms")
+    else:
+        cap_bits.append("consumer feedback and training defaults unassessed")
+    cap = ("Direct capability datapoint: " +
+           ("yes, if " if g("RLHF04") == "partial" else "possible where ") +
+           "; ".join(cap_bits) + ".")
+    safety_bits = []
+    if g("RLHF05") != "unknown" or g("RLHF06") != "unknown":
+        safety_bits.append(
+            f"safety-log retention reads {g('RLHF05')}/{g('RLHF06')}")
+    else:
+        safety_bits.append("safety-log retention unassessed")
+    safety = ("Safety-monitoring datapoint: possible under monitoring and "
+              "flagged retention even when capability training is off; " +
+              "; ".join(safety_bits) + ".")
+    api = ("Org API datapoint for capability training: usually no by "
+           "default; yes only on an opt-in share or non-ZDR log use beyond "
+           "abuse handling -- which needs its own evidence, not an "
+           "inference from consumer rows.")
+    return {"capability": cap, "safety": safety, "org_api": api,
+            "provider": provider}
 

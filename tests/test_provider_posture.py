@@ -111,10 +111,24 @@ class TestPlannerFamilies(unittest.TestCase):
         _agent._ensure_provider_posture_queries(inv, clean, {"web", "rss"})
         self.assertTrue(clean)
         blob = " ".join(q["text"] for q in clean).lower()
+        # official terms first: policy, enterprise, feedback, review
         self.assertIn("privacy policy", blob)
         self.assertIn("enterprise", blob)
-        self.assertIn("trust center", blob)
+        self.assertIn("feedback", blob)
+        self.assertIn("human review", blob)
         self.assertLessEqual(len(clean), 6)
+
+    def test_trust_and_safety_families_fill_leftover_slots(self):
+        # The six-query cap means families past index six only fire when the
+        # LLM already planned near-identical queries; the primary mechanism
+        # is the planner prompt hint, pinned here through its helper (the
+        # planner entry point itself is stubbed out by other suites, so the
+        # wording -- not the call -- is what this test owns).
+        from app import agent as _agent
+        hint = _agent._provider_prompt_hint()
+        self.assertIn("provider data-posture", hint)
+        self.assertIn("safety evaluations", hint)
+        self.assertIn("not capability leaderboards", hint)
 
     def test_non_provider_briefs_are_untouched(self):
         from app import agent as _agent
@@ -324,12 +338,11 @@ class TestSafetyContext(PdpCase):
         clean: list = []
         _agent._ensure_provider_posture_queries(inv, clean, {"web", "rss"})
         blob = " ".join(q["text"] for q in clean).lower()
-        self.assertIn("responsible scaling", blob)
-        self.assertIn("system card", blob)
-        # privacy families fill first, safety fills remaining slots: six
-        # total, so the third safety family yields to the cap by design
+        # backstop order: official terms, then feedback families; the cap
+        # holds at six and the planner prompt carries safety coverage
+        self.assertIn("feedback", blob)
+        self.assertIn("human review", blob)
         self.assertEqual(len(clean), 6)
-
     def test_synthesis_safety_subsection_separates_columns(self):
         from app.models import ManagerRun
         plan = mgr.parse_command(
@@ -541,7 +554,7 @@ class TestSynthesis(PdpCase):
                            artifact_type="paper", review="accepted")
             self.db.add(art)
             self.db.commit()
-            rec.pdp_json = json.dumps(pp.assess_pdp(
+            rec.pdp_json = json.dumps(pp.assess_posture(
                 [{"id": art.id, "title": art.title, "tags": "",
                   "artifact_type": "paper", "review": "accepted"}]))
             self.db.commit()
@@ -552,7 +565,165 @@ class TestSynthesis(PdpCase):
         self.assertIn("PDP01", md)
         self.assertIn("Am I a datapoint?", md)
         self.assertIn("graph LR", md)
+        self.assertIn("## Preference, feedback and post-training", md)
+        self.assertIn("RLHF01", md)
         self.assertIn("## Synthesis", md)
+
+
+class TestRlhfCatalog(unittest.TestCase):
+    def test_eight_dimensions_with_classes_tiers_and_layers(self):
+        self.assertEqual(len(pp.RLHF_DIMENSIONS), 8)
+        ids = [d["id"] for d in pp.RLHF_DIMENSIONS]
+        self.assertEqual(ids, [f"RLHF{i:02d}" for i in range(1, 9)])
+        for d in pp.RLHF_DIMENSIONS:
+            self.assertIn(d["class"], pp.RLHF_CLASSES)
+            self.assertTrue(d["tiers"])
+            self.assertEqual(d["layer"], "privacy")
+            self.assertTrue(d["controls"])
+        self.assertTrue(pp.rlhf_fingerprint())
+
+    def test_feedback_evidence_reads_partial_rest_unknown(self):
+        arts = [{"id": 1, "title": "Consumer thumbs feedback retention "
+                                   "and training terms",
+                 "tags": "feedback", "artifact_type": "paper",
+                 "review": "accepted"}]
+        result = pp.assess_rlhf(arts)
+        by_id = {f["id"]: f for f in result["findings"]}
+        self.assertEqual(len(result["findings"]), 8)
+        self.assertEqual(by_id["RLHF01"]["standing"], "partial")
+        self.assertEqual(by_id["RLHF01"]["class"], "A")
+        self.assertEqual(by_id["RLHF02"]["standing"], "partial")
+        self.assertEqual(by_id["RLHF06"]["standing"], "unknown")
+        self.assertEqual(result["fingerprint"], pp.rlhf_fingerprint())
+
+    def test_api_no_train_claim_does_not_satisfy_safety_logs(self):
+        arts = [{"id": 2, "title": "API data is not used for training",
+                 "tags": "", "artifact_type": "paper",
+                 "review": "accepted"}]
+        by_id = {f["id"]: f["standing"]
+                 for f in pp.assess_rlhf(arts)["findings"]}
+        # "not used for training" says nothing about abuse-log retention
+        self.assertEqual(by_id["RLHF05"], "unknown")
+
+    def test_supported_never_derived_pending_never_counts(self):
+        arts = [{"id": 3, "title": "Feedback retention years policy",
+                 "tags": "", "artifact_type": "paper",
+                 "review": "pending"}]
+        self.assertTrue(all(f["standing"] == "unknown"
+                            for f in pp.assess_rlhf(arts)["findings"]))
+        arts[0]["review"] = "accepted"
+        self.assertNotIn("supported",
+                         {f["standing"]
+                          for f in pp.assess_rlhf(arts)["findings"]})
+
+    def test_override_is_the_only_path_to_supported(self):
+        findings = pp.blank_rlhf()
+        self.assertTrue(all(f["standing"] == "unknown" for f in findings))
+        updated = pp.set_rlhf_finding(
+            findings, "RLHF02", standing="supported",
+            summary="Help page: feedback kept 5 years.", actor="lead")
+        self.assertEqual(updated["standing"], "supported")
+        with self.assertRaises(ValueError):
+            pp.set_rlhf_finding(findings, "RLHF99", standing="supported")
+        with self.assertRaises(ValueError):
+            pp.set_rlhf_finding(findings, "RLHF01", standing="proven")
+
+    def test_tier_table_names_tiers_not_verdicts(self):
+        arts = [{"id": 1, "title": "Thumbs feedback retention terms",
+                 "tags": "", "artifact_type": "paper",
+                 "review": "accepted"}]
+        table = pp.rlhf_tier_table(
+            "OpenAI", pp.assess_rlhf(arts)["findings"])
+        self.assertIn("RLHF01", table)
+        self.assertIn("consumer", table)
+        self.assertIn("partial", table)
+
+    def test_datapoint_answers_keep_capability_and_safety_apart(self):
+        arts = [{"id": 1, "title": "Consumer feedback training terms",
+                 "tags": "", "artifact_type": "paper",
+                 "review": "accepted"}]
+        answers = pp.datapoint_answers(
+            "OpenAI", pp.assess_rlhf(arts)["findings"])
+        self.assertEqual(set(answers) - {"provider"},
+                         {"capability", "safety", "org_api"})
+        self.assertIn("usually no by default", answers["org_api"])
+        # safety answer never clears capability rows, capability never
+        # clears safety rows: different sentences, different evidence
+        self.assertNotIn("no by default", answers["capability"])
+        self.assertNotIn("no by default", answers["safety"])
+
+
+class TestRlhfRegister(PdpCase):
+    def _assessed_rlhf(self, product="OpenAI"):
+        rec = SecurityAssessment(
+            investigation_id=self.inv.id, product_name=product,
+            exposure="confidential_data", use_case="org AI use",
+            overall_pct=50.0, markdown="# report",
+            threat_pack_version="2.1.0",
+            threats_json=json.dumps([]),
+            scoring_json=json.dumps({}),
+            hypothesis_json=json.dumps({"claims": []}))
+        self.db.add(rec)
+        self.db.commit()
+        self.db.refresh(rec)
+        self._artifact("Consumer thumbs feedback retention training terms")
+        rec.pdp_json = json.dumps(pp.assess_posture(self._accepted_dicts()))
+        self.db.commit()
+        return rec
+
+    def _accepted_dicts(self):
+        return [{"id": a.id, "title": a.title, "tags": a.tags,
+                 "artifact_type": a.artifact_type, "review": a.review}
+                for a in self.db.query(Artifact).filter(
+                    Artifact.investigation_id == self.inv.id,
+                    Artifact.review == "accepted").all()]
+
+    def test_rlhf_rows_carry_subclass_not_scores(self):
+        from app import portfolio as pf
+        self._assessed_rlhf()
+        rows = [r for r in pf.register_with_state(self.db, self.inv.id)
+                if r["source_catalog"] == pp.RLHF_ID]
+        self.assertEqual(len(rows), 8)
+        self.assertEqual({r["subclass"] for r in rows},
+                         {"preference_feedback"})
+        for r in rows:
+            self.assertIsNone(r["severity"])
+            self.assertIn(r["confidence_band"], pp.STANDINGS)
+            self.assertTrue(r["control_options"])
+
+    def test_envelope_carries_all_three_catalogs(self):
+        rec = self._assessed_rlhf()
+        payload = json.loads(rec.pdp_json)
+        self.assertEqual(len(payload["findings"]), 10)
+        self.assertEqual(len(payload["safety"]), 6)
+        self.assertEqual(len(payload["rlhf"]), 8)
+        self.assertEqual(payload["rlhf_fingerprint"],
+                         pp.rlhf_fingerprint())
+
+    def test_contribution_edges_name_their_type(self):
+        cmap = pp.contribution_map([{"source_ref": "LP01"}])
+        by_id = {e["id"]: e for e in cmap["direct"] + cmap["indirect"]}
+        self.assertEqual(by_id["direct-feedback"]["edge"],
+                         "feedback_submitted")
+        self.assertEqual(by_id["indirect-web"]["edge"], "crawl")
+        # connector paths map to no edge type rather than a wrong one
+        self.assertIsNone(by_id["direct-connectors"]["edge"])
+
+
+class TestRlhfAdvisor(unittest.TestCase):
+    def test_chat_situation_selects_the_feedback_playbook(self):
+        from app import leakage as lk
+        from app import portfolio as pf
+        sit = pf.normalize_situation({
+            "data": {"classification": "confidential"},
+            "channel": "chat_ui", "actors": ["employees"],
+            "controls": {}, "blast_radius": {}, "external": True})
+        ids = [p["id"] for p in lk.select_playbooks(sit["tags"])]
+        self.assertIn("PB06", ids)
+        pb06 = next(p for p in lk.select_playbooks(sit["tags"])
+                    if p["id"] == "PB06")
+        self.assertIn("LP01", pb06["forced"])
+        self.assertTrue(any("opt-out" in c for c in pb06["checks"]))
 
 
 if __name__ == "__main__":

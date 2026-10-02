@@ -308,6 +308,29 @@ PLAYBOOKS: list[dict[str, Any]] = [
             "more safety publications is not a privacy control.",
         ],
     },
+    {
+        "id": "PB06",
+        "name": "Preference and feedback retention",
+        "select_when": ["chat_ui", "external_llm"],
+        "match": "any",
+        "forced": ["LP01", "LP03"],
+        "checks": [
+            "Turn off thumbs, ratings and content feedback on sensitive "
+            "projects: feedback often outlives the chat and can override a "
+            "training opt-out.",
+            "Assume delete does not erase reviewed samples; minimize "
+            "sensitive content at the source instead of relying on deletion.",
+            "Check the human-review sampling terms per tier: who reviews, "
+            "whether copies are de-linked, and how long reviewed material "
+            "is kept.",
+            "Separate safety-log retention from training claims: a 30-day "
+            "abuse window is not a training opt-out, and flagged content "
+            "keeps longer.",
+            "On frontier tiers, decide the safety-retention question "
+            "explicitly: accept the window, hold data customer-side, or "
+            "choose another tier.",
+        ],
+    },
 ]
 
 PLAYBOOK_BY_ID: dict[str, dict[str, Any]] = {p["id"]: p for p in PLAYBOOKS}

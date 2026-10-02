@@ -633,57 +633,66 @@ def _cve_rows(db, inv_id: int) -> list[dict[str, Any]]:
 
 
 def _pdp_rows(db, inv_id: int) -> list[dict[str, Any]]:
-    """Provider posture findings (PDP*) as register rows.
+    """Provider posture and RLHF findings (PDP*/RLHF*) as register rows.
 
     Standings, never scores: severity stays None so no band, average or gauge
     can read posture as measured residual. An unknown dimension is a listed
     row with no severity, not an absent row -- "we have not established the
-    training terms" is itself triageable information.
+    feedback terms" is itself triageable information.
     """
     from . import provider_posture as _pp
     from .models import SecurityAssessment
+    catalogs = {
+        _pp.PDP_ID: (_pp.DIMENSION_BY_ID, "findings", None),
+        _pp.RLHF_ID: (_pp.RLHF_BY_ID, "rlhf", "preference_feedback"),
+    }
     rows = []
     for rec in (db.query(SecurityAssessment)
                 .filter(SecurityAssessment.investigation_id == inv_id).all()):
         payload = _load(getattr(rec, "pdp_json", None), None)
-        findings = (payload.get("findings") if isinstance(payload, dict)
-                    else None) or []
-        if not findings:
+        if not isinstance(payload, dict):
             continue
         pk = _product_key(rec.product_name)
-        for f in findings:
-            if not isinstance(f, dict) or not f.get("id"):
+        for catalog_id, (dim_by_id, key, subclass) in catalogs.items():
+            findings = payload.get(key) or []
+            if not findings:
                 continue
-            dim = _pp.DIMENSION_BY_ID.get(f["id"]) or {}
-            layer = dim.get("layer") or "privacy"
-            rows.append({
-                "risk_id": f"R-{pk}-{f['id']}",
-                "stable_key": f"{layer}:{rec.id}:{f['id']}:own",
-                "layer": layer,
-                "title": f"{f['id']}: {f.get('dimension') or dim.get('name') or f['id']}",
-                "source_catalog": _pp.PDP_ID,
-                "source_ref": str(f["id"]),
-                "scope": "own",
-                "severity": None,
-                "confidence": None,
-                "confidence_band": str(f.get("standing") or "unknown"),
-                "exposure": rec.exposure,
-                "situation_tags": ["provider_posture"],
-                "evidence_ids": [int(x) for x in (f.get("evidence_ids") or [])
-                                 if str(x).isdigit()][:12],
-                "assessment_ids": [rec.id],
-                "catalog_version": (payload.get("version")
-                                    if isinstance(payload, dict) else None),
-                "catalog_fingerprint": (payload.get("fingerprint")
-                                        if isinstance(payload, dict) else None),
-                "product_key": pk,
-                "product_name": rec.product_name,
-                "controls": list(dim.get("controls") or []),
-                "process": list(dim.get("process") or []),
-                "why": (f"provider posture {f['id']} reads "
-                        f"{f.get('standing') or 'unknown'}: "
-                        f"{f.get('summary') or ''}".strip()),
-            })
+            version = payload.get(
+                "rlhf_version" if key == "rlhf" else "version")
+            fingerprint = payload.get(
+                "rlhf_fingerprint" if key == "rlhf" else "fingerprint")
+            for f in findings:
+                if not isinstance(f, dict) or not f.get("id"):
+                    continue
+                dim = dim_by_id.get(f["id"]) or {}
+                layer = dim.get("layer") or "privacy"
+                rows.append({
+                    "risk_id": f"R-{pk}-{f['id']}",
+                    "stable_key": f"{layer}:{rec.id}:{f['id']}:own",
+                    "layer": layer,
+                    "title": f"{f['id']}: {f.get('dimension') or dim.get('name') or f['id']}",
+                    "source_catalog": catalog_id,
+                    "source_ref": str(f["id"]),
+                    "scope": "own",
+                    "severity": None,
+                    "confidence": None,
+                    "confidence_band": str(f.get("standing") or "unknown"),
+                    "exposure": rec.exposure,
+                    "situation_tags": ["provider_posture"],
+                    "evidence_ids": [int(x) for x in (f.get("evidence_ids") or [])
+                                     if str(x).isdigit()][:12],
+                    "assessment_ids": [rec.id],
+                    "catalog_version": version,
+                    "catalog_fingerprint": fingerprint,
+                    "product_key": pk,
+                    "product_name": rec.product_name,
+                    "controls": list(dim.get("controls") or []),
+                    "process": list(dim.get("process") or []),
+                    "subclass": subclass,
+                    "why": (f"provider posture {f['id']} reads "
+                            f"{f.get('standing') or 'unknown'}: "
+                            f"{f.get('summary') or ''}".strip()),
+                })
     return rows
 
 

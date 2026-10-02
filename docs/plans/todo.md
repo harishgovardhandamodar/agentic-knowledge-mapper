@@ -128,6 +128,29 @@ Legend: `[ ]` todo · `[x]` done. Inherits every §0 non-negotiable above.
 - [x] Evalkit: 5 KB partition cases (15/15 green)
 - [x] Full suite green with the known A2A hang deselected
 
+# TODO — RLHF / preference-feedback retention
+
+Branch: `rlhf-feedback-retention`.
+Rule: preference, feedback and post-training rows are standings per (provider × tier × class) with `as_of` + sources; never applied across tiers; safety logs are not capability training.
+
+## RLHF-1 — Catalog, assess, register
+- [x] `akm-rlhf-feedback-retention` RLHF01–08 with classes A–F, tiers, layers, own fingerprint
+- [x] Deterministic assess from accepted evidence (partial at best); human override sole path to supported
+- [x] Register rows with `subclass: preference_feedback`, null severity, catalog stamps
+- [x] No-bleed: API no-train claims leave safety-log rows unknown (pinned)
+
+## RLHF-2 — Collection, graph, advice, synthesis
+- [x] Planner prompt spreads policy/trust/feedback/safety; backstop families ordered, cap held at six
+- [x] Contribution edge vocabulary (`feedback_submitted`, `sampled_for_review`, `training_opt_in`, `abuse_log`, `crawl`)
+- [x] PB06 preference-and-feedback playbook; per-tier table; capability/safety/org-api datapoint answers
+- [x] Synthesis RLHF subsection with tier tables and separated answers
+
+## RLHF-3 — Tests, gate, docs
+- [x] 12 RLHF tests (catalog, assess, no-bleed, override, tier table, answers, register, edges, playbook, synthesis)
+- [x] 4 evalkit cases + 2 invariants (gate: 10 provider cases, 5 invariants)
+- [x] Full suite green with the known A2A case deselected
+- [x] Live image rebuild + live verification
+
 # TODO — provider safety research context (addendum to PDP)
 
 Branch: `provider-safety-research`.

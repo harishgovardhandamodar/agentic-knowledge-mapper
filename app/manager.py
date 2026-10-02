@@ -655,6 +655,7 @@ def _provider_section(db, plan: dict[str, Any],
     children = row.get("children") or []
     per_provider: list[tuple[str, list[dict[str, Any]]]] = []
     per_safety: dict[str, list[dict[str, Any]]] = {}
+    per_rlhf: dict[str, list[dict[str, Any]]] = {}
     for t, c in zip(topics, children):
         if not isinstance(t, dict) or not isinstance(c, dict):
             continue
@@ -662,6 +663,7 @@ def _provider_section(db, plan: dict[str, Any],
                   or (t.get("investigation_id") if isinstance(t, dict) else None))
         findings: list[dict[str, Any]] = []
         safety: list[dict[str, Any]] = []
+        rlhf: list[dict[str, Any]] = []
         if inv_id:
             rec = (db.query(SecurityAssessment)
                    .filter(SecurityAssessment.investigation_id == inv_id)
@@ -675,12 +677,14 @@ def _provider_section(db, plan: dict[str, Any],
                 if isinstance(payload, dict):
                     findings = payload.get("findings") or []
                     safety = payload.get("safety") or []
+                    rlhf = payload.get("rlhf") or []
                 elif isinstance(payload, list):
                     findings = payload
         provider = str(t.get("subject") or t.get("title") or "?")
         per_provider.append((provider, findings if isinstance(findings, list)
                              else []))
         per_safety[provider] = safety if isinstance(safety, list) else []
+        per_rlhf[provider] = rlhf if isinstance(rlhf, list) else []
     if not per_provider:
         return ""
     L = ["\n## Provider data posture compare", "",
@@ -766,6 +770,26 @@ def _provider_section(db, plan: dict[str, Any],
         L.append(f"Residual safety unknowns: {', '.join(unknown_saf)} -- "
                  f"unpublished eval data and non-public review pipelines stay "
                  f"labelled unknown.")
+        L.append("")
+    L.append("## Preference, feedback and post-training data")
+    L.append("")
+    L.append("Umbrella label, subclasses kept: explicit feedback (A), "
+             "sampled review (B), post-training corpora (C), safety logs "
+             "(D), contractor sets (E), enterprise shares (F). Safety-log "
+             "retention is not capability training -- the columns below "
+             "keep them apart.")
+    L.append("")
+    for provider, _ in per_provider:
+        L.append(f"### {provider} by tier")
+        L.append("")
+        L.append(_pp.rlhf_tier_table(
+            provider, per_rlhf.get(provider, [])))
+        L.append("")
+        answers = _pp.datapoint_answers(
+            provider, per_rlhf.get(provider, []),
+            next((fs for p, fs in per_provider if p == provider), None))
+        for key in ("capability", "safety", "org_api"):
+            L.append(f"- **{key}**: {answers[key]}")
         L.append("")
     return "\n".join(L)
 

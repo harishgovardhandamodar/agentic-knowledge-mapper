@@ -580,7 +580,7 @@ def portfolio_cases() -> list[dict[str, Any]]:
         {"name": "pf-catalog-fingerprints",
          "kind": "pf-fingerprints",
          "expect": {"leakage": "be5648831fa9",
-                     "playbooks": "acfeb082ac43"},
+                     "playbooks": "7f2d1285e2ea"},
          "note": "a catalog edit must show up here before it moves a number"},
     ]
 
@@ -774,6 +774,36 @@ def provider_cases() -> list[dict[str, Any]]:
                   "Retention defaults apply."),
          "expect": {"removed_count": 1, "kept_contains": "Retention"},
          "note": "definite training claims need tier terms or they go"},
+        {"name": "rlhf-feedback-reads-partial",
+         "kind": "rlhf-assess",
+         "artifacts": [
+             {"id": 1, "title": "Consumer thumbs feedback retention "
+                               "and training terms",
+              "tags": "feedback", "artifact_type": "paper",
+              "review": "accepted"}],
+         "expect": {"RLHF01": "partial", "RLHF02": "partial",
+                     "RLHF06": "unknown", "supported": []},
+         "note": "feedback evidence touches feedback rows; ZDR stays unknown"},
+        {"name": "rlhf-no-train-claim-leaves-safety-logs-unknown",
+         "kind": "rlhf-assess",
+         "artifacts": [
+             {"id": 2, "title": "API data is not used for training",
+              "tags": "", "artifact_type": "paper",
+              "review": "accepted"}],
+         "expect": {"RLHF05": "unknown"},
+         "note": "a training denial says nothing about abuse-log retention"},
+        {"name": "rlhf-pending-is-not-evidence",
+         "kind": "rlhf-assess",
+         "artifacts": [
+             {"id": 3, "title": "Feedback retention years policy",
+              "tags": "", "artifact_type": "paper",
+              "review": "pending"}],
+         "expect": {"all": "unknown"},
+         "note": "pending artifacts count for nothing"},
+        {"name": "rlhf-catalog-fingerprint",
+         "kind": "rlhf-fingerprints",
+         "expect": {},
+         "note": "a catalog edit must show up here before it moves a finding"},
     ]
 
 
@@ -817,6 +847,28 @@ def _run_provider_case(case: dict[str, Any]) -> dict[str, Any]:
                                   "actual": by_id.get(dim)})
     elif kind == "pdp-fingerprints":
         result = {"fingerprint": _pp.pdp_fingerprint()}
+    elif kind == "rlhf-assess":
+        assessed = _pp.assess_rlhf(case.get("artifacts") or [])
+        by_id = {f["id"]: f["standing"] for f in assessed["findings"]}
+        result = {"standings": by_id}
+        if "all" in exp:
+            if set(by_id.values()) != {exp["all"]}:
+                failures.append({"field": "all standings",
+                                  "expected": exp["all"],
+                                  "actual": sorted(set(by_id.values()))})
+        for dim, want in exp.items():
+            if dim in ("all",):
+                continue
+            if dim == "supported":
+                got = [k for k, v in by_id.items() if v == "supported"]
+                if got != want:
+                    failures.append({"field": "supported",
+                                      "expected": want, "actual": got})
+            elif by_id.get(dim) != want:
+                failures.append({"field": dim, "expected": want,
+                                  "actual": by_id.get(dim)})
+    elif kind == "rlhf-fingerprints":
+        result = {"fingerprint": _pp.rlhf_fingerprint()}
     elif kind == "pdp-guard":
         out = _pp.guard_provider_claims(case.get("text") or "")
         result = {"removed_count": out["removed_count"]}
@@ -861,6 +913,23 @@ def provider_invariants() -> list[dict[str, Any]]:
         "ok": not _pp.is_posture_command("training data retention")
         and not _pp.is_posture_command("OpenAI model quality"),
         "detail": {},
+    })
+    rlhf_policy = [{"id": 1, "title": "Consumer thumbs feedback retention "
+                                      "and training terms",
+                    "tags": "feedback", "artifact_type": "paper",
+                    "review": "accepted"}]
+    rlhf_derived = {f["id"]: f["standing"]
+                    for f in _pp.assess_rlhf(rlhf_policy)["findings"]}
+    out.append({
+        "name": "rlhf-supported-never-derived",
+        "ok": "supported" not in set(rlhf_derived.values()),
+        "detail": {"standings": sorted(set(rlhf_derived.values()))},
+    })
+    out.append({
+        "name": "rlhf-blank-means-unknown",
+        "ok": {f["standing"] for f in _pp.blank_rlhf()} == {"unknown"}
+        and len(_pp.blank_rlhf()) == 8,
+        "detail": {"dimensions": len(_pp.blank_rlhf())},
     })
     return out
 

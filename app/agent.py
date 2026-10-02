@@ -74,6 +74,14 @@ def _plan_queries(inv: Investigation) -> dict:
             "(papers->arxiv, news/discussion->rss+web). Only use enabled sources. "
             "If the brief names a specific product or vendor, devote at least "
             "one query to official docs, security/trust, or architecture pages.")
+    try:
+        from . import provider_posture as _pp
+        _provider_brief = _pp.is_provider_investigation(
+            inv.title or "", inv.keywords or "", inv.description or "")
+    except Exception:
+        _provider_brief = False
+    if _provider_brief:
+        user += _provider_prompt_hint()
     plan = llm.chat_json([{"role": "system", "content": sys},
                           {"role": "user", "content": user}], max_tokens=1024)
     queries = (plan.get("queries") or [])[:6]
@@ -196,6 +204,22 @@ def _ensure_vendor_doc_query(inv: Investigation, clean: list[dict],
                           "data flow"[:120], "sources": srcs})
 
 
+def _provider_prompt_hint() -> str:
+    """Planner prompt suffix for provider posture briefs.
+
+    Factored out so tests can pin the wording without invoking the planner
+    (whose module-level function other suites stub out).
+    """
+    # The six-query budget cannot cover policy, trust, safety and feedback
+    # families, so the planner itself must spread across them: official
+    # terms first, safety literature alongside (never instead), capability
+    # comparisons out.
+    return (" This is a provider data-posture brief: cover official "
+            "privacy and data-usage terms, trust-center material, "
+            "feedback and retention terms, and safety evaluations -- "
+            "not capability leaderboards or timelines.")
+
+
 def _ensure_provider_posture_queries(inv: Investigation, clean: list[dict],
                                      enabled: set[str]) -> None:
     """Policy/trust query families for provider posture investigations.
@@ -215,8 +239,15 @@ def _ensure_provider_posture_queries(inv: Investigation, clean: list[dict],
     providers = _pp.detect_providers(blob)
     subject = providers[0]["name"] if providers else "AI provider"
     families = [
+        # Primary sources first: official terms decide posture, everything
+        # else contextualizes. Order is load-bearing -- the planner caps at
+        # six queries, so the first families win the remaining slots.
         f"{subject} privacy policy API data usage training",
         f"{subject} enterprise zero retention DPA subprocessors",
+        f"{subject} feedback thumbs training data retention",
+        f"{subject} human review chat retention",
+        f"{subject} improve the model setting opt-out",
+        f"{subject} zero data retention API abuse monitoring",
         f"{subject} trust center SOC 2 security whitepaper",
         f"{subject} training data practices incident regulatory",
         # Safety research sits alongside policy sources, never instead of
@@ -225,6 +256,8 @@ def _ensure_provider_posture_queries(inv: Investigation, clean: list[dict],
         f"{subject} responsible scaling deployment policy",
         f"{subject} system card safety evaluation red team",
         f"{subject} RLHF preference data human feedback",
+        f"{subject} covered model retention safety",
+        f"{subject} privacy policy RLHF preference data",
     ]
     have = " ".join(q.get("text") or "" for q in clean).lower()
     srcs = ["web"] if "web" in enabled else sorted(enabled)
