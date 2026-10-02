@@ -378,6 +378,24 @@ class RiskEntry(Base):
     initiative = relationship("Initiative", back_populates="risks")
 
 
+class DashboardSnapshot(Base):
+    """A daily leadership rollup, so trends survive and the CISO view stays fast.
+
+    Written by the scheduler (and on demand), never by the assessments
+    themselves: a snapshot is a dated reading of the register, and re-reading
+    history must not move it. One row per day per scope; the trend endpoint
+    renders gaps as gaps rather than interpolating them.
+    """
+    __tablename__ = "dashboard_snapshots"
+
+    id = Column(Integer, primary_key=True, index=True)
+    investigation_id = Column(Integer, ForeignKey("investigations.id", ondelete="CASCADE"),
+                              nullable=False, index=True)
+    scope_hash = Column(String(64), nullable=False, default="default")
+    metrics_json = Column(Text, nullable=False, default="{}")
+    created_at = Column(DateTime, default=_now)
+
+
 class ManagerRun(Base):
     """Agentic Manager fan-out: one command -> N investigations + a summary.
 

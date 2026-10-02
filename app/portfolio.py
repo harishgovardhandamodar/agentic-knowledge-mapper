@@ -642,6 +642,21 @@ def derive_register(db, inv_id: int, landscape: dict[str, Any] | None = None,
     """
     from . import model_kb as _kb
     land = landscape if landscape is not None else _kb.landscape(db, inv_id)
+    merged = _derived_rows(db, inv_id, land)
+    if persist:
+        # write first, then read back: a brand-new row has no id until it is
+        # inserted, and a caller that got entry_id=None could not record a
+        # decision against the risk it was just shown
+        _persist_register(db, inv_id, list(merged.values()))
+    existing = {x.stable_key: x for x in (db.query(RiskEntry)
+                                          .filter(RiskEntry.investigation_id == inv_id)
+                                          .all())}
+    return _overlay_state(list(merged.values()), existing)
+
+
+def _derived_rows(db, inv_id: int,
+                 land: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Every derived register row, keyed by stable key. No state, no writes."""
     rows = (_product_rows(db, inv_id) + _model_rows(land)
             + _cve_rows(db, inv_id))
     # situation-scoped leakage rows, one set per assessment that declared one
@@ -663,18 +678,15 @@ def derive_register(db, inv_id: int, landscape: dict[str, Any] | None = None,
                          f"{nr['situation_multiplier']}, uncovered "
                          f"{round(1.0 - nr['control_coverage']['covered'], 3)})")
         rows.extend(new_rows)
-    merged = {r["stable_key"]: r for r in rows}
-    if persist:
-        # write first, then read back: a brand-new row has no id until it is
-        # inserted, and a caller that got entry_id=None could not record a
-        # decision against the risk it was just shown
-        _persist_register(db, inv_id, list(merged.values()))
-    existing = {x.stable_key: x for x in (db.query(RiskEntry)
-                                          .filter(RiskEntry.investigation_id == inv_id)
-                                          .all())}
+    return {r["stable_key"]: r for r in rows}
+
+
+def _overlay_state(rows: list[dict[str, Any]],
+                   existing: dict[str, Any]) -> list[dict[str, Any]]:
+    """Derived rows overlaid with stored human state. No writes."""
     out: list[dict[str, Any]] = []
-    for key, r in merged.items():
-        prev = existing.get(key)
+    for r in rows:
+        prev = existing.get(r["stable_key"])
         row = dict(r)
         row["control_options"] = _control_options(row)
         row["why"] = row.get("why") or row.get("title")
@@ -683,6 +695,12 @@ def derive_register(db, inv_id: int, landscape: dict[str, Any] | None = None,
         row["review_by"] = prev.review_by.isoformat() if (prev and prev.review_by) else None
         row["residual_note"] = prev.residual_note if prev else None
         row["mitigation_ids"] = _load(prev.mitigation_ids_json, []) if prev else []
+        # Stored evidence links win when present: an operator may attach
+        # evidence the derivation cannot see, and a re-derivation must not
+        # silently detach it.
+        stored_evidence = _load(prev.evidence_ids_json, []) if prev else []
+        if stored_evidence:
+            row["evidence_ids"] = stored_evidence
         row["accepted_by"] = prev.accepted_by if prev else None
         row["acceptance_note"] = prev.acceptance_note if prev else None
         row["accepted_at"] = prev.accepted_at.isoformat() if (prev and prev.accepted_at) else None
@@ -691,6 +709,24 @@ def derive_register(db, inv_id: int, landscape: dict[str, Any] | None = None,
         row["review_missing"] = not row["review_by"]
         out.append(row)
     return sorted(out, key=lambda r: (-(r.get("severity") or 0), r["risk_id"]))
+
+
+def register_with_state(db, inv_id: int,
+                        landscape: dict[str, Any] | None = None
+                        ) -> list[dict[str, Any]]:
+    """The unified register with stored human state, read-only.
+
+    Same rows :func:`derive_register` returns, but nothing is written: a
+    dashboard read must not create register rows as a side effect. Rows with
+    no stored counterpart read as ``open`` with no owner, and say so.
+    """
+    from . import model_kb as _kb
+    land = landscape if landscape is not None else _kb.landscape(db, inv_id)
+    merged = _derived_rows(db, inv_id, land)
+    existing = {x.stable_key: x for x in (db.query(RiskEntry)
+                                          .filter(RiskEntry.investigation_id == inv_id)
+                                          .all())}
+    return _overlay_state(list(merged.values()), existing)
 
 
 def _persist_register(db, inv_id: int, rows: list[dict[str, Any]]) -> None:

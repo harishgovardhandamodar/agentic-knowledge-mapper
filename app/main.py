@@ -3190,3 +3190,186 @@ def get_metrics(investigation_id: int, db: Session = Depends(get_db)):
     inv_id = _landscape_inv(investigation_id, db)
     reg = _pf.derive_register(db, inv_id, persist=False)
     return _pf.metrics(reg, _kb.landscape(db, inv_id))
+
+
+# ---------------------------------------------------------------------------
+# executive dashboard: availability, distribution, robustness
+# ---------------------------------------------------------------------------
+
+class DashboardScope(BaseModel):
+    investigation_id: int
+    window_days: int = 90
+    initiative_id: Optional[int] = None
+    layer: Optional[str] = None
+    exposure: Optional[str] = None
+    accepted_only: bool = True
+
+
+def _dashboard_scope(data: DashboardScope, db: Session) -> dict:
+    from . import executive as _ex
+    inv_id = _landscape_inv(data.investigation_id, db)
+    try:
+        return _ex.resolve_scope(
+            db, inv_id, window_days=data.window_days,
+            initiative_id=data.initiative_id, layer=data.layer,
+            exposure=data.exposure, accepted_only=data.accepted_only)
+    except LookupError as e:
+        raise HTTPException(404, str(e))
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+
+
+@app.get("/api/dashboard/summary")
+def get_dashboard_summary(investigation_id: int, window_days: int = 90,
+                          initiative_id: Optional[int] = None,
+                          layer: Optional[str] = None,
+                          exposure: Optional[str] = None,
+                          accepted_only: bool = True,
+                          db: Session = Depends(get_db)):
+    """Header strip: lights, open High/Critical, approvals, stale.
+
+    Read-only aggregates over stored rows. Every percentage carries its
+    sample size; empty denominators read as unknown, never as covered.
+    """
+    from . import executive as _ex
+    scope = _dashboard_scope(DashboardScope(
+        investigation_id=investigation_id, window_days=window_days,
+        initiative_id=initiative_id, layer=layer, exposure=exposure,
+        accepted_only=accepted_only), db)
+    return _ex.summary(db, scope["investigation_id"], scope)
+
+
+@app.get("/api/dashboard/availability")
+def get_dashboard_availability(investigation_id: int, window_days: int = 90,
+                               initiative_id: Optional[int] = None,
+                               layer: Optional[str] = None,
+                               exposure: Optional[str] = None,
+                               accepted_only: bool = True,
+                               db: Session = Depends(get_db)):
+    """Coverage, freshness, unknowns, sync health. Lights plus tables."""
+    from . import executive as _ex
+    scope = _dashboard_scope(DashboardScope(
+        investigation_id=investigation_id, window_days=window_days,
+        initiative_id=initiative_id, layer=layer, exposure=exposure,
+        accepted_only=accepted_only), db)
+    return _ex.availability(db, scope["investigation_id"], scope)
+
+
+@app.get("/api/dashboard/distribution")
+def get_dashboard_distribution(investigation_id: int, window_days: int = 90,
+                               initiative_id: Optional[int] = None,
+                               layer: Optional[str] = None,
+                               exposure: Optional[str] = None,
+                               accepted_only: bool = True,
+                               db: Session = Depends(get_db)):
+    """Where risk concentrates. Counts by layer, scope, family, pattern,
+    exposure, initiative and status, plus deterministic insight cards. Layers
+    stay separate; nothing is averaged."""
+    from . import executive as _ex
+    scope = _dashboard_scope(DashboardScope(
+        investigation_id=investigation_id, window_days=window_days,
+        initiative_id=initiative_id, layer=layer, exposure=exposure,
+        accepted_only=accepted_only), db)
+    return _ex.distribution(db, scope["investigation_id"], scope)
+
+
+@app.get("/api/dashboard/robustness")
+def get_dashboard_robustness(investigation_id: int, window_days: int = 90,
+                             initiative_id: Optional[int] = None,
+                             layer: Optional[str] = None,
+                             exposure: Optional[str] = None,
+                             accepted_only: bool = True,
+                             db: Session = Depends(get_db)):
+    """Process depth: mapping, validation, acceptance, approvals, hygiene.
+
+    Always ships a limitations block. Nothing here claims measured
+    production risk."""
+    from . import executive as _ex
+    scope = _dashboard_scope(DashboardScope(
+        investigation_id=investigation_id, window_days=window_days,
+        initiative_id=initiative_id, layer=layer, exposure=exposure,
+        accepted_only=accepted_only), db)
+    return _ex.robustness(db, scope["investigation_id"], scope)
+
+
+@app.get("/api/dashboard/attention")
+def get_dashboard_attention(investigation_id: int, window_days: int = 90,
+                            initiative_id: Optional[int] = None,
+                            layer: Optional[str] = None,
+                            exposure: Optional[str] = None,
+                            accepted_only: bool = True,
+                            db: Session = Depends(get_db)):
+    """Ranked action list with deep links into Landscape and the register."""
+    from . import executive as _ex
+    scope = _dashboard_scope(DashboardScope(
+        investigation_id=investigation_id, window_days=window_days,
+        initiative_id=initiative_id, layer=layer, exposure=exposure,
+        accepted_only=accepted_only), db)
+    return _ex.attention(db, scope["investigation_id"], scope)
+
+
+@app.get("/api/dashboard/trends")
+def get_dashboard_trends(investigation_id: int, days: int = 90,
+                         db: Session = Depends(get_db)):
+    """Stored daily rollups, oldest first. Gaps stay gaps; nothing is
+    interpolated. An empty series means no snapshots yet, not a flat trend."""
+    from . import executive as _ex
+    inv_id = _landscape_inv(investigation_id, db)
+    series = _ex.snapshots(db, inv_id, days=days)
+    return {"investigation_id": inv_id, "days": days, "snapshots": series,
+            "total": len(series),
+            "note": ("Daily rollups written by the scheduler. No snapshots "
+                     "yet means the trend is unknown, not flat.")}
+
+
+@app.post("/api/dashboard/snapshot")
+def post_dashboard_snapshot(investigation_id: int, request: Request,
+                            db: Session = Depends(get_db)):
+    """Write today's rollup now. Ledgered: a snapshot is a dated reading."""
+    from . import executive as _ex
+    inv_id = _landscape_inv(investigation_id, db)
+    out = _ex.write_snapshot(db, inv_id)
+    ledger_api.human_action(
+        request, "dashboard.snapshot_written",
+        {"target_type": "investigation", "target_id": inv_id,
+         "investigation_id": inv_id, **out})
+    return out
+
+
+@app.get("/api/dashboard/brief.md")
+def get_dashboard_brief_md(investigation_id: int, window_days: int = 90,
+                           accepted_only: bool = True,
+                           db: Session = Depends(get_db)):
+    """Board-safe leadership brief as Markdown, from the same payloads."""
+    from . import executive as _ex
+    from fastapi.responses import PlainTextResponse
+    scope = _dashboard_scope(DashboardScope(
+        investigation_id=investigation_id, window_days=window_days,
+        accepted_only=accepted_only), db)
+    return PlainTextResponse(
+        _ex.brief_markdown(db, scope["investigation_id"], scope),
+        media_type="text/markdown",
+        headers={"Content-Disposition":
+                 "attachment; filename=\"leadership-brief-"
+                 f"{scope['investigation_id']}.md\""})
+
+
+@app.get("/api/dashboard/brief.pdf")
+def get_dashboard_brief_pdf(investigation_id: int, window_days: int = 90,
+                            accepted_only: bool = True,
+                            db: Session = Depends(get_db)):
+    """The same brief as PDF. Screen and paper agree by construction."""
+    from . import executive as _ex
+    scope = _dashboard_scope(DashboardScope(
+        investigation_id=investigation_id, window_days=window_days,
+        accepted_only=accepted_only), db)
+    md = _ex.brief_markdown(db, scope["investigation_id"], scope)
+    pdf = sec_engine.build_pdf(md, title="Leadership brief",
+                               meta={"investigation_id":
+                                     scope["investigation_id"]})
+    from fastapi.responses import Response
+    return Response(
+        content=pdf, media_type="application/pdf",
+        headers={"Content-Disposition":
+                 f'attachment; filename="leadership-brief-'
+                 f'{scope["investigation_id"]}.pdf"'})

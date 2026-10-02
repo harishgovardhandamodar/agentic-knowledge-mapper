@@ -128,6 +128,35 @@ Legend: `[ ]` todo · `[x]` done. Inherits every §0 non-negotiable above.
 - [x] Evalkit: 5 KB partition cases (15/15 green)
 - [x] Full suite green with the known A2A hang deselected
 
+# TODO — executive / leadership dashboard
+
+Branch: `executive-dashboard`.
+Legend: `[ ]` todo · `[x]` done. Same non-negotiables: read-only aggregates, no new scoring, no composite score, unknowns inflate attention.
+
+## EX-1 — Backend aggregates (`app/executive.py`)
+- [x] Scope validation (investigation/initiative/layer/exposure/accepted-only)
+- [x] Availability: initiative/model/product coverage, register completeness, evidence freshness, stale queue, W2 unknowns, KB sync health, traffic lights
+- [x] Distribution: by layer/scope/status/exposure/family/pattern/initiative, assessment volume, deterministic insight cards
+- [x] Robustness: mapping rate, validation rate, acceptance discipline, inventory lift, approval hygiene (SLA + self-approval), hypothesis closure, re-assess follow-up, pack hygiene, standing limitations block
+- [x] Attention queue with stated rank bands + drill-down links
+- [x] Summary header strip + board-safe Markdown brief (+ PDF via existing builder)
+
+## EX-2 — Snapshots + trends
+- [x] `dashboard_snapshots` table + idempotent daily write + scheduler hourly tick
+- [x] Trends endpoint renders gaps as gaps; empty series reads unknown, not flat
+- [x] `POST /api/dashboard/snapshot` ledgered; brief `.md` + `.pdf` exports
+
+## EX-3 — UI + tests
+- [x] Dashboard subtab with CISO/Lead/Manager presets (reorder only), scope controls, drill-downs into Landscape/Portfolio
+- [x] Top-level Leadership Dashboard app tab (independent pane, own investigation selector, `#dashboard` deep link); drill-downs cross into AI Security tabs
+- [x] Fixed `currentInv.id` readers (currentInv is the id; `.id` broke Landscape/Portfolio/Dashboard scoping in-browser)
+- [x] Dashboard boot loads investigations + auto-selects when opened directly (fresh session no longer shows an empty tab)
+- [x] Repaired pane nesting swallowed by the top-level move (two missing closers hid every pane after Security; verified all six tabs by screenshot)
+- [x] Fixed Portfolio JS living outside `</script>` (dead in browser until this change)
+- [x] 25 executive tests (metric definitions, accepted-only toggle, hygiene violations, snapshots, brief)
+- [x] Full suite green with the known A2A case deselected
+- [x] Live image rebuild + live verification
+
 # TODO — portfolio risk register addendum
 
 Branch: `portfolio-risk-register`.

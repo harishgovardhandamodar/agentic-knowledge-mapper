@@ -43,6 +43,9 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 #securityPane.visible { display: flex; flex-direction: column; }
 #standardsPane { grid-column: 1 / -1; min-height: 0; overflow: auto; display: none; }
 #standardsPane.visible { display: flex; flex-direction: column; }
+#dashboardPane { grid-column: 1 / -1; min-height: 0; overflow: hidden; display: none; }
+#dashboardPane.visible { display: flex; flex-direction: column; }
+#dashboardPane .sec-shell { overflow-y: auto; }
 #managerPane { grid-column: 1 / -1; min-height: 0; overflow: hidden; display: none; }
 #managerPane.visible { display: flex; flex-direction: column; }
 /* design & architecture pane */
@@ -807,6 +810,11 @@ body.pane-sec-top-collapsed .sec-topbar-sub { display: none; }
       <span class="app-tab-sub">assess · score · control</span>
       <span class="app-tab-badge" id="secTabBadge" style="display:none;"></span>
     </button>
+    <button class="app-tab" data-app="dashboard" onclick="switchApp('dashboard')" role="tab">
+      <i class="fas fa-gauge-high"></i> Leadership Dashboard
+      <span class="app-tab-sub">coverage · risk · robustness</span>
+      <span class="app-tab-badge" id="dashTabBadge" style="display:none;"></span>
+    </button>
     <button class="app-tab" data-app="manager" onclick="switchApp('manager')" role="tab">
       <i class="fas fa-robot"></i> Agentic Manager
       <span class="app-tab-sub">command · fan-out · summary</span>
@@ -1278,6 +1286,62 @@ body.pane-sec-top-collapsed .sec-topbar-sub { display: none; }
       </div>
     </div>
   </div>
+  <div id="dashboardPane">
+    <div class="sec-shell">
+      <div class="sec-topbar">
+        <div>
+          <h2><i class="fas fa-gauge-high"></i> Leadership Dashboard</h2>
+          <div class="sec-topbar-sub">Availability, distribution and robustness across the portfolio — read-only aggregates, no composite score.</div>
+        </div>
+        <div class="sec-topbar-right">
+          <label for="dashInvSelect" style="font-size:11px;color:var(--text2);">Investigation</label>
+          <select id="dashInvSelect" onchange="secDashSwitchInvestigation(this.value)" style="min-width:220px;"></select>
+          <button class="btn btn-ghost btn-sm" onclick="secLoadDashboard(true)"><i class="fas fa-rotate"></i> Refresh</button>
+        </div>
+      </div>
+      <div style="padding:14px 20px;overflow-y:auto;flex:1;min-height:0;">
+        <div class="sec-card">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;flex-wrap:wrap;">
+            <h3 style="font-size:13px;margin:0;"><i class="fas fa-gauge-high" style="color:var(--teal);"></i> Leadership dashboard</h3>
+            <span id="secDashCounts" style="font-size:11px;color:var(--text2);"></span>
+            <span style="flex:1"></span>
+            <button class="btn btn-ghost btn-sm" onclick="secLoadDashboard(true)"><i class="fas fa-rotate"></i></button>
+          </div>
+          <div class="std-note" style="margin-bottom:10px;">
+            The management plane on top of the analyst Landscape: availability
+            (do we know enough?), distribution (where does risk sit?),
+            robustness (how well are risks owned, mitigated, validated, kept
+            current?). Read-only aggregates — every percent carries its sample
+            size, unknowns inflate attention rather than robustness, and no
+            widget implies measured production risk.
+          </div>
+          <div class="std-filters">
+            <button class="std-viewbtn on" id="secDashPresetCiso" onclick="secDashSetPreset('ciso')">CISO</button>
+            <button class="std-viewbtn" id="secDashPresetLead" onclick="secDashSetPreset('lead')">Lead</button>
+            <button class="std-viewbtn" id="secDashPresetMgr" onclick="secDashSetPreset('manager')">Manager</button>
+            <select id="secDashWindow" aria-label="Time window" onchange="secLoadDashboard(true)">
+              <option value="30">30 days</option>
+              <option value="90" selected>90 days</option>
+              <option value="180">180 days</option>
+            </select>
+            <select id="secDashInitiative" aria-label="Initiative filter" onchange="secLoadDashboard(true)"><option value="">All initiatives</option></select>
+            <select id="secDashLayer" aria-label="Layer filter" onchange="secLoadDashboard(true)">
+              <option value="">All layers</option>
+              <option value="product">Product</option>
+              <option value="model">Model</option>
+              <option value="privacy">Privacy</option>
+              <option value="supply_chain">Supply chain</option>
+            </select>
+            <label class="std-note" style="display:flex;gap:4px;align-items:center;"><input type="checkbox" id="secDashAccepted" checked onchange="secLoadDashboard(true)"> accepted evidence only</label>
+            <button class="btn btn-ghost btn-sm" onclick="secDashBrief('md')"><i class="fas fa-file-lines"></i> Brief .md</button>
+            <button class="btn btn-ghost btn-sm" onclick="secDashBrief('pdf')"><i class="fas fa-file-pdf"></i> Brief PDF</button>
+          </div>
+          <div id="secDashBody"></div>
+          <div id="secDashFoot" class="std-note" style="margin-top:8px;"></div>
+        </div>
+      </div>
+    </div>
+  </div>
   <div id="managerPane">
     <div class="sec-shell">
       <div class="sec-topbar">
@@ -1517,6 +1581,7 @@ async function loadInvestigations() {
   const data = await res.json();
   investigations = data.items || [];
   if (typeof renderSecInvestigationOptions === 'function') renderSecInvestigationOptions();
+  if (typeof secDashRenderInvOptions === 'function') secDashRenderInvOptions();
   try {
     const r = await fetch(`${API}/manager/links`);
     if (r.ok) mgrNavLinks = await r.json();
@@ -1622,6 +1687,8 @@ async function selectInvestigation(id) {
   currentInv = id;
   const secSel = document.getElementById('secInvSelect');
   if (secSel && secSel.value !== String(id)) secSel.value = String(id);
+  const dashSel = document.getElementById('dashInvSelect');
+  if (dashSel && dashSel.value !== String(id)) dashSel.value = String(id);
   if (typeof updateSecInvName === 'function') updateSecInvName();
   clusterCache = { category: null, similarity: null };
   clusterMode = 'off'; updateClusterButtons();
@@ -4324,6 +4391,7 @@ let mgrNavOpen = {};
 const APP_TITLES = {
   akm: 'Agentic Knowledge Mapper',
   security: 'AI Security',
+  dashboard: 'Leadership Dashboard',
   manager: 'Agentic Manager',
   standards: 'AI Standards & Regulations',
   design: 'Design & Architecture',
@@ -4356,11 +4424,13 @@ function switchApp(app) {
   document.querySelectorAll('.app-tab').forEach(t => t.classList.toggle('active', t.dataset.app === app));
   const akm = document.getElementById('akmPane');
   const sec = document.getElementById('securityPane');
+  const dash = document.getElementById('dashboardPane');
   const mgr = document.getElementById('managerPane');
   const std = document.getElementById('standardsPane');
   const dsn = document.getElementById('designPane');
   akm.classList.toggle('hidden', app !== 'akm');
   sec.classList.toggle('visible', app === 'security');
+  if (dash) dash.classList.toggle('visible', app === 'dashboard');
   if (mgr) mgr.classList.toggle('visible', app === 'manager');
   if (std) std.classList.toggle('visible', app === 'standards');
   if (dsn) dsn.classList.toggle('visible', app === 'design');
@@ -4374,6 +4444,14 @@ function switchApp(app) {
     if (!secControlCatalog.length) loadSecurityControls();
     if (!secAssessmentId) secLoadLatestForInvestigation();
     if (secPaneTab === 'standards') secLoadStandards();
+  } else if (app === 'dashboard') {
+    (async () => {
+      if (!investigations.length && typeof loadInvestigations === 'function') {
+        try { await loadInvestigations(); } catch (e) { /* message renders below */ }
+      }
+      secDashRenderInvOptions();
+      secLoadDashboard(true);
+    })();
   } else if (app === 'manager') {
     mgrLoadRuns();
   } else if (app === 'standards') {
@@ -5772,7 +5850,7 @@ if (location.hash.startsWith('#design')) {
   const want = decodeURIComponent(location.hash.split('/')[1] || '');
   if (want) designDocId = want;
   switchApp('design');
-} else if (['#security', '#manager', '#standards'].includes(location.hash)) switchApp(location.hash.slice(1));
+} else if (['#security', '#dashboard', '#manager', '#standards'].includes(location.hash)) switchApp(location.hash.slice(1));
 
 /* Following a link that only changes the fragment does not reload the page, so
    the boot code above never runs again. Without this, pasting #design/privacy
@@ -7507,7 +7585,7 @@ function secStdSetView(v) {
  * ------------------------------------------------------------------ */
 
 function secLandInv() {
-  return (typeof currentInv !== 'undefined' && currentInv) ? currentInv.id
+  return (typeof currentInv !== 'undefined' && currentInv) ? currentInv
        : (typeof INV_ID !== 'undefined' ? INV_ID : null);
 }
 
@@ -8429,9 +8507,7 @@ async function loadSecurityById(id) {
 }
 
 window.addEventListener('resize', () => { if (network) network.fit({ animation: false }); });
-</script>
-</body>
-</html>
+
 
 /* ------------------------------------------------------------------ *
  * Portfolio: unified register, leakage pathways, cascade, advice.
@@ -8446,7 +8522,7 @@ window.addEventListener('resize', () => { if (network) network.fit({ animation: 
 let secPfCache = null, secPfView = 'register';
 
 function secPfInv() {
-  return (typeof currentInv !== 'undefined' && currentInv) ? currentInv.id
+  return (typeof currentInv !== 'undefined' && currentInv) ? currentInv
        : (typeof INV_ID !== 'undefined' ? INV_ID : null);
 }
 
@@ -8667,3 +8743,268 @@ function secPfIntelHtml() {
   return `<div class="std-note" style="margin-bottom:10px;">${i.quiet ? secPfBadge('quiet', 'good') : secPfBadge('has triggers', 'warn')} ${escHtml(i.note)}</div>`
     + (body || '<div class="std-note">Nothing changed in this window.</div>');
 }
+
+/* ------------------------------------------------------------------ *
+ * Leadership dashboard: availability, distribution, robustness.
+ *
+ * Same contract as the other tabs: the client renders server aggregates
+ * and never computes. Every percent arrives with its sample size, and the
+ * client prints both. Presets (CISO / lead / manager) only reorder the
+ * sections on screen -- the data is identical, because a preset that
+ * changed the numbers would be a different report wearing the same name.
+ * ------------------------------------------------------------------ */
+
+let secDashCache = null, secDashPreset = 'ciso';
+
+const secDashOrders = {
+  ciso: ['header', 'distribution', 'robustness', 'attention', 'availability', 'trends'],
+  lead: ['attention', 'availability', 'robustness', 'distribution', 'trends'],
+  manager: ['header', 'attention', 'availability', 'distribution', 'robustness', 'trends'],
+};
+
+function secDashSetPreset(p) {
+  secDashPreset = p;
+  const ids = { ciso: 'secDashPresetCiso', lead: 'secDashPresetLead',
+                manager: 'secDashPresetMgr' };
+  Object.keys(ids).forEach(k => {
+    const b = document.getElementById(ids[k]);
+    if (b) b.classList.toggle('on', k === p);
+  });
+  secDashRender();
+}
+
+function secDashInv() {
+  return (typeof currentInv !== 'undefined' && currentInv) ? currentInv
+       : (typeof INV_ID !== 'undefined' ? INV_ID : null);
+}
+
+function secDashSwitchInvestigation(id) {
+  if (id) selectInvestigation(Number(id));
+  secLoadDashboard(true);
+}
+
+function secDashRenderInvOptions() {
+  const sel = document.getElementById('dashInvSelect');
+  if (!sel) return;
+  const opts = (typeof investigations !== 'undefined' ? investigations : [])
+    .map(i => `<option value="${i.id}">${escHtml(i.title || ('Investigation ' + i.id))}</option>`).join('');
+  sel.innerHTML = opts || '<option value="">No investigations</option>';
+  if (currentInv) sel.value = String(currentInv);
+}
+
+function secDashScope() {
+  const q = (id) => (document.getElementById(id) || {}).value || '';
+  const acc = document.getElementById('secDashAccepted');
+  return { window_days: q('secDashWindow') || '90',
+           initiative_id: q('secDashInitiative') || '',
+           layer: q('secDashLayer') || '',
+           accepted_only: acc ? acc.checked : true };
+}
+
+function secDashGo(link) {
+  if (!link) return;
+  if (link.view === 'portfolio') {
+    switchApp('security');
+    secSwitchPaneTab('portfolio');
+    if (link.layer) {
+      const s = document.getElementById('secPfLayer');
+      if (s) s.value = link.layer;
+    }
+    if (link.status) {
+      const s = document.getElementById('secPfStatus');
+      if (s) s.value = link.status;
+    }
+    if (link.tab === 'advice') secPfSetView('advice');
+    else if (link.tab === 'initiatives') { secLoadPortfolio(true); return; }
+    secLoadPortfolio(true);
+  } else if (link.view === 'landscape') {
+    switchApp('security');
+    secSwitchPaneTab('landscape');
+    secLoadLandscape(true);
+  }
+}
+
+function secDashPct(m) {
+  if (!m || m.pct === null || m.pct === undefined)
+    return '<span style="color:var(--text3);font-style:italic;">unknown</span>';
+  return `<b>${m.pct}%</b> <span style="color:var(--text3);font-size:10.5px;">(${m.n} of ${m.of})</span>`;
+}
+
+function secDashLight(s) {
+  const c = s === 'green' ? 'var(--green, #3fb950)'
+          : s === 'amber' ? 'var(--yellow, #d29922)'
+          : s === 'red' ? 'var(--red, #f85149)' : 'var(--text3)';
+  return `<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${c};margin-right:6px;"></span>`;
+}
+
+async function secLoadDashboard(force) {
+  const body = document.getElementById('secDashBody');
+  const inv = secDashInv();
+  if (!inv) {
+    if (body) body.innerHTML = '<div class="std-err">Open an investigation first — the dashboard is scoped to one investigation, never global.</div>';
+    return;
+  }
+  if (!force && secDashCache) { secDashRender(); return; }
+  if (body) body.innerHTML = '<div class="std-err">Loading the leadership dashboard…</div>';
+  const sc = secDashScope();
+  const qs = `investigation_id=${inv}&window_days=${sc.window_days}`
+    + (sc.initiative_id ? `&initiative_id=${sc.initiative_id}` : '')
+    + (sc.layer ? `&layer=${sc.layer}` : '')
+    + `&accepted_only=${sc.accepted_only}`;
+  try {
+    const get = async (path) => {
+      const r = await fetch(`${API}/dashboard/${path}?${qs}`, { cache: 'no-store' });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      return r.json();
+    };
+    const [summary, avail, dist, rob, attn, trends, inits] = await Promise.all([
+      get('summary'), get('availability'), get('distribution'),
+      get('robustness'), get('attention'), get('trends'),
+      fetch(`${API}/portfolio/initiatives?investigation_id=${inv}`, { cache: 'no-store' }).then(r => r.json()),
+    ]);
+    secDashCache = { summary, avail, dist, rob, attn, trends };
+    const sel = document.getElementById('secDashInitiative');
+    if (sel && inits.initiatives) {
+      const cur = sel.value;
+      sel.innerHTML = '<option value="">All initiatives</option>' + inits.initiatives.map(i =>
+        `<option value="${i.id}">${escHtml(i.title)}</option>`).join('');
+      sel.value = cur;
+    }
+  } catch (e) {
+    if (body) body.innerHTML = `<div class="std-err">Could not load the dashboard: ${escHtml(e.message || e)}. <button class="btn btn-ghost btn-sm" onclick="secLoadDashboard(true)"><i class="fas fa-rotate"></i> Retry</button></div>`;
+    return;
+  }
+  secDashRender();
+}
+
+function secDashRender() {
+  const body = document.getElementById('secDashBody');
+  const foot = document.getElementById('secDashFoot');
+  const counts = document.getElementById('secDashCounts');
+  if (!body || !secDashCache) return;
+  const c = secDashCache;
+  if (counts) {
+    counts.textContent = `${c.summary.register_total} risks · ${c.summary.open_high} open High+ · ${c.attn.total} attention items`;
+    const badge = document.getElementById('dashTabBadge');
+    if (badge) { badge.style.display = ''; badge.textContent = String(c.attn.total); }
+  }
+  const sections = {
+    header: secDashHeaderHtml(),
+    availability: secDashAvailHtml(),
+    distribution: secDashDistHtml(),
+    robustness: secDashRobustHtml(),
+    attention: secDashAttentionHtml(),
+    trends: secDashTrendsHtml(),
+  };
+  body.innerHTML = secDashOrders[secDashPreset].map(k => sections[k]).join('');
+  if (foot) foot.textContent = 'Read-only aggregates over stored rows. No composite score; every percent carries its sample size.';
+}
+
+function secDashHeaderHtml() {
+  const s = secDashCache.summary;
+  const lights = s.lights.map(l =>
+    `<div style="display:flex;gap:6px;align-items:baseline;margin-bottom:2px;">${secDashLight(l.state)}<b style="font-size:11.5px;">${escHtml(l.area)}</b><span style="font-size:11px;color:var(--text2);">${escHtml(l.reason)}</span></div>`).join('');
+  return `<div style="border:1px solid var(--border);border-radius:8px;padding:10px;margin-bottom:8px;">
+    <b style="font-size:12px;">Coverage at a glance</b>
+    <div style="display:flex;gap:14px;flex-wrap:wrap;margin:6px 0;">
+      <span>Open High+: <b>${s.open_high}</b> <span style="color:var(--text3);">(${s.open_critical} Critical)</span></span>
+      <span>Pending approvals: <b>${s.pending_approvals}</b></span>
+      <span>Stale: <b>${s.stale_count}</b></span>
+      <span>Unowned High+: <b>${s.unowned_high}</b></span>
+    </div>${lights}</div>`;
+}
+
+function secDashAvailHtml() {
+  const a = secDashCache.avail;
+  const un = (arr, fmt) => (!arr || !arr.length)
+    ? '<div class="std-note">None — that is coverage, not an empty table.</div>'
+    : `<ul style="font-size:11.5px;margin:4px 0;padding-left:18px;">${arr.map(fmt).join('')}</ul>`;
+  return `<div style="border:1px solid var(--border);border-radius:8px;padding:10px;margin-bottom:8px;">
+    <b style="font-size:12px;">Availability</b>
+    <div style="font-size:11.5px;margin-top:4px;">Initiative coverage: ${secDashPct(a.initiative_coverage)} · Model coverage: ${secDashPct(a.model_coverage)} · Product coverage: ${secDashPct(a.product_coverage)} · Register completeness: ${secDashPct(a.register_completeness)} · KB sync: ${secDashPct(a.kb_sync_health)}</div>
+    <div style="font-size:11.5px;margin-top:4px;">Evidence freshness: median age ${a.evidence_freshness.median_age_days === null ? 'unknown' : a.evidence_freshness.median_age_days + 'd'} over ${a.evidence_freshness.samples} samples (${a.evidence_freshness.accepted_only ? 'accepted only' : 'incl. pending'}) · ${a.evidence_freshness.open_high_without_evidence} open High+ without evidence · Unknown W2 burden: ${secDashPct(a.unknown_burden)}</div>
+    <div style="margin-top:6px;"><b style="font-size:11.5px;">Uncovered initiatives</b>${un(a.uncovered_initiatives, u => `<li>${escHtml(u.title)} <button class="btn btn-ghost btn-sm" onclick='secDashGo(${JSON.stringify(u.link)})'>view</button></li>`)}</div>
+    <div style="margin-top:4px;"><b style="font-size:11.5px;">Uncovered models</b>${un(a.uncovered_models, m => `<li>${escHtml(m)}</li>`)}</div>
+    <div style="margin-top:4px;"><b style="font-size:11.5px;">Stale assessments (${a.stale_assessments.length})</b>${un(a.stale_assessments, s => `<li>${escHtml(s.product_name)} — scored ${s.assessed_days_ago}d ago, ${s.newer_evidence} newer evidence item(s) <button class="btn btn-ghost btn-sm" onclick='secDashGo(${JSON.stringify(s.link)})'>view</button></li>`)}</div>
+  </div>`;
+}
+
+function secDashDistHtml() {
+  const d = secDashCache.dist;
+  const tbl = (obj, kname) => {
+    const rows = Object.keys(obj || {}).sort().map(k =>
+      `<tr><td>${escHtml(k)}</td><td style="text-align:right;">${obj[k].total}</td><td style="text-align:right;">${obj[k].open}</td><td style="text-align:right;">${obj[k].open_high}</td></tr>`).join('');
+    return `<div style="overflow-x:auto;"><table class="sec-table"><tr><th>${kname}</th><th style="text-align:right;">Total</th><th style="text-align:right;">Open</th><th style="text-align:right;">Open High+</th></tr>${rows || '<tr><td colspan="4">No rows in scope.</td></tr>'}</table></div>`;
+  };
+  const cards = (d.insight_cards || []).map(c =>
+    `<div style="margin-bottom:4px;font-size:11.5px;">${escHtml(c.text)} <button class="btn btn-ghost btn-sm" onclick='secDashGo(${JSON.stringify(c.link)})'>view</button></div>`).join('');
+  const vol = d.assessment_volume || { per_day: {}, by_status: {} };
+  const volDays = Object.keys(vol.per_day || {}).sort().slice(-14).map(day =>
+    `<span style="display:inline-block;margin-right:8px;font-size:11px;" title="${escHtml(day)}">${escHtml(day.slice(5))}: <b>${vol.per_day[day].done}</b> done/${vol.per_day[day].error} err</span>`).join('');
+  return `<div style="border:1px solid var(--border);border-radius:8px;padding:10px;margin-bottom:8px;">
+    <b style="font-size:12px;">Distribution (${d.register_total} risks)</b>
+    <div style="margin-top:6px;"><b style="font-size:11.5px;">By layer</b>${tbl(d.by_layer, 'Layer')}</div>
+    <div style="margin-top:6px;"><b style="font-size:11.5px;">By scope</b>${tbl(d.by_scope, 'Scope')}</div>
+    <div style="margin-top:6px;"><b style="font-size:11.5px;">Top families / products</b>${tbl(Object.fromEntries((d.top_families || []).map(f => [f.name, f])), 'Family')}</div>
+    <div style="margin-top:6px;"><b style="font-size:11.5px;">Top patterns</b>${tbl(Object.fromEntries((d.top_patterns || []).map(f => [f.pattern, f])), 'Pattern')}</div>
+    <div style="margin-top:6px;"><b style="font-size:11.5px;">Insight cards</b><div style="margin-top:4px;">${cards || '<span class="std-note">None in scope.</span>'}</div></div>
+    <div style="margin-top:6px;"><b style="font-size:11.5px;">Assessment volume (last 14d)</b><div style="margin-top:4px;">${volDays || '<span class="std-note">No runs in scope.</span>'}</div></div>
+  </div>`;
+}
+
+function secDashRobustHtml() {
+  const r = secDashCache.rob;
+  const ah = r.approval_hygiene || { awaiting: [] };
+  const awaiting = (ah.awaiting || []).map(a =>
+    `<li>Run ${a.run_id} waiting ${a.age_days}d${a.over_sla ? ' — over SLA' : ''}</li>`).join('');
+  return `<div style="border:1px solid var(--border);border-radius:8px;padding:10px;margin-bottom:8px;">
+    <b style="font-size:12px;">Robustness</b>
+    <div style="font-size:11.5px;margin-top:4px;">Mitigation mapped: ${secDashPct(r.mitigation_mapping_rate)} · Validated: ${secDashPct(r.validation_rate)} · Acceptance disciplined: ${secDashPct(r.acceptance_discipline)} · Inventory reuse: ${secDashPct(r.inventory_lift)}</div>
+    <div style="font-size:11.5px;margin-top:4px;">Approvals awaiting: <b>${(ah.awaiting || []).length}</b> (${ah.awaiting_over_sla || 0} over ${ah.sla_days || 7}d SLA) · Self-approval violations: <b>${(ah.self_approval_violations || []).length}</b> · Unverifiable: ${ah.unverifiable_approvals || 0}</div>
+    ${awaiting ? `<ul style="font-size:11.5px;margin:4px 0;padding-left:18px;">${awaiting}</ul>` : ''}
+    <div style="font-size:11.5px;margin-top:4px;">Hypothesis closure: ${r.hypothesis_closure.open_falsifiers} open falsifier(s), ${r.hypothesis_closure.with_planned_experiment} with experiment · Re-assess follow-up: ${secDashPct(r.reassess_on_change.followup_rate)} within ${r.reassess_on_change.sla_days}d · Pack: ${escHtml(r.pack_hygiene.current_pack_version)} current, ${r.pack_hygiene.superseded_assessment_ids.length} superseded</div>
+    <div style="margin-top:6px;"><b style="font-size:11.5px;">Limitations — read before quoting</b><ul style="font-size:11px;color:var(--text2);margin:4px 0;padding-left:18px;">${(r.limitations || []).map(l => `<li>${escHtml(l)}</li>`).join('')}</ul></div>
+  </div>`;
+}
+
+function secDashAttentionHtml() {
+  const a = secDashCache.attn;
+  const items = (a.items || []).map(i =>
+    `<div style="display:flex;gap:8px;align-items:baseline;margin-bottom:4px;font-size:11.5px;">
+      <b style="min-width:44px;text-align:right;">${i.rank_score}</b>
+      <div><b>${escHtml(i.title)}</b><div style="color:var(--text2);">${escHtml(i.detail || '')} <span style="color:var(--text3);">(${escHtml(i.rank_why || '')})</span> <button class="btn btn-ghost btn-sm" onclick='secDashGo(${JSON.stringify(i.link)})'>view</button></div></div>
+    </div>`).join('');
+  return `<div style="border:1px solid var(--border);border-radius:8px;padding:10px;margin-bottom:8px;">
+    <b style="font-size:12px;">Attention queue (${a.total})</b>
+    <div style="margin-top:6px;">${items || '<span class="std-note">Nothing triggered — no trigger fired, not nothing wrong.</span>'}</div>
+  </div>`;
+}
+
+function secDashTrendsHtml() {
+  const t = secDashCache.trends;
+  const rows = (t.snapshots || []).map(s =>
+    `<tr><td>${escHtml(s.date || '')}</td><td style="text-align:right;">${s.register_total}</td><td style="text-align:right;">${s.open_high}</td><td style="text-align:right;">${s.assessments}</td><td style="text-align:right;">${s.models}</td></tr>`).join('');
+  return `<div style="border:1px solid var(--border);border-radius:8px;padding:10px;margin-bottom:8px;">
+    <b style="font-size:12px;">Trends — daily snapshots (${t.total} in ${t.days}d)</b>
+    <div style="overflow-x:auto;margin-top:4px;"><table class="sec-table"><tr><th>Date</th><th style="text-align:right;">Risks</th><th style="text-align:right;">Open High+</th><th style="text-align:right;">Assessments</th><th style="text-align:right;">Models</th></tr>${rows || '<tr><td colspan="5">No snapshots yet — the trend is unknown, not flat. The scheduler writes one daily; or write one now from the snapshot button.</td></tr>'}</table></div>
+    <div style="margin-top:6px;"><button class="btn btn-ghost btn-sm" onclick="secDashSnapshot()"><i class="fas fa-camera"></i> Snapshot now</button></div>
+  </div>`;
+}
+
+async function secDashSnapshot() {
+  const inv = secDashInv();
+  if (!inv) return;
+  await fetch(`${API}/dashboard/snapshot?investigation_id=${inv}`, { method: 'POST' });
+  secLoadDashboard(true);
+}
+
+function secDashBrief(fmt) {
+  const inv = secDashInv();
+  if (!inv) return;
+  const sc = secDashScope();
+  window.open(`${API}/dashboard/brief.${fmt}?investigation_id=${inv}&window_days=${sc.window_days}&accepted_only=${sc.accepted_only}`, '_blank');
+}
+
+</script>
+</body>
+</html>

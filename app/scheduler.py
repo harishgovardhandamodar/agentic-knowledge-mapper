@@ -121,6 +121,38 @@ def _tick_watched():
         _lock.release()
 
 
+def _tick_dashboard():
+    """One leadership snapshot per investigation per day.
+
+    Skips investigations with no assessments (an empty register snapshots to
+    nothing worth trending) and skips days already recorded, so restarts never
+    backfill. Fail-open: a metrics failure must not disturb the other ticks.
+    """
+    if not _lock.acquire(blocking=False):
+        return
+    db = SessionLocal()
+    try:
+        from .models import Investigation, SecurityAssessment
+        from . import executive as _ex
+        for inv in db.query(Investigation).all():
+            try:
+                has_work = (db.query(SecurityAssessment)
+                            .filter(SecurityAssessment.investigation_id
+                                    == inv.id).first())
+                if not has_work:
+                    continue
+                _ex.write_snapshot(db, inv.id)
+            except Exception:
+                log.exception("dashboard snapshot failed for %s", inv.id)
+                db.rollback()
+    except Exception:
+        log.exception("dashboard tick failed")
+        db.rollback()
+    finally:
+        db.close()
+        _lock.release()
+
+
 _scheduler: BackgroundScheduler | None = None
 
 
@@ -132,5 +164,7 @@ def start():
     _scheduler.add_job(_tick, "interval", minutes=1, id="akm-timetables")
     _scheduler.add_job(_tick_watched, "interval", minutes=10,
                        id="akm-watch", max_instances=1, coalesce=True)
+    _scheduler.add_job(_tick_dashboard, "interval", hours=1,
+                       id="akm-dashboard", max_instances=1, coalesce=True)
     _scheduler.start()
     atexit.register(lambda: _scheduler.shutdown(wait=False) if _scheduler else None)
