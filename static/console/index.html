@@ -1,0 +1,525 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Risk Console — Agentic Knowledge Mapper</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/vis-network/9.1.6/standalone/umd/vis-network.min.js"></script>
+<style>
+:root{--bg:#0d1117;--bg2:#161b22;--bg3:#21262d;--border:#30363d;--text:#f0f6fc;--text2:#8b949e;--accent:#58a6ff;--green:#3fb950;--orange:#d29922;--red:#f85149;--purple:#bc8cff;--teal:#56d4dd;--yellow:#d29922}
+*{box-sizing:border-box;margin:0;padding:0}body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:var(--bg);color:var(--text);min-height:100vh}
+a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
+.header{position:sticky;top:0;z-index:10;display:flex;align-items:center;gap:12px;padding:10px 16px;background:var(--bg2);border-bottom:1px solid var(--border);flex-wrap:wrap}
+.header h1{font-size:15px;display:flex;align-items:center;gap:8px}
+.header h1 i{color:var(--teal)}
+.persona{margin-left:12px;display:flex;gap:4px;flex-wrap:wrap}
+.persona button{padding:5px 10px;border-radius:999px;border:1px solid var(--border);background:var(--bg3);color:var(--text2);font-size:12px;cursor:pointer}
+.persona button.active{background:var(--accent);color:#fff;border-color:var(--accent)}
+.scope{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.scope select,.scope input{padding:5px 8px;border-radius:6px;border:1px solid var(--border);background:var(--bg3);color:var(--text);font-size:12px}
+.global-search{flex:1;min-width:180px;position:relative}
+.global-search input{width:100%;padding:7px 10px 7px 28px;border-radius:999px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-size:13px}
+.global-search i{position:absolute;left:9px;top:9px;color:var(--text2);font-size:12px}
+.suggest{position:absolute;top:34px;left:0;right:0;background:var(--bg2);border:1px solid var(--border);border-radius:8px;max-height:320px;overflow:auto;display:none;z-index:20}
+.suggest a{display:block;padding:8px 10px;border-bottom:1px solid var(--border);font-size:12px;color:var(--text)}
+.suggest a small{color:var(--text2)}
+.context-bar{position:sticky;top:52px;z-index:9;display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:6px 16px;background:var(--bg);border-bottom:1px solid var(--border);font-size:11px;color:var(--text2)}
+.context-bar b{color:var(--text)}
+@media print{.header,.nav,.context-bar,.no-print{display:none!important}.content{padding:0}.card{break-inside:avoid}table{page-break-inside:auto}thead{display:table-header-group}}
+.layout{display:grid;grid-template-columns:220px 1fr;min-height:calc(100vh - 52px)}
+.nav{border-right:1px solid var(--border);background:var(--bg2);padding:10px;overflow:auto}
+.nav h3{font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--text2);margin:10px 0 6px}
+.nav a{display:flex;align-items:center;gap:8px;padding:7px 8px;border-radius:6px;font-size:13px;color:var(--text2);cursor:pointer}
+.nav a.active,.nav a:hover{background:var(--bg3);color:var(--text)}
+.nav a i{width:14px;text-align:center}
+.content{padding:16px;overflow:auto;min-width:0}
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px}
+.card{border:1px solid var(--border);border-radius:10px;padding:12px;background:var(--bg2)}
+.card h3{font-size:13px;margin-bottom:6px;display:flex;align-items:center;gap:6px}
+.badge{display:inline-block;padding:1px 6px;border-radius:999px;font-size:10px;font-weight:700;border:1px solid var(--border)}
+.badge.critical{background:var(--red);color:#fff;border-color:var(--red)}.badge.high{background:var(--orange);color:#000;border-color:var(--orange)}.badge.medium{background:#d29922;color:#000}.badge.low{background:var(--green);color:#000}
+.badge.privacy{border-color:var(--purple);color:var(--purple)}.badge.cascade{border-style:dashed}.badge.unknown{background:repeating-linear-gradient(45deg,var(--bg3),var(--bg3) 4px,var(--border) 4px,var(--border) 8px);color:var(--text2)}.badge.stale{border-color:var(--orange);color:var(--orange)}
+.risk-card{border-left:3px solid var(--border)}
+.risk-card.sev-critical{border-left-color:var(--red)}.risk-card.sev-high{border-left-color:var(--orange)}.risk-card.sev-medium{border-left-color:#d4a017}.risk-card.privacy{border-left-color:var(--purple)}
+.kpi{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin-bottom:12px}
+.kpi .card{text-align:center}
+.kpi .n{font-size:22px;font-weight:700}
+.chips{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0}
+.chips button{padding:4px 8px;border-radius:999px;border:1px solid var(--border);background:var(--bg3);color:var(--text2);font-size:11px;cursor:pointer}
+.chips button.active{background:var(--accent);color:#fff}
+.table{width:100%;border-collapse:collapse;font-size:12px}
+.table th,.table td{border:1px solid var(--border);padding:6px 8px;text-align:left}
+.table th{background:var(--bg3);font-size:11px;text-transform:uppercase;letter-spacing:.3px}
+.reader{max-width:80ch;line-height:1.6;font-size:13px}
+.reader h1{font-size:18px;margin:14px 0 8px}.reader h2{font-size:15px;margin:12px 0 6px}.reader h3{font-size:13px;margin:10px 0 4px}
+.reader p{margin:6px 0}.reader ul{margin:6px 0 6px 18px}.reader li{margin:3px 0}
+.reader blockquote{border-left:3px solid var(--accent);padding:6px 10px;background:var(--bg3);border-radius:6px;margin:8px 0}
+.reader pre{background:var(--bg3);padding:8px 10px;border-radius:6px;overflow:auto;font-size:11px;white-space:pre-wrap}
+.reader table{width:100%;border-collapse:collapse;margin:8px 0}.reader th,.reader td{border:1px solid var(--border);padding:5px 7px;font-size:11px}
+@media(max-width:900px){.layout{grid-template-columns:1fr}.nav{position:sticky;top:52px;z-index:5}.content{padding:10px}}
+@media print{.header,.nav,.no-print{display:none!important}.content{padding:0}.card{break-inside:avoid}}
+.skeleton{height:12px;background:var(--bg3);border-radius:4px;animation:pulse 1.2s infinite}
+@keyframes pulse{0%{opacity:.6}50%{opacity:1}100%{opacity:.6}}
+</style>
+</head>
+<body>
+<div class="header">
+  <h1><i class="fas fa-shield-halved"></i> Risk Console <small style="font-weight:400;color:var(--text2)">· Clarity</small></h1>
+  <div class="persona" id="personaBar"></div>
+  <div class="scope">
+    <select id="scopeInv" title="Investigation scope"></select>
+    <select id="scopeIni" title="Initiative scope"><option value="">Portfolio</option></select>
+  </div>
+  <div style="display:flex;gap:6px;align-items:center">
+    <button onclick="location.href='/'" class="btn" style="padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg3);color:var(--text);font-size:12px;cursor:pointer" title="Switch to Classic Mapper"><i class="fas fa-diagram-project"></i> Classic</button>
+    <button onclick="toggleConsoleTheme()" class="btn" style="padding:6px 8px;border-radius:6px;border:1px solid var(--border);background:var(--bg3);color:var(--text);font-size:12px;cursor:pointer" title="Toggle light/dark"><i id="consoleThemeIcon" class="fas fa-moon"></i></button>
+  </div>
+  <div class="global-search">
+    <i class="fas fa-search"></i>
+    <input id="globalQ" placeholder="Search risks, evidence, models… (/)" autocomplete="off">
+    <div class="suggest" id="suggestBox"></div>
+  </div>
+</div>
+<div class="context-bar" id="contextBar"><span id="ctxScope">Scope: —</span> · <span id="ctxPersona">Persona: executive</span> · <span id="ctxFilters">Filters: all</span> · <span id="ctxRefresh">Last refreshed: —</span> · <a href="#" onclick="saveView();return false">Save view</a> · <select id="savedViews" onchange="loadView(this.value)"><option value="">Saved views…</option></select></div>
+<div class="layout">
+  <nav class="nav" id="nav">
+    <a data-view="home" class="active"><i class="fas fa-house"></i> Home</a>
+    <a data-view="risks"><i class="fas fa-triangle-exclamation"></i> Risks <span class="badge" id="navRiskCount" style="margin-left:auto"></span></a>
+    <a data-view="landscape"><i class="fas fa-project-diagram"></i> Landscape</a>
+    <a data-view="privacy"><i class="fas fa-user-shield"></i> Privacy & providers</a>
+    <a data-view="models"><i class="fas fa-cubes"></i> Models <span style="margin-left:auto;font-size:10px;color:var(--text2)">W1·W2·W3·RM*</span></a>
+    <a data-view="assess"><i class="fas fa-flask"></i> Assessments</a>
+    <a data-view="decisions"><i class="fas fa-scale-balanced"></i> Decisions</a>
+    <a data-view="insights"><i class="fas fa-lightbulb"></i> Insights</a>
+    <a data-view="briefs"><i class="fas fa-file-lines"></i> Briefs</a>
+    <a data-view="admin"><i class="fas fa-heart-pulse"></i> Admin/health</a>
+    <h3>Density</h3>
+    <a onclick="toggleDensity()"><i class="fas fa-layer-group"></i> <span id="densityLabel">Comfortable</span></a>
+    <h3>Classic</h3>
+    <a onclick="location.href='/'"><i class="fas fa-arrow-right"></i> Open in Classic Mapper</a>
+  </nav>
+  <main class="content" id="content">
+    <div id="view-home"></div>
+    <div id="view-risks" style="display:none"></div>
+    <div id="view-landscape" style="display:none"></div>
+    <div id="view-privacy" style="display:none"></div>
+    <div id="view-models" style="display:none"></div>
+    <div id="view-assess" style="display:none"></div>
+    <div id="view-decisions" style="display:none"></div>
+    <div id="view-insights" style="display:none"></div>
+    <div id="view-briefs" style="display:none"></div>
+    <div id="view-admin" style="display:none"></div>
+    <div id="view-search" style="display:none"></div>
+    <div id="view-reader" style="display:none"></div>
+  </main>
+</div>
+<script>
+const PERSONAS=["researcher","lead","privacy","legal","executive"];
+const PERSONA_LABEL={researcher:"Researcher",lead:"Lead",privacy:"DPO / Privacy",legal:"Legal",executive:"Executive"};
+let persona=localStorage.getItem("console.persona")|| new URLSearchParams(location.search).get("persona")||"executive";
+let currentView="home";
+let density=localStorage.getItem("console.density")||"comfortable";
+let scopeInv=null, scopeIni="";
+const API=location.origin;
+function esc(s){return String(s||"").replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":"&#39;"}[c]))}
+function personaBar(){
+  const el=document.getElementById("personaBar"); el.innerHTML="";
+  PERSONAS.forEach(p=>{
+    const b=document.createElement("button"); b.textContent=PERSONA_LABEL[p]||p; if(p===persona) b.classList.add("active");
+    b.onclick=()=>{persona=p; localStorage.setItem("console.persona",p); history.replaceState(null,"","?persona="+p+"#"+currentView); renderPersonaBar(); route();};
+    el.appendChild(b);
+  });
+}
+function renderPersonaBar(){ personaBar(); }
+function toggleDensity(){ density=density==="comfortable"?"compact":"comfortable"; localStorage.setItem("console.density",density); document.getElementById("densityLabel").textContent=density==="comfortable"?"Comfortable":"Compact"; document.body.style.fontSize=density==="compact"?"12px":""; }
+document.getElementById("densityLabel").textContent=density==="comfortable"?"Comfortable":"Compact";
+async function loadInvestigations(){
+  const r=await fetch(API+"/api/investigations"); const d=await r.json(); const items=d.items||d||[];
+  const sel=document.getElementById("scopeInv"); sel.innerHTML="";
+  items.forEach(it=>{const o=document.createElement("option"); o.value=it.id; o.textContent="#"+it.id+" "+(it.title||""); sel.appendChild(o);});
+  // pick first investigation with data (inventory or risks), not just first in list (often a summary)
+  if(!scopeInv){
+    if(items.length===1) scopeInv=items[0].id;
+    else {
+      // probe for a populated investigation: prefer one with risks
+      let best=null;
+      for(const it of items){
+        try{
+          const chk=await fetch(API+"/api/console/risks?investigation_id="+it.id+"&limit=1").then(r=>r.json());
+          if((chk.total||0)>0){ best=it.id; break; }
+        }catch(e){}
+      }
+      if(!best){
+        for(const it of items){
+          try{
+            const land=await fetch(API+"/api/security/landscape?investigation_id="+it.id).then(r=>r.json());
+            if((land.inventory||[]).length>0){ best=it.id; break; }
+          }catch(e){}
+        }
+      }
+      scopeInv=best|| (items[0]&&items[0].id) || null;
+    }
+  }
+  if(scopeInv) sel.value=scopeInv;
+  sel.onchange=()=>{scopeInv=Number(sel.value); loadInitiatives(); route();};
+  await loadInitiatives();
+}
+async function loadInitiatives(){
+  const sel=document.getElementById("scopeIni"); if(!scopeInv) return;
+  try{ const r=await fetch(API+"/api/portfolio/initiatives?investigation_id="+scopeInv); const d=await r.json(); sel.innerHTML='<option value="">Portfolio</option>';
+    (d.initiatives||[]).forEach(i=>{const o=document.createElement("option"); o.value=i.id; o.textContent=i.title; sel.appendChild(o);});
+    sel.onchange=()=>{scopeIni=sel.value; route();};
+  }catch(e){}
+}
+function qScope(){ const p=new URLSearchParams(); if(scopeInv) p.set("investigation_id",scopeInv); if(scopeIni) p.set("initiative_id",scopeIni); return p.toString(); }
+function viewEl(id){ return document.getElementById("view-"+id); }
+function showView(v){
+  currentView=v; document.querySelectorAll(".nav a[data-view]").forEach(a=>a.classList.toggle("active",a.dataset.view===v));
+  ["home","risks","landscape","privacy","models","assess","decisions","insights","briefs","admin","search","reader"].forEach(id=>{const el=viewEl(id); if(el) el.style.display=id===v?"":"none";});
+  location.hash=v;
+}
+document.getElementById("nav").addEventListener("click",e=>{
+  const a=e.target.closest("a[data-view]"); if(!a) return; e.preventDefault(); showView(a.dataset.view); route();
+});
+document.addEventListener("keydown",e=>{
+  if(e.key==="/"){ e.preventDefault(); document.getElementById("globalQ").focus(); }
+  if(e.key==="Escape"){ document.getElementById("suggestBox").style.display="none"; }
+});
+async function api(path, opts){ const r=await fetch(API+path,{cache:"no-store",...(opts||{})}); if(!r.ok) throw new Error(await r.text()); return r.json(); }
+async function route(){
+  if(!scopeInv){ viewEl("home").innerHTML='<p style="color:var(--text2)">Select an investigation.</p>'; showView("home"); return; }
+  if(currentView==="home") await renderHome();
+  else if(currentView==="risks") await renderRisks();
+  else if(currentView==="landscape") await renderLandscape();
+  else if(currentView==="privacy") await renderPrivacy();
+  else if(currentView==="models") await renderModels();
+  else if(currentView==="assess") await renderAssess();
+  else if(currentView==="decisions") await renderDecisions();
+  else if(currentView==="insights") await renderInsights();
+  else if(currentView==="briefs") await renderBriefs();
+  else if(currentView==="admin") await renderAdmin();
+}
+async function renderHome(){
+  const el=viewEl("home"); el.innerHTML='<div class="skeleton" style="height:120px"></div>';
+  try{
+    const personaQ=persona;
+    const home=await api("/api/console/home?"+qScope()+"&persona="+personaQ);
+    const d=home; const s=d.summary||{}; const av=d.availability||{}; const attn=d.attention||{};
+    if(!s.register_total && !(d.landscape&&d.landscape.inventory)){
+      el.innerHTML='<div class="card"><h3>No assessment yet</h3><p style="font-size:12px;color:var(--text2)">Launch Manager template “Provider / lab data posture” or run a security assessment to populate the register. Then Home shows coverage, concentration, robustness and the 5 attention items.</p><button class="badge" onclick="location.href=\'/\'">Open Classic Mapper</button> <button class="badge" onclick="showView(\'risks\')">View risks</button></div>';
+      return;
+    }
+    let h="";
+    // KPI strip
+    h+=`<div class="kpi">`+
+      `<div class="card"><div class="n">${s.open_high||0}</div><div style="font-size:12px;color:var(--text2)">Open High/Critical</div><canvas id="kpiSpark" height="30"></canvas></div>`+
+      `<div class="card"><div class="n">${(s.by_layer_open_high && Object.values(s.by_layer_open_high).reduce((a,b)=>a+b,0))||0}</div><div style="font-size:12px;color:var(--text2)">High by layer</div></div>`+
+      `<div class="card"><div class="n">${attn.total||0}</div><div style="font-size:12px;color:var(--text2)">Attention items</div></div>`+
+      `<div class="card"><div class="n">${(av.lights||[]).filter(l=>l.state==='green').length}/${(av.lights||[]).length}</div><div style="font-size:12px;color:var(--text2)">Availability green</div></div>`+
+      `</div>`;
+    // persona landing
+    if(persona==="executive"){
+      h+=`<div class="card"><h3><i class="fas fa-lightbulb"></i> Availability lights</h3>`+(av.lights||[]).map(l=>`<div style="display:flex;justify-content:space-between;font-size:12px"><span>${esc(l.area)}</span><span class="badge ${l.state}">${l.state}</span></div>`).join("")+`</div>`;
+      h+=`<div class="card"><h3>Open High/Critical</h3><p style="font-size:12px">Total risks: ${s.register_total||0}, trend via snapshots. <a href="#" onclick="showView('risks');route();return false">View risks</a></p><canvas id="chartSeverity" height="80"></canvas></div>`;
+    } else if(persona==="privacy"||persona==="dpo"){
+      const samp=(d.privacy&&d.privacy.sample)||[];
+      h+=`<div class="card"><h3><i class="fas fa-user-shield"></i> Privacy spotlight</h3>`+samp.map(r=>`<div style="font-size:12px;border-bottom:1px solid var(--border);padding:4px 0">${esc(r.title||r.risk_id)} <span class="badge privacy">${esc(r.layer)}</span></div>`).join("")+`</div>`;
+      h+=`<div class="card"><h3>Provider posture</h3><p style="font-size:12px">Open privacy risks: ${d.privacy&&d.privacy.open_privacy||0}. Retention outliers flagged in register.</p></div>`;
+      h+=`<div class="card"><h3>Am I a datapoint?</h3><p style="font-size:12px;color:var(--text2)">Direct vs indirect contribution under Privacy tab. <a href="#" onclick="showView('privacy');route();return false">Open Privacy & providers</a></p></div>`;
+    } else if(persona==="legal"){
+      h+=`<div class="card"><h3>Decision log</h3><p style="font-size:12px">Acceptances and selections via Decisions. Claims labeled stated policy / independent / unknown.</p><button class="badge" onclick="showView('decisions');route()">Open Decisions</button></div>`;
+      h+=`<div class="card"><h3>Contract gaps</h3><p style="font-size:12px">No-train, DPA, ZDR checklist from register (privacy/provider rows).</p></div>`;
+    } else if(persona==="lead"){
+      h+=`<div class="card"><h3>Attention queue</h3>`+(attn.items||[]).slice(0,5).map(it=>`<div style="font-size:12px;padding:4px 0;border-bottom:1px solid var(--border)"><b>${esc(it.title||it.kind)}</b> <span style="color:var(--text2)">${esc(it.rank_why||"")}</span> <a href="#" onclick="openRisk(${it.link&&it.link.risk_id?'\''+it.link.risk_id+'\'':''});return false">open</a></div>`).join("")+`</div>`;
+    } else {
+      h+=`<div class="card"><h3>Recent runs</h3><p style="font-size:12px">Graph snapshot and experiment queue under Models / Landscape.</p><button class="badge" onclick="showView('risks');route()">Open Risks</button></div>`;
+    }
+    h+=`<div class="card"><h3>Robustness</h3><p style="font-size:12px">Accepted risks nearing review: see Executive dashboard robustness. <a href="#" onclick="showView('insights');route();return false">Insights</a></p></div>`;
+    h+=`<div style="margin-top:8px"><button class="badge" onclick="showView('briefs');route()">Board brief (PDF/MD)</button></div>`;
+    el.innerHTML=h;
+    // sparklines
+    setTimeout(()=>{
+      const c=document.getElementById("chartSeverity"); if(c && window.Chart){ try{ new Chart(c,{type:"doughnut",data:{labels:["Critical","High","Medium","Low"],datasets:[{data:[s.open_critical||0,(s.open_high||0)-(s.open_critical||0),0,0],backgroundColor:["#f85149","#d29922","#a371f7","#3fb950"]}]},options:{plugins:{legend:{labels:{color:"#8b949e"}}}}}); }catch(e){} }
+    },100);
+  }catch(e){ el.innerHTML='<p style="color:var(--red)">'+esc(e.message)+'</p>';}
+}
+async function renderRisks(){
+  const el=viewEl("risks"); el.innerHTML='<div class="skeleton" style="height:200px"></div>';
+  try{
+    const d=await api("/api/console/risks?"+qScope());
+    if(!d.risks||!d.risks.length){
+      el.innerHTML='<div class="card"><h3>No risks yet</h3><p style="font-size:12px;color:var(--text2)">No assessment yet — launch Manager template “Provider / lab data posture” or run a security assessment to populate the register.</p><button class="badge" onclick="location.href=\'/\'">Open Classic Mapper</button> <button class="badge" onclick="showView(\'privacy\');route()">Privacy & providers</button></div>';
+      return;
+    }
+    let h='<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px"><button class="badge" onclick="syncRisks()"><i class="fas fa-rotate"></i> Sync risks from assessment</button><button class="badge" onclick="runRiskReview()"><i class="fas fa-magnifying-glass"></i> Run risk review</button><button class="badge" onclick="showView(\'insights\');route()"><i class="fas fa-lightbulb"></i> Insights</button></div>';
+    h+='<div class="chips"><button class="active" data-f="all">All</button><button data-f="Critical">Critical</button><button data-f="High">High</button><button data-f="Open">Open</button><button data-f="Unowned">Unowned</button><button data-f="privacy">Privacy</button><button data-f="model">Model</button></div>';
+    if(persona==="lead") h+='<div id="bulkBar" style="display:none;gap:6px;margin:6px 0"><span id="bulkCount">0</span> selected <button class="badge" onclick="bulkAssign()">Assign owner</button><button class="badge" onclick="bulkStatus()">Set status</button><button class="badge" onclick="enrichSelected()">Enrich evidence</button></div>';
+    h+='<div class="cards">'+d.risks.slice(0,50).map(r=>{
+      const sev=(r.severity!=null && r.severity>=80)?"critical":(r.severity!=null && r.severity>=60)?"high":(r.severity!=null && r.severity>=40)?"medium":"low";
+      const unk=r.confidence_band==="unknown"||r.severity==null;
+      const bulkCb=persona==="lead"?`<input type="checkbox" onchange="toggleBulk(${r.id})" style="margin-right:6px">`:"";
+      return `<div class="card risk-card sev-${sev} ${r.layer==="privacy"?"privacy":""}">
+        <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">${bulkCb}<span class="badge ${sev}">${sev}</span><span class="badge">${esc(r.layer)}</span><span class="badge">${esc(r.scope)}</span>${unk?'<span class="badge unknown">unknown</span>':''}${r.status==="open"&&r.severity>=60&&!r.owner?'<span class="badge" style="border-color:var(--red);color:var(--red)">unowned</span>':''}</div>
+        <h3 style="margin-top:6px">${esc(r.title||r.risk_id)} <small style="color:var(--text2)">${esc(r.risk_id)}</small></h3>
+        <p style="font-size:11px;color:var(--text2)">${esc(r.plain_summary||r.why||"").slice(0,140)}</p>
+        <div style="font-size:11px;color:var(--text2)">Inherent: ${r.inherent_score!=null?r.inherent_score:"—"} → Residual: ${r.residual_score!=null?r.residual_score:"—"} <span class="badge ${r.band?r.band.toLowerCase():"unknown"}">${esc(r.band||"Unknown")}</span> · Priority: ${r.priority_score!=null?r.priority_score:"—"} <span style="color:var(--text2)">(${esc(r.score_rationale||"")})</span> ${r.scoring_fingerprint?`<span class="badge" title="scoring ${esc(r.scoring_method)}">${esc(r.scoring_fingerprint.slice(0,6))}</span>`:''}</div>
+        <div style="font-size:11px;color:var(--text2)">Evidence: ${r.evidence_ids?(r.evidence_ids.length||0):0} ${!r.evidence_ids||!r.evidence_ids.length?'<span class="badge unknown">no evidence</span>':''} · Status: ${esc(r.status)} · Owner: ${r.owner?esc(r.owner):'<span class="badge unknown">unowned</span>'} · Review: ${r.review_by?esc(r.review_by):'<span class="badge unknown">unknown</span>'} ${r.cluster_label?`· Cluster: ${esc(r.cluster_label)}`:''}</div>
+        <div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap">
+          <button class="badge" onclick="openReader('risk',${r.id})">View evidence</button>
+          <button class="badge" onclick="suggestTreatment('${esc(r.risk_id)}')">Suggest treatment</button>
+          <button class="badge" onclick="prepareAcceptance('${esc(r.risk_id)}')">Prepare acceptance</button>
+          <button class="badge" onclick="adviseRisk('${esc(r.risk_id)}')">Advise</button>
+          <button class="badge" onclick="acceptRisk(${r.id})">Accept</button>
+          <button class="badge" onclick="openInClassic(${r.id})">Open in Classic</button>
+        </div>
+      </div>`;
+    }).join("")+'</div>';
+    el.innerHTML=h;
+    el.querySelectorAll(".chips button").forEach(b=>b.addEventListener("click",()=>{
+      const f=b.dataset.f; // simple client filter demo
+      el.querySelectorAll(".chips button").forEach(x=>x.classList.remove("active")); b.classList.add("active");
+      // filter logic could re-fetch with params; demo just toggles
+    }));
+  }catch(e){ el.innerHTML='<p style="color:var(--red)">'+esc(e.message)+'</p>';}
+}
+async function renderLandscape(){
+  const el=viewEl("landscape"); el.innerHTML='<div class="skeleton" style="height:200px"></div>';
+  try{
+    const land=await api("/api/security/landscape?investigation_id="+scopeInv);
+    if(!(land.inventory||[]).length && !(land.risk_register||[]).length){
+      el.innerHTML='<div class="card"><h3>No landscape yet</h3><p style="font-size:12px;color:var(--text2)">No assessment yet — landscape builds from stored assessments. Launch Manager template or run a security assessment.</p><button class="badge" onclick="location.href=\'/\'">Open Classic</button></div>';
+      return;
+    }
+    let h='<div class="card"><h3>Inventory</h3><p style="font-size:12px">'+(land.inventory||[]).length+' models · own/inherited/cascade '+JSON.stringify(land.counts||land.partition||{})+'</p></div>';
+    h+='<div class="card"><h3>Graph (simplified) <select id="graphMode" onchange="renderLandscape()" style="font-size:11px;margin-left:8px"><option>Lite map</option><option>Risk graph</option><option>Pathway</option></select> <select id="graphFilter" onchange="renderLandscape()" style="font-size:11px"><option value="">All types</option><option value="model">Models</option><option value="privacy">Privacy</option></select></h3><div id="liteGraph" style="height:280px;border:1px solid var(--border);border-radius:8px;background:var(--bg)"></div><div style="font-size:11px;color:var(--text2);margin-top:4px">Lite map: 200 node cap; list twin below. Focus: click node → neighborhood 1–2; minimap via vis controls; hierarchical/radial/force presets.</div></div>';
+    h+='<div class="card"><h3>Cascades</h3><p style="font-size:12px">'+(land.cascade||land.cascade_map||[]).length+' cascade edges · inherited risks always labeled</p></div>';
+    el.innerHTML=h;
+    // lite graph
+    try{
+      const g=await api("/api/security/landscape/graph?investigation_id="+scopeInv);
+      const allNodes=g.nodes||[]; const allEdges=g.edges||g.relationships||[];
+      const nodes=allNodes.slice(0,120).map(n=>({id:n.id,label:(n.label||n.title||"").slice(0,20),group:n.type||n.artifact_type}));
+      let edges=allEdges.slice(0,200).map(e=>({from:e.source_id||e.from||e.source,to:e.target_id||e.to||e.target,label:e.relationship_type||e.label||e.type,dashes:(e.relationship_type||"").includes("cascade")}));
+      if(!nodes.length){
+        // pathway preset fallback: data class → pathway → sink
+        const pn=new vis.DataSet([{id:1,label:"Data\nconfidential",shape:"box",color:"#bc8cff"},{id:2,label:"Chat/API",shape:"box"},{id:3,label:"Vendor train/log",shape:"box"}]);
+        const pe=new vis.DataSet([{from:1,to:2,label:"paste"},{from:2,to:3,label:"retention"}]);
+        const cc=document.getElementById("liteGraph");
+        if(cc && window.vis){ new vis.Network(cc,{nodes:pn,edges:pe},{layout:{hierarchical:{direction:"LR"}}}); }
+      } else {
+        const container=document.getElementById("liteGraph");
+        if(container && window.vis){ new vis.Network(container,{nodes:new vis.DataSet(nodes),edges:new vis.DataSet(edges)},{physics:{enabled:false},interaction:{zoomView:true}}); }
+      }
+      // list twin always available
+      let tbl='<div class="card"><h3>Connected risks (list twin)</h3><table class="table"><tr><th>From</th><th>Edge</th><th>To</th></tr>';
+      const listEdges=(allEdges.length?allEdges:[{from:1,to:2,label:"paste"},{from:2,to:3,label:"retention"}]).slice(0,20);
+      listEdges.forEach(e=>{ tbl+=`<tr><td>${esc(e.from||e.source_id||"")}</td><td>${esc(e.label||e.relationship_type||"")}</td><td>${esc(e.to||e.target_id||"")}</td></tr>`;});
+      tbl+='</table></div>'; el.innerHTML+=tbl;
+    }catch(e){ el.innerHTML+='<p style="font-size:11px;color:var(--text2)">Graph unavailable: '+esc(e.message)+'</p>';}
+  }catch(e){ el.innerHTML='<p style="color:var(--red)">'+esc(e.message)+'</p>';}
+}
+async function renderPrivacy(){
+  const el=viewEl("privacy"); el.innerHTML='<div class="skeleton" style="height:200px"></div>';
+  try{
+    const d=await api("/api/portfolio/register?investigation_id="+scopeInv+"&tag=provider_posture");
+    const txt=await api("/api/search?q=retention&investigation_id="+scopeInv+"&types=risk&limit=5").catch(()=>({hits:[]}));
+    let h='<div class="card"><h3>Provider posture matrix (PDP/RLHF)</h3><p style="font-size:12px;color:var(--text2)">Training / retention / feedback / ZDR per provider (privacy & legal need stated policy vs unknown).</p><table class="table"><tr><th>Risk</th><th>Standing</th><th>Evidence</th></tr>';
+    (d.risks||[]).slice(0,12).forEach(r=>{ h+=`<tr><td>${esc(r.risk_id)} ${esc(r.title||"").slice(0,40)}</td><td>${esc(r.confidence_band||"")}</td><td>${(r.evidence_ids||[]).length}</td></tr>`;});
+    h+='</table></div>';
+    h+='<div class="card"><h3>Leakage pathway map</h3><div id="pathGraph" style="height:220px;border:1px solid var(--border);border-radius:8px"></div><p style="font-size:11px;color:var(--text2)">Data class → pathway → sink with retention badges when known.</p></div>';
+    h+='<div class="card"><h3>Am I a datapoint?</h3><p style="font-size:12px">Direct: paste, API logs, connectors, feedback. Indirect: public web, OSS, third-party vendors, benchmarks. See contribution map in synthesis.</p></div>';
+    h+='<div class="card"><h3>Retention outliers</h3><p style="font-size:12px">Multi-year feedback retention flagged as elevated exposure (RM05/06). Filter: <a href="#" onclick="showView(\'risks\');return false">Privacy only</a></p></div>';
+    el.innerHTML=h;
+    try{
+      const container=document.getElementById("pathGraph");
+      if(container && window.vis){
+        const nodes=new vis.DataSet([{id:1,label:"Data\nconfidential",shape:"box"},{id:2,label:"Chat/API",shape:"box"},{id:3,label:"Vendor\ntrain/log",shape:"box"},{id:4,label:"Review",shape:"ellipse"}]);
+        const edges=new vis.DataSet([{from:1,to:2,label:"paste"},{from:2,to:3,label:"retention"},{from:2,to:4,label:"human review"}]);
+        new vis.Network(container,{nodes,edges},{layout:{hierarchical:{direction:"LR"}}});
+      }
+    }catch(e){}
+  }catch(e){ el.innerHTML='<p style="color:var(--red)">'+esc(e.message)+'</p>';}
+}
+async function renderModels(){
+  const el=viewEl("models"); el.innerHTML='<div class="skeleton" style="height:200px"></div>';
+  try{
+    const land=await api("/api/security/landscape?investigation_id="+scopeInv);
+    let h='<div class="card"><h3>Models — W1/W2/W3 + RM*</h3><canvas id="chartModels" height="80"></canvas></div>';
+    h+='<div class="card"><h3>Memorization risks RM01-06</h3><p style="font-size:12px">Preference-data memorization, SFT persistence, feedback-transcript, cross-user leakage, org-tenant, safety-review retention.<br>Tags: <span class="badge">rlhf_memorization</span></p></div>';
+    h+='<div class="card"><h3>Experiments</h3><p style="font-size:12px">Plan only — canary, MI, extraction probes. Nothing executes automatically.</p></div>';
+    el.innerHTML=h;
+    setTimeout(()=>{
+      const c=document.getElementById("chartModels"); if(c && window.Chart){
+        try{ new Chart(c,{type:"bar",data:{labels:["W1","W2","W3","RM"],datasets:[{label:"Open",data:[3,2,4,2],backgroundColor:["#58a6ff","#bc8cff","#3fb950","#d29922"]}]},options:{plugins:{legend:{display:false}},scales:{y:{ticks:{color:"#8b949e"}},x:{ticks:{color:"#8b949e"}}}}}); }catch(e){}
+      }
+    },100);
+  }catch(e){ el.innerHTML='<p style="color:var(--red)">'+esc(e.message)+'</p>';}
+}
+async function renderAssess(){
+  const el=viewEl("assess"); el.innerHTML='<div class="skeleton" style="height:200px"></div>';
+  try{
+    const r=await fetch(API+"/api/investigations/"+scopeInv+"/assessments").then(r=>r.json()).catch(()=>({items:[]}));
+    const items=r.items||r||[];
+    let h='<div class="card"><h3>Assessment status board</h3><table class="table"><tr><th>ID</th><th>Path</th><th>Status</th><th>Score</th></tr>';
+    items.slice(0,20).forEach(it=>{ h+=`<tr><td>${it.id||it.assessment_id}</td><td>${esc(it.path||it.assessment_path||"")}</td><td>${esc(it.status||"")}</td><td>${esc(String(it.overall_pct||it.residual_pct||""))}</td></tr>`;});
+    h+='</table></div>';
+    // approvals
+    try{ const ap=await api("/api/approvals/pending?limit=20"); h+='<div class="card"><h3>Approvals</h3><p style="font-size:12px">Pending: '+(ap.approvals||[]).length+' · <a href="#" onclick="showView(\'decisions\');route();return false">Open Decisions</a></p></div>'; }catch(e){}
+    el.innerHTML=h;
+  }catch(e){ el.innerHTML='<p style="color:var(--red)">'+esc(e.message)+'</p>';}
+}
+async function renderDecisions(){
+  const el=viewEl("decisions"); el.innerHTML='<div class="skeleton" style="height:200px"></div>';
+  try{
+    const r=await api("/api/dashboard/robustness?investigation_id="+scopeInv);
+    const ah=r.approval_hygiene||{}; const acc=r.acceptance_discipline||{};
+    let h='<div class="card"><h3>Risk acceptance</h3><p style="font-size:12px">Accepted: '+(acc.n||0)+' / '+(acc.of||0)+' · disciplined: '+(acc.pct||"unknown")+'</p></div>';
+    h+='<div class="card"><h3>Approvals</h3><p style="font-size:12px">Awaiting: '+(ah.awaiting||[]).length+' · Self-approval violations: '+(ah.self_approval_violations||[]).length+'</p></div>';
+    h+='<div class="card"><h3>Ledger</h3><p style="font-size:12px">Decisions are ledger-backed; use Briefs for export.</p></div>';
+    el.innerHTML=h;
+  }catch(e){ el.innerHTML='<p style="color:var(--red)">'+esc(e.message)+'</p>';}
+}
+async function renderInsights(){
+  const el=viewEl("insights"); el.innerHTML='<div class="skeleton" style="height:200px"></div>';
+  try{
+    const land=await api("/api/security/landscape?investigation_id="+scopeInv);
+    const cards=land.insight_cards||[];
+    let h='<div class="cards">'+cards.map(c=>`<div class="card"><h3><i class="fas fa-lightbulb"></i> Insight</h3><p style="font-size:12px">${esc(c.text||c.title||"")}</p><p style="font-size:11px;color:var(--text2)">${esc(c.why||"")}</p></div>`).join("")+'</div>';
+    if(!cards.length) h='<p style="color:var(--text2);font-size:12px">No deterministic insights for this scope. Insights are deterministic cards from register structure.</p>';
+    el.innerHTML=h;
+  }catch(e){ el.innerHTML='<p style="color:var(--red)">'+esc(e.message)+'</p>';}
+}
+async function renderBriefs(){
+  const el=viewEl("briefs");
+  let h='<div class="card"><h3>Reporting studio</h3><p style="font-size:12px">Choose type → current filters → preview → export MD/PDF/bundle.</p>';
+  h+='<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">';
+  ["board","privacy","counsel","tech"].forEach(t=>{ h+=`<button class="badge" onclick="openBrief('${t}')">${t}</button>`;});
+  h+='</div></div><div id="briefPreview"></div>';
+  el.innerHTML=h;
+}
+async function openBrief(type){
+  const el=document.getElementById("briefPreview"); if(!el) return; el.innerHTML='<div class="skeleton" style="height:120px"></div>';
+  try{
+    const d=await api("/api/console/brief?investigation_id="+scopeInv+"&type="+type);
+    el.innerHTML='<div class="card reader">'+renderReader(d.markdown||"")+'</div><div style="margin-top:6px;display:flex;gap:6px"><button class="badge" onclick="downloadBrief(\''+type+'\',\'md\')">Download MD</button><button class="badge" onclick="downloadBrief(\''+type+'\',\'pdf\')">Download PDF</button></div>';
+  }catch(e){ el.innerHTML='<p style="color:var(--red)">'+esc(e.message)+'</p>';}
+}
+function downloadBrief(type,fmt){
+  const url=API+"/api/console/brief?investigation_id="+scopeInv+"&type="+type;
+  // reuse dossier pipeline: for console we serve markdown, client prints via print CSS
+  location.href=url;
+}
+function renderReader(md){
+  // minimal reader: headings, claim chips, risk callouts, collapsible, glossary
+  let html=esc(md);
+  html=html.replace(/^### (.*$)/gm,'<h3>$1</h3>').replace(/^## (.*$)/gm,'<h2>$1</h2>').replace(/^# (.*$)/gm,'<h1>$1</h1>');
+  html=html.replace(/\*\*(.*?)\*\*/g,'<strong>$1</strong>');
+  html=html.replace(/`([^`]+)`/g,'<code>$1</code>');
+  html=html.replace(/\n\n/g,'</p><p>').replace(/\n/g,'<br>');
+  html='<p>'+html+'</p>';
+  // claim chips
+  html=html.replace(/Stated policy/g,'<span class="badge">Stated policy</span>').replace(/Independent/g,'<span class="badge">Independent</span>').replace(/Unknown/g,'<span class="badge unknown">Unknown</span>');
+  return '<div class="reader">'+html+'</div><p style="font-size:11px;color:var(--text2);margin-top:6px">Reading modes: Full · Summary only · Privacy-only · Risks-only (filters in console top bar)</p>';
+}
+async function renderAdmin(){
+  const el=viewEl("admin"); el.innerHTML='<div class="skeleton" style="height:200px"></div>';
+  try{
+    const inv=scopeInv; const pack=await api("/api/packs/changelog").catch(()=>({entries:[]}));
+    let h='<div class="card"><h3>Job health</h3><p style="font-size:12px">Scheduler ticks + job queue — see /api/jobs. Incomplete stats flagged when present.</p></div>';
+    h+='<div class="card"><h3>Pack versions</h3><pre style="font-size:11px;white-space:pre-wrap">'+esc(JSON.stringify(pack.entries.slice(0,3),null,2))+'</pre></div>';
+    el.innerHTML=h;
+  }catch(e){ el.innerHTML='<p style="color:var(--red)">'+esc(e.message)+'</p>';}
+}
+async function openReader(type,id){
+  // generic reader for risks/evidence
+  viewEl("reader").style.display=""; showView("reader");
+  const el=viewEl("reader"); el.innerHTML='<div class="skeleton" style="height:200px"></div>';
+  try{
+    const d=await api("/api/artifacts/"+id).catch(()=>({title:"Risk "+id,description:"No detail"}));
+    el.innerHTML='<div class="card reader"><h1>'+esc(d.title||"Detail")+'</h1><p>'+esc(d.description||"")+'</p><pre style="font-size:11px;white-space:pre-wrap">'+esc(JSON.stringify(d,null,2))+'</pre></div>';
+  }catch(e){ el.innerHTML='<p style="color:var(--red)">'+esc(e.message)+'</p>';}
+}
+function openRisk(id){ /* deep link to risk detail */ showView("risks"); setTimeout(()=>{ const el=document.querySelector(`[data-risk="${id}"]`); if(el) el.scrollIntoView({behavior:"smooth"}); },200); }
+function adviseRisk(id){ alert("Mitigation advisor for "+id+" — open in Risks → Advise"); showView("risks"); }
+function acceptRisk(id){ const note=prompt("Rationale for acceptance:"); if(note===null) return; fetch(API+"/api/portfolio/register/state",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({entry_id:id,accept:true,accepted_by:"console",acceptance_note:note})}).then(r=>r.json()).then(()=>alert("Accepted")).catch(e=>alert(e));}
+function openInClassic(id){ location.href="/?risk="+id+"#portfolio"; }
+// search
+let sTimer=null;
+document.getElementById("globalQ").addEventListener("input",e=>{
+  const q=e.target.value.trim(); clearTimeout(sTimer);
+  if(!q){ document.getElementById("suggestBox").style.display="none"; return; }
+  sTimer=setTimeout(async()=>{
+    try{
+      const ao=persona==="researcher"?"false":"true";
+      const d=await api("/api/search/suggest?q="+encodeURIComponent(q)+"&investigation_id="+(scopeInv||"")+"&accepted_only="+ao);
+      const box=document.getElementById("suggestBox"); box.innerHTML="";
+      Object.entries(d.suggestions||{}).forEach(([type,items])=>{
+        items.slice(0,3).forEach(it=>{const a=document.createElement("a"); a.href="#"; a.innerHTML=`<b>${esc(it.title)}</b> <small>· ${type} · ${esc(it.snippet.slice(0,60))}</small>`; a.onclick=(ev)=>{ev.preventDefault(); showSearch(q);}; box.appendChild(a);});
+      });
+      box.style.display=box.children.length?"block":"none";
+    }catch(e){}
+  },250);
+});
+function showSearch(q){
+  showView("search"); const el=viewEl("search"); el.style.display=""; el.innerHTML='<div class="skeleton" style="height:200px"></div>';
+  const ao=persona==="researcher"?"false":"true";
+  api("/api/search?q="+encodeURIComponent(q)+"&investigation_id="+(scopeInv||"")+"&limit=20&accepted_only="+ao).then(d=>{
+    let h='<div class="card"><h3>Search: '+esc(q)+' <small style="color:var(--text2)">'+d.total+' hits</small></h3>';
+    h+='<div style="font-size:11px;color:var(--text2)">Filters: layer:privacy severity:high · Operators: AND/OR, "exact phrase", memoriz* · Accepted-only: '+(d.accepted_only?"on":"off")+'</div></div>';
+    h+='<div class="cards">'+(d.hits||[]).map(hit=>`<div class="card"><h3>${esc(hit.title)}</h3><p style="font-size:11px;color:var(--text2)">${hit.snippet}</p><p style="font-size:10px;color:var(--text2)">why matched: ${esc(hit.highlights.slice(0,80))} · score ${hit.score}</p></div>`).join("")+'</div>';
+    if(!(d.hits||[]).length) h+='<p style="color:var(--text2);font-size:12px">Zero results — try removing filters or <a href="#" onclick="showView(\'risks\');return false">Run collection on this query</a> (researcher/lead).</p>';
+    el.innerHTML=h;
+  }).catch(e=>{ el.innerHTML='<p style="color:var(--red)">'+esc(e.message)+'</p>';});
+}
+document.getElementById("globalQ").addEventListener("keydown",e=>{ if(e.key==="Enter"){ e.preventDefault(); showSearch(e.target.value); }});
+function toggleConsoleTheme(){ const cur=document.documentElement.classList.contains("light")?"dark":"light"; if(cur==="light") document.documentElement.classList.add("light"); else document.documentElement.classList.remove("light"); localStorage.setItem("console.theme",cur); const ic=document.getElementById("consoleThemeIcon"); if(ic) ic.className=cur==="light"?"fas fa-sun":"fas fa-moon"; }
+(function(){ const t=localStorage.getItem("console.theme"); if(t==="light") document.documentElement.classList.add("light"); const ic=document.getElementById("consoleThemeIcon"); if(ic) ic.className=t==="light"?"fas fa-sun":"fas fa-moon"; })();
+personaBar(); loadInvestigations().then(()=>route());
+window.addEventListener("hashchange",()=>{ const v=location.hash.slice(1); if(v) showView(v); route();});
+if(location.hash) showView(location.hash.slice(1));
+// usability: sticky context bar + saved views + keyboard + bulk
+function updateContextBar(){
+  const el=document.getElementById("ctxScope"); if(el) el.textContent="Scope: #"+(scopeInv||"—")+(scopeIni?" · initiative "+scopeIni:" · portfolio");
+  const pe=document.getElementById("ctxPersona"); if(pe) pe.textContent="Persona: "+(PERSONA_LABEL[persona]||persona);
+  const ff=document.getElementById("ctxFilters"); if(ff){ const chips=[...document.querySelectorAll(".chips button.active")].map(b=>b.textContent).join(", ")||"all"; ff.textContent="Filters: "+chips; }
+  const rf=document.getElementById("ctxRefresh"); if(rf) rf.textContent="Last refreshed: "+new Date().toLocaleTimeString();
+}
+setInterval(updateContextBar, 1000);
+function saveView(){
+  const name=prompt("Save view as:"); if(!name) return;
+  const views=JSON.parse(localStorage.getItem("console.views")||"{}"); views[name]={persona,scopeInv,scopeIni,view:currentView}; localStorage.setItem("console.views",JSON.stringify(views)); refreshSavedViews();
+}
+function refreshSavedViews(){
+  const sel=document.getElementById("savedViews"); if(!sel) return; const views=JSON.parse(localStorage.getItem("console.views")||"{}");
+  sel.innerHTML='<option value="">Saved views…</option>'+Object.keys(views).map(k=>`<option value="${esc(k)}">${esc(k)}</option>`).join("");
+}
+function loadView(name){
+  if(!name) return; const views=JSON.parse(localStorage.getItem("console.views")||"{}"); const v=views[name]; if(!v) return;
+  persona=v.persona||persona; localStorage.setItem("console.persona",persona); personaBar();
+  scopeInv=v.scopeInv; scopeIni=v.scopeIni||""; document.getElementById("scopeInv").value=scopeInv||""; document.getElementById("scopeIni").value=scopeIni;
+  showView(v.view||"home"); route();
+}
+refreshSavedViews();
+// keyboard: / focus, j/k nav, e evidence, esc close
+document.addEventListener("keydown",e=>{
+  if(e.target.tagName==="INPUT"||e.target.tagName==="TEXTAREA") return;
+  if(e.key==="j"){ const cards=[...document.querySelectorAll(".risk-card")]; const idx=cards.findIndex(c=>c.classList.contains("focused")); if(idx>=0) cards[idx].classList.remove("focused"); const n=cards[Math.min(idx+1,cards.length-1)]; if(n){ n.classList.add("focused"); n.scrollIntoView({block:"center"});} }
+  if(e.key==="k"){ const cards=[...document.querySelectorAll(".risk-card")]; const idx=cards.findIndex(c=>c.classList.contains("focused")); if(idx>=0) cards[idx].classList.remove("focused"); const n=cards[Math.max(idx-1,0)]; if(n){ n.classList.add("focused"); n.scrollIntoView({block:"center"});} }
+  if(e.key==="e"){ const f=document.querySelector(".risk-card.focused button"); if(f) f.click(); }
+  if(e.key==="Escape"){ document.getElementById("suggestBox").style.display="none"; document.querySelectorAll("[id^='view-']").forEach(el=>{ if(el.id!=="view-home" && el.style.display!=="none" && el.querySelector(".drawer")) el.querySelector(".drawer").style.display="none"; }); }
+});
+// bulk actions for lead
+let bulkIds=new Set();
+function toggleBulk(id){ if(bulkIds.has(id)) bulkIds.delete(id); else bulkIds.add(id); document.getElementById("bulkBar").style.display=bulkIds.size?"flex":"none"; document.getElementById("bulkCount").textContent=bulkIds.size; }
+function bulkAssign(){ const owner=prompt("Assign owner:"); if(!owner) return; bulkIds.forEach(id=>fetch(API+"/api/portfolio/register/state",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({entry_id:Number(id),owner})}).catch(()=>{})); alert("Queued "+bulkIds.size+" assignments"); bulkIds.clear(); route(); }
+function bulkStatus(){ const st=prompt("Set status (open/mitigating/accepted/closed):"); if(!st) return; bulkIds.forEach(id=>fetch(API+"/api/portfolio/register/state",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({entry_id:Number(id),status:st})}).catch(()=>{})); alert("Queued"); bulkIds.clear(); route(); }
+function enrichSelected(){ if(!bulkIds.size) return alert("Select risks first"); bulkIds.forEach(id=>fetch(API+"/api/risks/enrich",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({investigation_id:scopeInv})}).catch(()=>{})); alert("Enrich queued for "+bulkIds.size); }
+function syncRisks(){ fetch(API+"/api/risks/sync",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({investigation_id:scopeInv})}).then(r=>r.json()).then(d=>{ alert("Synced "+(d.upserted||0)+" risks"); route(); }).catch(e=>alert(e)); }
+function runRiskReview(){ fetch(API+"/api/risks/review",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({investigation_id:scopeInv})}).then(r=>r.json()).then(d=>{ alert("Review done: "+JSON.stringify(d).slice(0,120)); route(); }).catch(e=>alert(e)); }
+function suggestTreatment(riskId){ fetch(API+"/api/agents/invoke",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({to:"risk-treatment",intent:"propose_treatment",payload:{investigation_id:scopeInv}})}).then(r=>r.json()).then(d=>alert("Treatment: "+JSON.stringify(d.payload||d).slice(0,200))).catch(e=>alert(e)); }
+function prepareAcceptance(riskId){ const rationale=prompt("Rationale for acceptance:"); if(!rationale) return; fetch(API+"/api/risks/decide",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({risk_ids:[riskId],strategy:"accept",rationale})}).then(r=>r.json()).then(d=>alert("Draft acceptance ready — requires approval: "+JSON.stringify(d.plan||d).slice(0,200))).catch(e=>alert(e)); }
+</script>
+</body>
+</html>

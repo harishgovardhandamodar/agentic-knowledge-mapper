@@ -44,35 +44,44 @@ Everything else is a dependency the app can work without:
 
 ```mermaid
 flowchart TB
-    subgraph BROWSER["Browser — no build step, no framework"]
-        SPA["static/index.html<br/>single-file vanilla JS SPA<br/>vis-network · mermaid@10 lazy"]
+    subgraph BROWSER["Browser — no build step, vanilla JS"]
+        SPA["static/index.html<br/>Classic Mapper + Security<br/>Leadership Dashboard pane"]
+        RC["static/console/index.html<br/>Risk Console shell<br/>persona presets · Risk Cards · charts · graphs"]
     end
     subgraph APP["FastAPI app :8204 — container agentic-knowledge-mapper"]
-        API["main.py<br/>93 REST paths · request schemas"]
+        API["main.py<br/>~110 REST paths · /console + /api/console/* + /api/search"]
         LED["ledger_api.py + ledger.py<br/>hash chain · mandates · proofs"]
-        AG["agent.py<br/>collection loop"]
+        AG["agent.py<br/>collection loop + RLHF/memorization query packs"]
         EX["explainer.py<br/>Q&A pipeline"]
         SA["security_agent.py<br/>assessment worker"]
-        A2A["agents.py<br/>A2A envelope bus · 9 agent cards"]
+        A2A["agents.py<br/>A2A envelope bus · 14 agent cards inc. mitigation-advisor"]
         EN["security.py<br/>threat pack · scoring · report"]
-        MGR["manager.py<br/>parse · fan-out · synthesis"]
+        EVAL["model_eval.py<br/>W1/W2/W3 · memorization + alignment_data_leakage + subtypes"]
+        MGR["manager.py<br/>parse (provider template) · fan-out · synthesis (provider compare)"]
         STD["standards_matrix.py<br/>score matrix · findings"]
-        SCH["scheduler.py<br/>cron · watch re-answers"]
+        SCH["scheduler.py<br/>cron · watch · dashboard_snapshots hourly"]
         JQ["jobqueue.py<br/>persisted · idempotent · leased"]
         SUP["cve.py · drift.py · yield_.py · recommend.py<br/>evalkit.py · grounding.py · writeguard.py"]
         SRCH["search.py<br/>RSS · arXiv · DuckDuckGo"]
+        KBS["kb_search.py<br/>FTS5 → LIKE fallback KB search"]
+        CONS["console.py<br/>BFF aggregators (home/risks/brief)"]
+        PORT["portfolio.py<br/>Initiative · unified register · LP01-08 / PB01-07"]
+        EXEC["executive.py<br/>availability · distribution · robustness"]
+        PP["provider_posture.py<br/>PDP01-10 · SAF01-06 · RLHF01-08"]
+        MEM["memorization.py<br/>RM01-06 · preference memorization"]
+        LEAK["leakage.py<br/>pathways + playbooks"]
         LLM["llm.py<br/>single model choke point"]
         OBS["obs.py<br/>trace id · structured logs"]
     end
-    DB[("SQLite WAL<br/>data/akm.db<br/>17 tables")]
-    SPA --> API
+    DB[("SQLite WAL<br/>data/akm.db<br/>20+ tables<br/>initiatives · risk_entries · snapshots")]
+    SPA & RC --> API
     API --> LED
-    API --> AG & EX & SA & MGR & STD & SCH & JQ
+    API --> AG & EX & SA & MGR & STD & SCH & JQ & CONS & KBS & PORT & EXEC & PP & MEM
     AG --> SRCH
     AG & EX & SA & A2A & MGR --> LLM
-    SA --> A2A --> EN
+    SA --> A2A --> EN & EVAL
     AG & EX & SUP & SCH --> LLM
-    API & AG & EX & SA & MGR & STD & SCH & JQ & LED --> DB
+    API & AG & EX & SA & MGR & STD & SCH & JQ & LED & PORT & EXEC --> DB
     LED -.->|"hash + redact every event"| LLM
     OBS -.->|"one id per user action"| API & AG & EX & SA & A2A
 
@@ -82,21 +91,29 @@ flowchart TB
 
 | Module | Responsibility | Notable failure behaviour |
 |---|---|---|
-| `main.py` | Routes, request schemas, JSON shaping | 404/503 carry the reason, never a silent empty list |
-| `agent.py` | plan → search → analyze → map → refine | 429 guard when a run is already going |
-| `explainer.py` | research → compose → ground → critique → save | Bounded phases; corpus cache makes repeats free |
-| `security_agent.py` | Assessment orchestration + approval gate | Parks on `awaiting_approval` rather than proceeding |
-| `agents.py` | A2A `a2a/1.0` envelopes, 9 agent cards (5 catalog + 4 model) | Every hop appended to the trace and the chain |
+| `main.py` | Routes (~110 paths), schemas, `/console` + `/api/console/*` + `/api/search` (KB FTS) | 404/503 carry reason; `RISK_CONSOLE_ENABLED=0` hides console |
+| `agent.py` | plan → search → analyze → map → refine; provider/RLHF/memorization query packs | 429 guard when busy; provider detection before generic parse |
+| `explainer.py` | research → compose → ground → critique → save; `manager_synthesis` carried in summary | Bounded phases; corpus cache; summary carries compiled synthesis |
+| `security_agent.py` | Assessment orchestration + approval gate + PDP/SAF/RLHF/RM hooks | Parks on `awaiting_approval`; posture hooks fail-open |
+| `agents.py` | A2A `a2a/1.0` envelopes, 14 agent cards (5 catalog + 4 model + 5 new incl. `mitigation-advisor` + RM) | Every hop on trace + chain |
 | `security.py` | Threat pack 2.1.0, deterministic scoring, report | Pure function; pinned by `evalkit.py` |
-| `manager.py` | Command parse, fan-out, synthesis | No background watcher — statuses derive live |
+| `model_eval.py` | Model-engineering core: attack taxonomy `memorization`/`alignment_data_leakage` + subtypes, `method_general` 0.25, `preference_data_exposure`, MM01-16, fingerprints 2.0.0/1.1.0 | No LLM; evalkit-pinned |
+| `manager.py` | Command parse (provider template per lab), fan-out, synthesis (provider compare + RLHF + RM + safety dual matrix) | No watcher; statuses derive live |
+| `portfolio.py` | Unified register (product/model/privacy/supply_chain + RM* `preference_feedback`/`rlhf_memorization`), initiatives, `stated_situation`, leakage `LP01-08`/`PB01-07` | `register_with_state` read-only for dashboard |
+| `leakage.py` | Pathways + process `PR01-05` + playbooks `PB01-07` (incl. RLHF), fingerprints 1.1.0 | Reads situation tags only |
+| `provider_posture.py` | `provider_data_posture_v1` PDP01-10 + `SAF01-06` + `RLHF01-08`, contribution map, guard, `assess_posture` envelope | Safety firewalled from PDP; deterministic partial |
+| `memorization.py` | `akm-rlhf-memorization` RM01-06, query pack, `PB07`, `rm05_situational`, `guard_memorization` | Null if no evidence; high/low exposure never invented |
+| `executive.py` | Dashboard: availability (initiative/model/product/PDP/safety) + distribution (`by_provider`, top RM*) + robustness + attention + snapshots | Read-only aggregates, no composite score |
+| `console.py` | BFF aggregators `home`/`risks`/`brief` (persona-aware, read-only) | Composes portfolio + executive |
+| `kb_search.py` | FTS5 → LIKE fallback KB search over risks/artifacts/assets/decisions, suggest, highlights, facets | Accepted-only default for DPO/Legal |
 | `standards_matrix.py` | 34 frameworks × 10 pillars, relevance ranking | Cached; `no-store` per assessment |
-| `scheduler.py` | 1-min cron tick, 10-min watch tick | Missed windows are skipped, never backfilled |
-| `jobqueue.py` | Row-before-thread, idempotency key, lease | Lease expiry recovers dead workers, not slow ones |
-| `ledger.py` / `ledger_api.py` | Chains, mandates, approvals, proofs, export | **Fail-open**: an outage degrades to unaudited, never 500 |
-| `llm.py` | The one place a model is called | Failover chain, then deterministic fallback by callers |
-| `writeguard.py` | Write-verify-repair over composed prose | Can only remove text, never add it |
-| `grounding.py` | One shared verbatim-quote gate | Invalid citations are dropped and counted |
-| `obs.py` | Trace id, structured logging | Never raises into a request |
+| `scheduler.py` | 1-min cron, 10-min watch, hourly `dashboard_snapshots` | Missed windows skipped |
+| `jobqueue.py` | Row-before-thread, idempotency key, lease | Lease expiry recovers dead workers |
+| `ledger.py` / `ledger_api.py` | Chains, mandates, approvals, proofs, export | **Fail-open**; outage → unaudited |
+| `llm.py` | Single gateway choke point | Failover chain, then deterministic fallback |
+| `writeguard.py` | Write-verify-repair; provider+memorization tier-gated phrases | Can only remove |
+| `grounding.py` | Verbatim-quote gate | Drops invalid citations |
+| `obs.py` | Trace id, structured logs | Never raises |
 
 ## Deployment (C4 level 3)
 

@@ -68,6 +68,15 @@ _DOCS: list[dict[str, str]] = [
     {"id": "controls", "file": "controls.md", "title": "Control catalogue",
      "group": "Privacy & assurance", "kind": "catalogue · evidence",
      "answers": "Every governance, integrity and privacy control, with where it is enforced"},
+    {"id": "risk-console", "file": "risk-console.md", "title": "Risk Console",
+     "group": "User-facing", "kind": "alternative GUI · personas · risk-first",
+     "answers": "How the parallel Risk Console presents the same backend for researchers to CISOs"},
+    {"id": "risk-management", "file": "risk-management.md", "title": "Risk Management Agents",
+     "group": "Behaviour", "kind": "risk lifecycle · agents · jobs",
+     "answers": "How the risk family (intake → triage → treat → monitor → govern → report) manages the register"},
+    {"id": "risk-scoring", "file": "risk-scoring.md", "title": "Risk Scoring",
+     "group": "Structure", "kind": "scoring · bands · fingerprints",
+     "answers": "How register-risk-scoring-v1 produces inherent, residual, priority and band"},
 ]
 
 _FENCE_RE = re.compile(r"^\s*```(\w*)\s*$")

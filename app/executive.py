@@ -812,10 +812,13 @@ def attention(db, inv_id: int, scope: dict[str, Any] | None = None,
     items: list[dict[str, Any]] = []
     for r in rows:
         sev = r.get("severity") or 0
+        # Use stored priority if available (from risk_scoring), else severity
+        prio = r.get("priority_score")
+        rank_base = prio if isinstance(prio, (int, float)) else sev
         if r.get("status") == "open" and sev >= HIGH and not r.get("owner"):
             items.append({
-                "kind": "unowned_open_high", "rank_score": round(sev, 1),
-                "rank_why": f"severity {sev}, no owner",
+                "kind": "unowned_open_high", "rank_score": round(rank_base, 1),
+                "rank_why": f"priority {rank_base} (severity {sev}), no owner" if prio is not None else f"severity {sev}, no owner",
                 "title": f"{r['risk_id']} ({r['layer']}) has no owner",
                 "detail": r.get("title") or "",
                 "link": {"view": "portfolio", "risk_id": r["risk_id"],
@@ -823,8 +826,8 @@ def attention(db, inv_id: int, scope: dict[str, Any] | None = None,
         if r.get("status") == "open" and sev >= HIGH and not \
                 (r.get("control_options") or r.get("mitigation_ids")):
             items.append({
-                "kind": "unmapped_open_high", "rank_score": round(sev, 1),
-                "rank_why": f"severity {sev}, no mapped control",
+                "kind": "unmapped_open_high", "rank_score": round(rank_base, 1),
+                "rank_why": f"priority {rank_base} (severity {sev}), no mapped control" if prio is not None else f"severity {sev}, no mapped control",
                 "title": f"{r['risk_id']} ({r['layer']}) has no mapped control",
                 "detail": "Open the mitigation advisor for this risk id.",
                 "link": {"view": "portfolio", "tab": "advice",

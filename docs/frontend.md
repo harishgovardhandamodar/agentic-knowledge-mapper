@@ -9,7 +9,7 @@ Related: [architecture](architecture.md) · [agent-loop](agent-loop.md) ·
 
 ## View map
 
-`switchApp()` selects one of **five apps**; `switchView()` selects one of the
+`switchApp()` selects one of **seven apps** (Mapper, AI Security, Leadership Dashboard, Risk Console, Manager, Standards, Design); `switchView()` selects one of the
 **nine Mapper views**. This is the distinction that trips people up: AI
 Security, Agentic Manager, AI Standards and Design & Architecture are sibling
 *apps*, not tabs inside the Mapper, and the Mapper's own view list does not
@@ -20,9 +20,11 @@ flowchart TB
     APPS["Apps (switchApp)"]
     APPS --> AKM["akm — Mapper"]
     APPS --> SEC["security — AI Security"]
+    APPS --> DASH["dashboard — Leadership Dashboard<br/>availability / distribution / robustness"]
+    APPS --> CONS["console — Risk Console<br/>persona presets · Risk Cards · Report Reader<br/>/console route, same REST"]
     APPS --> MGR["manager — Agentic Manager"]
     APPS --> STD["standards — AI Standards<br/>(iframed service :5173)"]
-    APPS --> DSG["design — Design & Architecture<br/>design/ Markdown read live<br/>69 Mermaid diagrams"]
+    APPS --> DSG["design — Design & Architecture<br/>design/ Markdown read live<br/>10 docs inc. risk-console"]
     AKM --> TABS
     subgraph TABS["Mapper views (switchView)"]
         G["graph<br/>Knowledge graph<br/>vis-network · cluster bar<br/>node overlay on click"]
@@ -40,6 +42,46 @@ flowchart TB
 ```
 
 ![Nine security sub-tabs](screenshots/07-security-subtabs.png)
+
+## Risk Console (alternative GUI)
+
+`static/console/index.html` — parallel to Classic `static/index.html`, same REST,
+no forked business logic. Toggle lives next to the light/dark button in both
+shells (`/console` ↔ `/`, `RISK_CONSOLE_ENABLED=1` default on).
+
+- **Shell:** persona switcher (Researcher/Lead/Privacy/DPO/Legal/Executive,
+  `localStorage` + `?persona=`), scope (investigation/initiative/portfolio),
+  filter chips (Critical/High/Open/Unowned/Privacy...), search (`/` focus,
+  as-you-type grouped suggest, full results page with facets, highlight why
+  matched), toggle Classic Mapper.
+- **Home:** persona landing — Executive lights + open High/Critical + trends,
+  DPO leakage/provider + datapoint, Legal decisions + brief, Lead attention
+  queue + mitigations, Researcher runs/graph.
+- **Risks:** unified register as `RiskCard`s (severity band + layer, scope
+  Own/Inherited/Cascade/method_general, plain summary, evidence count/no
+  evidence, status/owner/review, actions View evidence/Advise/Accept/Open in
+  Classic). Master–detail, sticky context bar, saved views (`localStorage`),
+  bulk actions (Lead).
+- **Landscape:** simplified graph (lite map, 200 cap, list twin, filters for
+  node/edge types, severity, privacy-only, focus depth, minimap, presets
+  hierarchical/radial/force), pathway preset `data class → pathway → sink`.
+- **Privacy & providers:** `PDP/RLHF` matrix, leakage pathways, datapoint
+  (direct vs indirect), retention outliers (RM05/06).
+- **Models:** W1/W2/W3 + RM01-06, memorization, experiments (canary/MI/extraction),
+  `preference_data_exposure` signal.
+- **Briefs:** Board/Privacy/Counsel/Tech one-click exports via `GET
+  /api/console/brief?type=` reusing `dossier.py` (no live re-score).
+- **Report Reader:** H1–H3, 70–80ch, claim chips, risk callouts, collapsible,
+  inline mermaid/PNG, glossary tooltips, modes Full/Summary/Privacy-only/Risks-only,
+  print CSS, dual readable/source view, `summary_plain` vs `summary_technical`.
+- **Charts:** Chart.js, title + `n=`, View table, drill to filtered register,
+  heat matrix severity×layer.
+- **Search:** FTS5 → LIKE fallback `app/kb_search.py`, field filters, prefix,
+  phrase, AND/OR, boosts title>tags>body, persona `accepted_only`, recent
+  searches, zero-result CTA.
+
+See [../design/risk-console.md](../design/risk-console.md) for persona
+tokens and search syntax.
 
 ## Sidebar
 

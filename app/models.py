@@ -380,6 +380,26 @@ class RiskEntry(Base):
     created_at = Column(DateTime, default=_now)
     updated_at = Column(DateTime, default=_now, onupdate=_now)
 
+    # Risk management agent fields
+    priority_score = Column(Float, nullable=True)
+    cluster_id = Column(String(100), nullable=True)
+    cluster_label = Column(String(200), nullable=True)
+    suggested_owner_role = Column(String(100), nullable=True)
+    sla_due_at = Column(DateTime, nullable=True)
+    treatment_plan_json = Column(Text, nullable=True)
+    last_agent_review_at = Column(DateTime, nullable=True)
+    monitor_flags_json = Column(Text, nullable=True)
+    plain_summary = Column(Text, nullable=True)
+    # Automated scoring
+    inherent_score = Column(Float, nullable=True)
+    residual_score = Column(Float, nullable=True)
+    band = Column(String(20), nullable=True)
+    scoring_method = Column(String(100), nullable=True)
+    scoring_fingerprint = Column(String(20), nullable=True)
+    score_rationale = Column(Text, nullable=True)
+    inputs_hash = Column(String(20), nullable=True)
+    scored_at = Column(DateTime, nullable=True)
+
     initiative = relationship("Initiative", back_populates="risks")
 
 

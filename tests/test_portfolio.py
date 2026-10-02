@@ -282,7 +282,10 @@ class TestAdvisor(PortfolioCase):
                                                 weights_source="api_only"))
         reg = pf.derive_register(self.db, self.inv.id)
         adv = pf.advise(self.db, self.inv.id, reg)
-        model_risk = next(a for a in adv["advice"] if a["layer"] == "model")
+        # Find a model risk that actually has training-access controls to test the drop
+        model_risk = next(
+            a for a in adv["advice"] if a["layer"] == "model" and a["controls_unavailable"]
+        )
         # serving-time controls (e.g. DP at inference) are still available; what
         # must not appear is anything that needs the weights
         self.assertTrue(model_risk["controls_unavailable"])
@@ -462,7 +465,10 @@ class TestPortfolioEndpoints(PortfolioCase):
         lp01 = next(x for x in risks if x["source_ref"] == "LP01")
         self.assertTrue(lp01["risk_id"].startswith("R-LP-acme-tabpfn-v2-LP01"))
         self.assertIn("C03", lp01["control_coverage"]["evidenced"])
-        model = next(x for x in risks if x["layer"] == "model")
+        # Find the W1 extraction model risk (own, not RM or cascade)
+        model = next(
+            x for x in risks if x["layer"] == "model" and x["source_ref"] == "MA-01"
+        )
         self.assertIn("MM01", model["control_options"])
         self.assertTrue(model["why"])
 
@@ -480,7 +486,10 @@ class TestPortfolioEndpoints(PortfolioCase):
             json={"investigation_id": self.inv.id}, headers=self.headers)
         self.assertEqual(adv.status_code, 200, adv.text)
         pack = adv.json()
-        item = next(x for x in pack["advice"] if x["layer"] == "model")
+        # Find the W1 extraction advice (own, not cascade/RM)
+        item = next(
+            x for x in pack["advice"] if x["layer"] == "model" and "MA-01" in x["risk_id"]
+        )
         self.assertTrue(item["title"])
         self.assertTrue(item["why"])
         self.assertIn("MM01", [x["control_id"] for x in item["controls"]])

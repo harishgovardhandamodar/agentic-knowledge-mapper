@@ -19,6 +19,12 @@ erDiagram
     INVESTIGATION ||--o{ CVE_FINDING : scopes
     INVESTIGATION ||--o{ QUERY_SHAPE_YIELD : scopes
     INVESTIGATION ||--o{ MANAGER_RUN : "summary_of"
+    INVESTIGATION ||--o{ INITIATIVE : scopes
+    INVESTIGATION ||--o{ RISK_ENTRY : scopes
+    INVESTIGATION ||--o{ DASHBOARD_SNAPSHOT : snapshots
+    INITIATIVE ||--o{ RISK_ENTRY : owns
+    SECURITY_ASSESSMENT }o--|| INITIATIVE : informs
+    SECURITY_ASSESSMENT ||--o{ RISK_ENTRY : "derived as"
     AGENT_RUN ||--o{ AGENT_EVENT : logs
     AGENT_RUN ||--o{ ARTIFACT : collected_by
     AGENT_RUN ||--o{ RELATIONSHIP : mapped_by
@@ -49,24 +55,30 @@ delete history.
 | `agent_events` | `run_id`, `stage` (`plan\|search\|analyze\|map\|summary`), `message`, `data` JSON | append-only progress log |
 | `explanations` | `investigation_id`, `question`, `answer` JSON, `trace` JSON, `status`, `mode/depth/audience`, `max_pages`, `hops`, `meta` JSON (phase, feedback, watch_of, drift), `parent_id`, `thread_id`, `quiz` JSON, `bookmarked`, `watched` | Q&A outputs + threads |
 | `corpus_pages` | `investigation_id`, `url` (unique per investigation), `title`, `domain`, `text`, `published`, `images` JSON, `fetched_at` | fetched-page cache |
-| `security_assessments` | `investigation_id`, `run_id`, `product_name/url`, `exposure`, `use_case`, `overall_pct`, `posture`, `markdown`, `diagrams/threats/evidence/controls/a2a_trace` JSON, `pack_version`/`pack_fingerprint`, `model_json` (model metadata, W1 attacks, W2/W3 blocks, method versions, approval record — model assessments only) | security reports |
+| `security_assessments` | `investigation_id`, `run_id`, `requested_by`, `product_name/url`, `exposure`, `use_case`, `overall_pct`, `posture`, `markdown`, `diagrams/threats/evidence/controls/a2a_trace` JSON, `pack_version`/`pack_fingerprint`, `pdp_json` (PDP01-10 + SAF01-06 + RLHF01-08 standings, never scores), `model_json` (meta now with `preference_data_exposure`, W1 `memorization`/`alignment_data_leakage` + subtypes `preference_memorization`/`sft_memorization`/`preference_mi`/`rlhf_preference_extraction`, `method_general` 0.25), `kb_json`/`kb_fingerprint` (attack_subtype passthrough), `situation_json` (versioned snapshot + `stated_situation` unwrap), `initiative_id` | security reports (product + model + provider-posture) |
+| `initiatives` | `investigation_id`, `title`, `business_use_case`, `owner`, `data_classes/target_users/systems/obligations` JSON, `control_inventory` JSON (deployed/partial/absent/unknown), `status` (active/paused/retired), `go_live_at`, `review_cadence`, `last_reviewed_at` | business initiative that many assessments inform; initiative aggregates via `initiatives_summaries` |
+| `risk_entries` | `investigation_id`, `initiative_id`, `stable_key` (`<layer>:<source_ref>:<scope>`), `risk_id` (human `R-…`), `layer` (`product\|model\|privacy\|supply_chain`), `scope` (`own\|inherited\|cascade`), `source_catalog` (`akm-threat-pack`·`akm-model-adversarial`·`akm-leakage-pathways`·`akm-rlhf-memorization`·`akm-provider-*`·`cve`), `severity` (null for posture), `confidence_band`, `situation_tags` (`provider_posture`·`rlhf_memorization`·`preference_feedback`), subclass `preference_feedback`/`rlhf_memorization`, human overlay `status`/`owner`/`review_by`/`mitigation_ids`/`accepted_by` | unified register — product + model + privacy/leakage + RM* + PDP/RLHF + CVEs, one vocabulary, `persist` vs `register_with_state` |
+| `dashboard_snapshots` | `investigation_id`, `scope_hash`, `metrics_json` (register_total/open_high/owned share…), `created_at` | daily leadership rollup, scheduler hourly tick, trends render gaps as gaps |
 | `cve_findings` | `investigation_id`, `cve_id`, `summary`, `severity`, `cvss`, `published`, `modified`, `references` JSON, `matched_artifact`/`matched_on` | CVEs from the evidence, deduped per CVE id |
 | `query_shape_yields` | `investigation_id`, `shape_key`, `runs`, `accepted`, `rejected` | cumulative per-query-shape yield |
-| `manager_runs` | `command`, `plan` JSON, `status` (`running\|compiled`), `summary_investigation_id` | one row per manager command |
-| `jobs` | `key` (partial-unique over `pending\|retry\|running`), `kind`, `status` (`pending\|retry\|running\|done\|failed`), `lease_until`, `attempts`, `last_error`, `payload` | the durable queue every run goes through |
+| `manager_runs` | `command`, `plan` JSON (now with `task: provider_data_posture` and `subject` = provider name), `status` (`running\|compiled`), `summary_investigation_id` | one row per manager command; provider posture compile adds compare table + datapoint + indirect map + safety/context + RLHF tier tables |
+| `jobs` | `key` (partial-unique over `pending\|retry\|running`), `kind`, `status` (`pending\|retry\|running\|done\|failed`), `lease_until`, `attempts`, `last_error`, `payload` (now with `situation` + `initiative_id` + `requested_by`) | the durable queue every run goes through; re-queue on `resume` keeps `security:{run_id}` key |
 | `ledger_runs` | `run_id` (= the A2A task id), `investigation_id`, `kind`, `goal`, `status` | one chain per run |
 | `ledger_events` | `run_id`, `seq`, `ts`, `actor`, `event`, `payload` JSON, `prev_hash`/`hash` | append-only hash chain |
 | `ledger_claims` | `run_id`, `claim_hash`, `text`, `sources` JSON, `confidence` | per-claim evidence, bound to the run |
 | `ledger_approvals` | `run_id`, `requested_by`, `approved_by`, `status`, `control_plan` JSON | requester ≠ approver |
 | `ledger_audit_drops` | `ts`, `reason`, `context` JSON | fail-open audit drops |
 
-**17 tables.** The application model (`app/models.py`) and the audit model
+**20+ tables.** The application model (`app/models.py`) and the audit model
 (`app/ledger_models.py`) are separate by design: deleting an investigation
 cascades through the first, while ledger chains outlive the investigation that
 produced them, because an audit record that disappears with its subject is not
 an audit record. Only `ledger_*` tables are exempt from the cascade; see
 [ledger.md](ledger.md) and [../design/data-model.md](../design/data-model.md)
-for the full diagram.
+for the full diagram. New tables since the baseline: `initiatives`,
+`risk_entries` (unified register), `dashboard_snapshots`; new columns:
+`situation_json`, `initiative_id`, `requested_by`, `pdp_json` (PDP/SAF/RLHF +
+RM), `assessment_id`/`stable_key` on artifacts/relationships for KB nodes.
 
 ## Review lifecycle (UML)
 

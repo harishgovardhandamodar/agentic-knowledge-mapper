@@ -25,6 +25,7 @@ repository; a screenshot of a diagram that has since changed would not be.
 | 07 | [ui-interaction.md](ui-interaction.md) | UI navigation + interaction | How a person moves through the app, and what each control does |
 | 08 | [privacy.md](privacy.md) | privacy: trust boundaries, data flow, redaction | What data exists, where it can go, and what provably cannot leave |
 | 09 | [controls.md](controls.md) | control catalogue | Every governance, integrity, and privacy control, with where it is enforced |
+| 10 | [risk-console.md](risk-console.md) | alternative GUI · personas · risk-first | How the parallel Risk Console presents the same backend for researchers to CISOs |
 
 ## Diagram kind → file
 

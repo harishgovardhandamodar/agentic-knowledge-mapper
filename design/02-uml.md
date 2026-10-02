@@ -11,59 +11,70 @@ Related: [01-system-context.md](01-system-context.md) · [data-model.md](data-mo
 ```mermaid
 flowchart TB
     subgraph PRESENTATION["Presentation"]
-        UI["static/index.html<br/>switchApp → switchView → loaders<br/>overlays, polling, mermaid, vis-network"]
+        UI["static/index.html<br/>Classic + Dashboard<br/>switchApp → switchView → loaders"]
+        RC["static/console/index.html<br/>Risk Console shell<br/>persona presets · Risk Cards · Report Reader"]
     end
     subgraph INTERFACE["Interface (HTTP)"]
-        MAIN["main.py<br/>product routes + schemas"]
+        MAIN["main.py<br/>~110 routes + /console + /api/console/*"]
         LAPI["ledger_api.py<br/>audit routes, session dependency"]
+        CONS["console.py<br/>BFF aggregators (home/risks/brief)"]
+        KBS["kb_search.py<br/>FTS5 → LIKE fallback"]
     end
     subgraph DOMAIN["Domain / agents"]
-        AGENT["agent.py<br/>CollectionAgent"]
-        EXPL["explainer.py<br/>Explainer"]
-        SAGENT["security_agent.py<br/>SecurityAgent"]
-        A2A["agents.py<br/>A2A dispatch bus"]
-        MGR["manager.py"]
+        AGENT["agent.py<br/>CollectionAgent + RLHF/memorization packs"]
+        EXPL["explainer.py<br/>Explainer + manager_synthesis in summary"]
+        SAGENT["security_agent.py<br/>SecurityAgent + PDP/SAF/RLHF/RM hooks"]
+        A2A["agents.py<br/>A2A dispatch bus · 14 cards inc. mitigation-advisor"]
+        MGR["manager.py<br/>provider template · fan-out · synthesis"]
+        PORT["portfolio.py<br/>Initiative · unified register · leakage"]
+        EXEC["executive.py<br/>availability · distribution · robustness"]
+        PP["provider_posture.py<br/>PDP/SAF/RLHF + contribution map"]
+        MEM["memorization.py<br/>RM01-06"]
     end
     subgraph ENGINE["Deterministic engines"]
         SEC["security.py<br/>threat pack + scoring + report"]
+        MEVAL["model_eval.py<br/>memorization + alignment_data_leakage + subtypes<br/>method_general 0.25 · MM16 · 2.0.0/1.1.0"]
         STD["standards_matrix.py"]
         GRD["grounding.py<br/>quote gate"]
-        WG["writeguard.py<br/>write-verify-repair"]
+        WG["writeguard.py<br/>write-verify-repair + tier-gated phrases"]
         DRIFT["drift.py"]
         YIELD["yield_.py"]
         REC["recommend.py"]
-        EVAL["evalkit.py<br/>scoring regression gate"]
+        EVAL["evalkit.py<br/>50 cases / 21 invariants"]
+        LEAK["leakage.py<br/>LP01-08 + PB01-07"]
     end
     subgraph INFRA["Infrastructure"]
-        SRCH["search.py"]
+        SRCH["search.py<br/>RSS · arXiv · DuckDuckGo"]
         LLM["llm.py"]
         LED["ledger.py"]
         OBS["obs.py"]
-        SCHED["scheduler.py"]
+        SCHED["scheduler.py<br/>cron + dashboard_snapshots hourly"]
         JQ["jobqueue.py"]
         CVEL["cve.py"]
         OPEN["openshell.py<br/>broker client + policy"]
         APPROV["approvals.py<br/>distinct-approver gate"]
-        MODELS["models.py + ledger_models.py"]
+        MODELS["models.py + ledger_models.py<br/>20+ tables"]
         DB["database.py<br/>WAL + migrations"]
     end
-    UI --> MAIN
-    MAIN --> LAPI
-    MAIN --> AGENT & EXPL & SAGENT & MGR & SCHED & JQ & CVEL & STD
+    UI & RC --> MAIN
+    MAIN --> LAPI & CONS & KBS
+    MAIN --> AGENT & EXPL & SAGENT & MGR & SCHED & JQ & CVEL & STD & PORT & EXEC & PP & MEM
     LAPI --> LED
     SAGENT --> APPROV & A2A
     SAGENT --> JQ
-    A2A --> SEC & OPEN
+    A2A --> SEC & MEVAL & OPEN
     EXPL --> GRD & WG & DRIFT & YIELD
     AGENT --> YIELD
     MAIN --> REC
-    EVAL -.->|"pins"| SEC
+    EVAL -.->|"pins"| SEC & MEVAL & LEAK
     AGENT & EXPL & SAGENT & A2A & MGR --> SRCH & LLM
     LLM -->|"every call"| LED
     AGENT & EXPL & SAGENT & A2A & MGR & SCHED & JQ -.-> OBS
-    MAIN & LAPI & AGENT & EXPL & SAGENT & A2A & MGR & SEC & STD --> MODELS
+    MAIN & LAPI & AGENT & EXPL & SAGENT & A2A & MGR & SEC & MEVAL & STD & PORT & EXEC & PP & MEM --> MODELS
     MODELS --> DB
     LED --> MODELS
+    CONS --> PORT & EXEC
+    KBS --> MODELS
 
 ```
 
@@ -330,10 +341,13 @@ separate workflows, no standards mapping):
 | `hypothesis-analyst` | `draft_hypotheses` | `draft_hypotheses` |
 | `hypothesis-verifier` | `verify_hypotheses` | `verify_hypotheses` |
 | `hypothesis-reporter` | `write_hypothesis_report` | `write_hypothesis_report` |
-| `model-adv-intel` | `map_model_attacks` | `map_model_attacks` |
-| `model-adoption-analyst` | `rate_adoption` | `rate_adoption` |
-| `model-mitigation-analyst` | `propose_model_mitigations` | `propose_model_mitigations` |
-| `model-eval-reporter` | `write_model_eval_report` | `write_model_eval_report` |
+| `model-adv-intel` | `map_model_attacks` + `map_rlhf_memorization` | `map_model_attacks` |
+| `model-adoption-analyst` | `rate_adoption` (+ preference pathway notes) | `rate_adoption` |
+| `model-mitigation-analyst` | `propose_model_mitigations` (prefers MM16 for feedback) | `propose_model_mitigations` |
+| `mitigation-advisor` | `advise_portfolio_risks` + `advise_rlhf_memorization` | `advise_portfolio_risks` |
+| `experiment-planner` | `plan_experiments` + RLHF templates | `plan_experiments` |
+| `research-collector` | `agentic_search` + `query_rlhf_memorization` | `collect_research` |
+| `model-eval-reporter` | `write_model_eval_report` + RLHF section RM01-06 | `write_model_eval_report` |
 
 ## Related
 

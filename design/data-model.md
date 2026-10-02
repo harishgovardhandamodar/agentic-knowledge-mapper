@@ -1,359 +1,151 @@
-# 03 — Data model
+# Data model
 
-Every table, how they relate, and what is stored where. All 17 tables live in
-one SQLite file (`data/akm.db`, WAL mode; the `akm_data` Docker volume in the
-container) and are created by `create_all()`, upgraded additively by
-`ensure_columns()`.
+All tables live in SQLite (`data/akm.db`, WAL mode). **Everything is scoped by
+`investigation_id`** — deleting an investigation cascades to its artifacts,
+relationships, runs, events, explanations, corpus pages, and assessments.
 
-Related: [../docs/data-model.md](../docs/data-model.md) · [uml.md](02-uml.md) ·
-[privacy.md](privacy.md)
+Related: [architecture](architecture.md) · [agent-loop](agent-loop.md)
 
-## The scoping rule
-
-Everything is scoped by `investigation_id`, and deleting an investigation
-cascades to everything it produced. That is the single most important
-structural fact in the schema: it is what makes a privacy promise like "this
-graph only ever contained what you collected for that brief" checkable rather
-than aspirational.
+## Entity-relationship diagram (UML)
 
 ```mermaid
 erDiagram
-    INVESTIGATION ||--o{ ARTIFACT : "scopes, cascades"
-    INVESTIGATION ||--o{ RELATIONSHIP : "scopes, cascades"
-    INVESTIGATION ||--o{ AGENT_RUN : "scopes, cascades"
-    INVESTIGATION ||--o{ EXPLANATION : "scopes, cascades"
-    INVESTIGATION ||--o{ CORPUS_PAGE : "scopes, cascades"
-    INVESTIGATION ||--o{ SECURITY_ASSESSMENT : "scopes, cascades"
-    INVESTIGATION ||--o{ CVE_FINDING : "scopes, cascades"
-    INVESTIGATION ||--o{ QUERY_SHAPE_YIELD : "scopes, cascades"
-    INVESTIGATION ||--o{ MANAGER_RUN : "summary target"
-    AGENT_RUN ||--o{ AGENT_EVENT : "logs, cascades"
-    AGENT_RUN ||--o{ ARTIFACT : "collected_by"
-    AGENT_RUN ||--o{ RELATIONSHIP : "mapped_by"
-    AGENT_RUN ||--o{ SECURITY_ASSESSMENT : "produced_by"
-    AGENT_RUN ||--o{ JOB : "does"
-    ARTIFACT ||--o{ RELATIONSHIP : "source_id, cascades"
-    ARTIFACT ||--o{ RELATIONSHIP : "target_id, cascades"
-    ARTIFACT ||--o| CVE_FINDING : "graph node for"
+    INVESTIGATION ||--o{ ARTIFACT : scopes
+    INVESTIGATION ||--o{ RELATIONSHIP : scopes
+    INVESTIGATION ||--o{ AGENT_RUN : scopes
+    INVESTIGATION ||--o{ EXPLANATION : scopes
+    INVESTIGATION ||--o{ CORPUS_PAGE : scopes
+    INVESTIGATION ||--o{ SECURITY_ASSESSMENT : scopes
+    INVESTIGATION ||--o{ CVE_FINDING : scopes
+    INVESTIGATION ||--o{ QUERY_SHAPE_YIELD : scopes
+    INVESTIGATION ||--o{ MANAGER_RUN : "summary_of"
+    INVESTIGATION ||--o{ INITIATIVE : scopes
+    INVESTIGATION ||--o{ RISK_ENTRY : scopes
+    INVESTIGATION ||--o{ DASHBOARD_SNAPSHOT : snapshots
+    INITIATIVE ||--o{ RISK_ENTRY : owns
+    SECURITY_ASSESSMENT }o--|| INITIATIVE : informs
+    SECURITY_ASSESSMENT ||--o{ RISK_ENTRY : "derived as"
+    AGENT_RUN ||--o{ AGENT_EVENT : logs
+    AGENT_RUN ||--o{ ARTIFACT : collected_by
+    AGENT_RUN ||--o{ RELATIONSHIP : mapped_by
+    AGENT_RUN ||--o{ SECURITY_ASSESSMENT : produced_by
+    AGENT_RUN ||--o| JOB : "queued_as"
+    ARTIFACT ||--o{ RELATIONSHIP : "source_id"
+    ARTIFACT ||--o{ RELATIONSHIP : "target_id"
     EXPLANATION ||--o{ EXPLANATION : "parent/thread"
-    INVESTIGATION {
-        int id PK
-        string title
-        string keywords
-        text description
-        string sources
-        string status "draft|running|ready"
-        int hidden "0|1 — out of the list, not deleted"
-        int schedule_enabled
-        string schedule_cron
-        int schedule_max_items
-        int schedule_rounds
-        datetime next_run_at
-        string preferred_domains
-        int auto_save_explanations
-    }
-    ARTIFACT {
-        int id PK
-        int investigation_id FK
-        string title
-        string artifact_type "news|paper|essay|research|tweet|interview|book|projection|cve"
-        string url
-        text description
-        text content
-        float relevance "0..1 agent score"
-        string relevance_reason
-        string review "pending|accepted|rejected"
-        int drift "0|1 off-brief, kept but flagged"
-        string origin "agent|manual"
-        int run_id FK "null for manual"
-    }
-    RELATIONSHIP {
-        int id PK
-        int investigation_id FK
-        int source_id FK
-        int target_id FK
-        string relationship_type "references|supports|contradicts|builds_upon|responds_to|similar_to"
-        string origin "agent|manual"
-        int run_id FK
-    }
-    CVE_FINDING {
-        int id PK
-        int investigation_id FK
-        string cve_id "unique per investigation"
-        string status "vendor standing, or unknown — never a guess"
-        string severity "critical|high|medium|low|unknown"
-        float cvss
-        text impact "CIA triad when known"
-        int artifact_id FK "the graph node"
-    }
-    AGENT_RUN {
-        int id PK
-        int investigation_id FK
-        string status "running|done|error"
-        string trigger "manual|schedule|explainer_gap|security"
-        text plan "JSON"
-        text stats "JSON"
-        text error
-        datetime started_at
-        datetime finished_at
-    }
-    AGENT_EVENT {
-        int id PK
-        int run_id FK
-        string stage "plan|search|analyze|map|summary"
-        text message
-        text data "JSON"
-    }
-    EXPLANATION {
-        int id PK
-        int investigation_id FK
-        string question
-        text answer "JSON: summary, sections, claims, sources, diagram, critique, grounding, write_audit"
-        string status "running|done|error"
-        text trace "JSON provenance"
-        string mode
-        string depth
-        string audience
-        int max_pages
-        int hops
-        text meta "JSON: phase, feedback, watch_of, drift"
-        int parent_id FK "null for a root"
-        int thread_id
-        text quiz "JSON"
-        int bookmarked
-        int watched
-    }
-    CORPUS_PAGE {
-        int id PK
-        int investigation_id FK
-        string url "unique per investigation"
-        text text
-        text images "JSON"
-    }
-    SECURITY_ASSESSMENT {
-        int id PK
-        int investigation_id FK
-        int run_id FK
-        string product_name
-        string exposure
-        text controls_json "JSON: active controls, control plan, OpenShell posture"
-        float overall_pct
-        float inherent_pct
-        float residual_pct
-        text markdown
-        text diagrams_json
-        text threats_json
-        text evidence_json
-        text a2a_trace_json
-        string threat_pack_version
-        string threat_pack_fingerprint
-    }
-    MANAGER_RUN {
-        int id PK
-        text command
-        text plan_json "JSON: domain, exposure, topics, summary"
-        string status "running|compiled"
-        int summary_investigation_id FK
-    }
-    QUERY_SHAPE_YIELD {
-        int id PK
-        int investigation_id FK
-        string shape "unique per investigation"
-        string example
-        int attempts
-        int found
-        int kept
-        int llm_calls
-    }
-    JOB {
-        int id PK
-        string key "unique among live jobs only"
-        string kind
-        text payload_json
-        string status "pending|retry|running|done|failed"
-        int attempts
-        int max_attempts
-        text last_error
-        int run_id FK
-        datetime next_attempt_at
-        datetime lease_expires_at "recovery is lease-based, so slow work is not duplicated"
-    }
-
+    SECURITY_ASSESSMENT ||--o{ CVE_FINDING : "surfaced_as"
+    LEDGER_RUN ||--o{ LEDGER_EVENT : chains
+    LEDGER_RUN ||--o{ LEDGER_CLAIM : binds
+    LEDGER_RUN ||--o{ LEDGER_APPROVAL : gates
 ```
 
-## The audit ledger — a second, separate graph
+The `LEDGER_*` cluster attaches to the graph by **id, not by foreign key** — an
+`AGENT_RUN`'s A2A task id is the `ledger_runs.run_id`, but the chain
+deliberately has no cascade, so dropping an investigation cannot rewrite or
+delete history.
 
-The ledger is deliberately *not* part of the investigation cascade. An audit
-record outlives the thing it records, which is the entire point: a deleted
-investigation must not delete the evidence that it was worked on.
+## Tables
 
-```mermaid
-erDiagram
-    LEDGER_RUN ||--o{ LEDGER_EVENT : "chains, cascades"
-    LEDGER_RUN ||--o{ LEDGER_CLAIM : "asserts, cascades"
-    LEDGER_RUN ||--o{ LEDGER_APPROVAL : "gates, cascades"
-    LEDGER_RUN ||--o| LEDGER_RUN : "session spine anchors"
-    LEDGER_RUN {
-        string id PK "caller-supplied, not autoincrement"
-        string label
-        string kind "task|session"
-        string session_id FK "owning sitting"
-        string client_key "browser's stable key"
-        datetime last_seen_at
-        string status "open|closed|aborted"
-        text mandate_json "JSON policy in force"
-        string mandate_hash "hashed at run creation"
-        string genesis_hash
-        string head_hash "cheap anchoring"
-        int head_seq
-    }
-    LEDGER_EVENT {
-        int id PK
-        string run_id FK
-        int seq "0-based, unique per run"
-        string ts "ISO-8601 string — offset preserved, lexicographic = chronological"
-        string actor_type "agent|llm|mcp|a2a|human|system"
-        string actor
-        string kind "llm.call|mcp.call|agent.hop|gate.check|run.start|…"
-        string intent
-        string verdict "pass|allow|warn|flag|hold|deny|block"
-        string severity "info|warn|block"
-        text data_json "canonical core — hashed"
-        text input_refs "JSON list of sha256 — lineage edges"
-        string prev_hash
-        string hash "covers the core above"
-        text proof_json "derived — NOT hashed, recomputed on verify"
-        string trace "trace id — NOT hashed, an observation not a claim"
-    }
-    LEDGER_CLAIM {
-        int id PK
-        string run_id FK
-        string claim_hash "sha256 of text + citations"
-        int seq "emitting event"
-        string actor
-        text text
-        text citations_json
-        int n_sources
-        string confidence "high|medium|low|none"
-        string verdict "supported|unsupported|uncertain|unverified"
-        string verifier "verbatim|corroboration|reviewer|human"
-    }
-    LEDGER_APPROVAL {
-        int id PK
-        string run_id FK
-        int seq "approval.request event"
-        string kind
-        string subject_hash "the claim or event being approved"
-        string requested_by
-        string decision "grant|deny, null while pending"
-        string decided_by "never the requester"
-        datetime decided_at
-        string event_hash "the decision is itself a chained event"
-    }
-    LEDGER_AUDIT_DROP {
-        int id PK
-        datetime ts
-        string run_id "nullable — the chain write itself failed"
-        string recorder "which helper failed"
-        string actor
-        text error
-        text detail_json "redacted"
-    }
-
-```
-
-Three deliberate design decisions are visible in that schema and are worth
-stating, because each one looks like a mistake until you know why:
-
-1. **`proof_json` and `trace` are outside the hashed core.** `proof_json` is
-   derived state — verification recomputes it and reports drift rather than
-   trusting the stored copy. `trace` says *when* and *under which request* a
-   record was written, not what the record claims. Folding either into
-   `data_json` would change every event hash and break verification of every
-   run already on disk.
-2. **`ts` is a string, not a datetime.** Audit needs the exact authored
-   timestamp with its offset preserved, and lexicographic order must equal
-   chronological order.
-3. **`ledger_audit_drops` is not in the chain.** A row usually exists *because*
-   the chain write failed. It is where an operator looks to answer "did we lose
-   anything?" — `GET /api/ledger/audit-drops`.
-
-## What is stored where — the data inventory
-
-```mermaid
-flowchart LR
-    subgraph DISC["On-disk, git-ignored"]
-        DB[("data/akm.db<br/>17 tables · WAL")]
-        PDF["security PDF<br/>rendered on demand, not stored"]
-    end
-    subgraph HASH["Hashed, not stored"]
-        PH["llm.call prompt_hash<br/>= sha256(prompt)"]
-        CH["claim_hash<br/>= sha256(text + citations)"]
-        EH["event hash chain<br/>prev_hash + core"]
-        GH["gateway proof<br/>x-fox-proof / x-fox-request-id"]
-    end
-    subgraph PLAIN["Stored verbatim"]
-        AR["artifact content, titles, urls, tags"]
-        EX["explanation answer, trace, sections"]
-        MA["assessment markdown + JSON blobs"]
-        MC["corpus page text and images"]
-    end
-    DB --> HASH
-    DB --> PLAIN
-    DB -.->|"rebuildable"| PDF
-    MA -->|"markdown →"| PDF
-
-```
-
-| Data | Stored as | Retention / control |
+| Table | Key columns | Notes |
 |---|---|---|
-| Prompts sent to a model | `sha256` + `prompt_chars` in `llm.call.data_json` | `LEDGER_CAPTURE_PAYLOADS=1` stores them verbatim; off by default |
-| Model completions | verbatim in `llm.call.data_json` | evidence that cannot be re-derived, so it is kept; credentials inside are redacted first |
-| Credentials anywhere in a payload | `[redacted]` before storage | `ledger._redact` runs on the way in; numbers survive, because redacting a token count would destroy evidence while protecting nothing |
-| Collected article text | `artifacts.content`, `corpus_pages.text` | the substance of the investigation; git-ignored, cascade-deleted with the investigation |
-| Security report | `security_assessments.markdown` + JSON | no report files written to disk; PDF is rendered per request |
-| Ledger events | full canonical core + hashes | append-only by convention; `verify_chain` detects tampering after the fact |
-| Gateway proofs | request id, proof hash, token counts, served model | digests and metadata cross the service boundary; prompt/completion never do |
+| `investigations` | `title`, `keywords`, `description`, `sources`, `status` (`draft\|running\|ready`), schedule (`schedule_enabled/cron/max_items/rounds`, `last/next_run_at`), prefs (`preferred_domains`, `auto_save_explanations`) | the brief; one row per topic |
+| `artifacts` | `investigation_id`, `title`, `artifact_type` (news/paper/essay/research/tweet/interview/book/projection, plus model types `adversarial_paper`/`model_card`/`benchmark`/`cve_advisory`/`weights_release`/`known_issue`), `url`, `description`, `content`, `source`, `author`, `date_published`, `tags`, `sentiment`, `relevance` 0..1, `relevance_reason`, `review` (`pending\|accepted\|rejected`), `origin` (`agent\|manual`), `run_id` | collected items |
+| `relationships` | `investigation_id`, `source_id`, `target_id`, `relationship_type` (`references\|supports\|contradicts\|builds_upon\|responds_to\|similar_to`), `description`, `origin`, `run_id` | directed graph edges |
+| `agent_runs` | `investigation_id`, `status` (`running\|done\|error\|awaiting_approval`), `trigger` (`manual\|schedule\|explainer_gap\|security`), `plan`/`stats`/`error` JSON, `started/finished_at` | one row per agent execution |
+| `agent_events` | `run_id`, `stage` (`plan\|search\|analyze\|map\|summary`), `message`, `data` JSON | append-only progress log |
+| `explanations` | `investigation_id`, `question`, `answer` JSON, `trace` JSON, `status`, `mode/depth/audience`, `max_pages`, `hops`, `meta` JSON (phase, feedback, watch_of, drift), `parent_id`, `thread_id`, `quiz` JSON, `bookmarked`, `watched` | Q&A outputs + threads |
+| `corpus_pages` | `investigation_id`, `url` (unique per investigation), `title`, `domain`, `text`, `published`, `images` JSON, `fetched_at` | fetched-page cache |
+| `security_assessments` | `investigation_id`, `run_id`, `requested_by`, `product_name/url`, `exposure`, `use_case`, `overall_pct`, `posture`, `markdown`, `diagrams/threats/evidence/controls/a2a_trace` JSON, `pack_version`/`pack_fingerprint`, `pdp_json` (PDP01-10 + SAF01-06 + RLHF01-08 standings, never scores), `model_json` (meta now with `preference_data_exposure`, W1 `memorization`/`alignment_data_leakage` + subtypes `preference_memorization`/`sft_memorization`/`preference_mi`/`rlhf_preference_extraction`, `method_general` 0.25), `kb_json`/`kb_fingerprint` (attack_subtype passthrough), `situation_json` (versioned snapshot + `stated_situation` unwrap), `initiative_id` | security reports (product + model + provider-posture) |
+| `initiatives` | `investigation_id`, `title`, `business_use_case`, `owner`, `data_classes/target_users/systems/obligations` JSON, `control_inventory` JSON (deployed/partial/absent/unknown), `status` (active/paused/retired), `go_live_at`, `review_cadence`, `last_reviewed_at` | business initiative that many assessments inform; initiative aggregates via `initiatives_summaries` |
+| `risk_entries` | `investigation_id`, `initiative_id`, `stable_key` (`<layer>:<source_ref>:<scope>`), `risk_id` (human `R-…`), `layer` (`product\|model\|privacy\|supply_chain`), `scope` (`own\|inherited\|cascade`), `source_catalog` (`akm-threat-pack`·`akm-model-adversarial`·`akm-leakage-pathways`·`akm-rlhf-memorization`·`akm-provider-*`·`cve`), `severity` (null for posture), `confidence_band`, `situation_tags` (`provider_posture`·`rlhf_memorization`·`preference_feedback`), subclass `preference_feedback`/`rlhf_memorization`, human overlay `status`/`owner`/`review_by`/`mitigation_ids`/`accepted_by` | unified register — product + model + privacy/leakage + RM* + PDP/RLHF + CVEs, one vocabulary, `persist` vs `register_with_state` |
+| `dashboard_snapshots` | `investigation_id`, `scope_hash`, `metrics_json` (register_total/open_high/owned share…), `created_at` | daily leadership rollup, scheduler hourly tick, trends render gaps as gaps |
+| `cve_findings` | `investigation_id`, `cve_id`, `summary`, `severity`, `cvss`, `published`, `modified`, `references` JSON, `matched_artifact`/`matched_on` | CVEs from the evidence, deduped per CVE id |
+| `query_shape_yields` | `investigation_id`, `shape_key`, `runs`, `accepted`, `rejected` | cumulative per-query-shape yield |
+| `manager_runs` | `command`, `plan` JSON (now with `task: provider_data_posture` and `subject` = provider name), `status` (`running\|compiled`), `summary_investigation_id` | one row per manager command; provider posture compile adds compare table + datapoint + indirect map + safety/context + RLHF tier tables |
+| `jobs` | `key` (partial-unique over `pending\|retry\|running`), `kind`, `status` (`pending\|retry\|running\|done\|failed`), `lease_until`, `attempts`, `last_error`, `payload` (now with `situation` + `initiative_id` + `requested_by`) | the durable queue every run goes through; re-queue on `resume` keeps `security:{run_id}` key |
+| `ledger_runs` | `run_id` (= the A2A task id), `investigation_id`, `kind`, `goal`, `status` | one chain per run |
+| `ledger_events` | `run_id`, `seq`, `ts`, `actor`, `event`, `payload` JSON, `prev_hash`/`hash` | append-only hash chain |
+| `ledger_claims` | `run_id`, `claim_hash`, `text`, `sources` JSON, `confidence` | per-claim evidence, bound to the run |
+| `ledger_approvals` | `run_id`, `requested_by`, `approved_by`, `status`, `control_plan` JSON | requester ≠ approver |
+| `ledger_audit_drops` | `ts`, `reason`, `context` JSON | fail-open audit drops |
 
-## Uniqueness and idempotency constraints
+**20+ tables.** The application model (`app/models.py`) and the audit model
+(`app/ledger_models.py`) are separate by design: deleting an investigation
+cascades through the first, while ledger chains outlive the investigation that
+produced them, because an audit record that disappears with its subject is not
+an audit record. Only `ledger_*` tables are exempt from the cascade; see
+[ledger.md](ledger.md) and [../design/data-model.md](../design/data-model.md)
+for the full diagram. New tables since the baseline: `initiatives`,
+`risk_entries` (unified register), `dashboard_snapshots`; new columns:
+`situation_json`, `initiative_id`, `requested_by`, `pdp_json` (PDP/SAF/RLHF +
+RM), `assessment_id`/`stable_key` on artifacts/relationships for KB nodes.
+
+## Review lifecycle (UML)
 
 ```mermaid
-flowchart TB
-    C1["uq_cve_finding<br/>investigation_id + cve_id<br/>re-collecting adds nothing new"]
-    C2["uq_corpus_inv_url<br/>investigation_id + url<br/>a repeat question costs no fetch"]
-    C3["uq_query_shape_yield<br/>investigation_id + shape<br/>yield is cumulative, one row per shape"]
-    C4["uq_ledger_event_seq<br/>run_id + seq<br/>a chain has no gaps or duplicates"]
-    C5["uq_jobs_live_key<br/>key, unique WHERE status IN pending/retry/running<br/>double-submit re-attaches; a parked job can be re-queued later"]
-    C1 --> DB[("all enforced by SQLite")]
-    C2 --> DB
-    C3 --> DB
-    C4 --> DB
-    C5 --> DB
-
+stateDiagram-v2
+    [*] --> pending : agent collects
+    [*] --> accepted : manual add
+    pending --> accepted : accept
+    pending --> rejected : reject
+    rejected --> pending : re-queue
+    accepted --> [*] : delete (edges pruned)
+    rejected --> [*] : delete (edges pruned)
+    pending --> [*] : delete (edges pruned)
 ```
 
-`uq_jobs_live_key` deserves a note: uniqueness is over *live* jobs, not over
-the key itself. A key names a unit of work, and the same key legitimately
-comes back later — a run parked at an approval gate is re-queued under its
-original key once approved. A plain `UNIQUE(key)` would refuse that second
-enqueue forever.
+Node size in the graph = `relevance`; the review queue is ordered by
+`relevance DESC`. `run_id` on artifacts/relationships attributes each node and
+edge to the run that created it (powers Timeline compare and `manual` listing
+for `run_id IS NULL`).
 
 ## Migrations
 
-```mermaid
-flowchart LR
-    BOOT["app boots"] --> CA["create_all()<br/>creates any missing table"]
-    CA --> EC["ensure_columns()<br/>per-column _MIGRATIONS list"]
-    EC --> ADD["additive ALTER TABLE … ADD COLUMN<br/>existing akm.db upgrades in place"]
-    ADD --> OK["no destructive step: nothing is ever dropped"]
+`init_db()` runs `create_all` plus `ensure_columns()` (`app/database.py`
+`_MIGRATIONS`): additive `ALTER TABLE … ADD COLUMN` per missing column, so
+existing `akm.db` files upgrade in place. New tables (e.g.
+`security_assessments`) are created by `create_all` automatically.
 
+Note what this deliberately is **not**: no destructive migration, no
+`DROP COLUMN`, no data backfill that overwrites a user-edited value. An
+existing database is upgraded in place and its content is left alone, which is
+why the full suite runs against a fresh temp database rather than the live
+one.
+
+## Job lifecycle (UML)
+
+```mermaid
+stateDiagram-v2
+    [*] --> pending : enqueue(kind, key, payload)
+    pending --> running : claim → lease_expires_at
+    running --> done : handler returns True
+    running --> retry : handler fails, attempts < max_attempts (backoff)
+    retry --> running : next claim after backoff
+    running --> failed : attempts exhausted
+    running --> pending : lease expired → recover_orphans()
+    failed --> pending : manual requeue
+    done --> [*]
+    failed --> [*]
 ```
 
-`_MIGRATIONS` in `app/database.py` holds one `ALTER TABLE … ADD COLUMN` per
-missing column. There is no destructive step, so a rebuild of the container
-never loses the `akm_data` volume's contents.
+A lease that expires while the process was dead is recovered on the next boot
+(`recover_orphans`), so a restart resumes rather than silently dropping work.
 
-## Related
+## Two layers: the run and the job
 
-- Field-by-field tables: [../docs/data-model.md](../docs/data-model.md)
-- Who may see what: [privacy.md](privacy.md)
+The `AgentRun` is the user-visible unit — it has a status and a result. The
+`Job` is the durable unit of work — it survives restarts and retries. Today only
+**security runs** go through the queue; collection and explainer runs use a
+guarded daemon thread each. The separation is worth the extra table, and the
+approval gate is the reason:
+
+- A security run with `require_approval` runs the control-analyst stage, then
+  sets `AgentRun.status = awaiting_approval` and stores the proposed plan in
+  `stats`. The **job completes normally** — it did its work.
+- On approval, `resume_security_assessment` enqueues a *new* job under the same
+  key `security:{run_id}`. The old job is `done`, and `done` is not in the live
+  set, so the key is free and a double-click cannot start a second run.
+
+So "parked" is a state of the **run**, not of the job — which is the honest
+shape: a table where a gate blocked a queue slot would stall unrelated work
+behind it.

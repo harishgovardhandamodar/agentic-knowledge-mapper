@@ -248,6 +248,55 @@ AGENT_CARDS: list[dict[str, Any]] = [
         "skills": ["write_hypothesis_report"],
         "endpoint": "/api/agents/invoke",
     },
+    {
+        "name": "risk-orchestrator",
+        "protocol": PROTOCOL,
+        "description": "Coordinates a risk-management run: plan, delegate, assemble.",
+        "skills": ["plan_risk_cycle", "delegate_risk_tasks", "assemble_risk_update"],
+        "endpoint": "/api/agents/invoke",
+    },
+    {
+        "name": "risk-intake",
+        "protocol": PROTOCOL,
+        "description": "Assessment/CVE/intel → register upserts with scope & evidence, deduped.",
+        "skills": ["ingest_findings", "upsert_register", "dedupe_risks"],
+        "endpoint": "/api/agents/invoke",
+    },
+    {
+        "name": "risk-triage",
+        "protocol": PROTOCOL,
+        "description": "Prioritizes by severity × exposure × aging × unknowns; clusters.",
+        "skills": ["score_priority", "cluster_risks", "suggest_sla"],
+        "endpoint": "/api/agents/invoke",
+    },
+    {
+        "name": "risk-treatment",
+        "protocol": PROTOCOL,
+        "description": "Maps mitigations, playbooks, experiments; drafts treatment plans (extends mitigation-advisor).",
+        "skills": ["propose_treatment", "link_controls", "link_experiments"],
+        "endpoint": "/api/agents/invoke",
+    },
+    {
+        "name": "risk-monitor",
+        "protocol": PROTOCOL,
+        "description": "Detects stale evidence, policy drift, new CVEs, SLA breaches; builds attention queue.",
+        "skills": ["detect_stale", "detect_drift", "attention_queue"],
+        "endpoint": "/api/agents/invoke",
+    },
+    {
+        "name": "risk-reporter",
+        "protocol": PROTOCOL,
+        "description": "Drafts persona briefs and attention digests from structured data.",
+        "skills": ["draft_brief", "draft_digest", "plain_language_summary"],
+        "endpoint": "/api/agents/invoke",
+    },
+    {
+        "name": "risk-governance",
+        "protocol": PROTOCOL,
+        "description": "Drafts residual acceptance / transfer notes; checks policy gates (human approves).",
+        "skills": ["draft_acceptance", "draft_transfer", "check_policy_gates"],
+        "endpoint": "/api/agents/invoke",
+    },
 ]
 
 
@@ -536,6 +585,207 @@ def mitigation_advisor_handle(env: dict[str, Any]) -> dict[str, Any]:
               f"{sum(1 for a in pack['advice'] if a['quick_win'])} quick win(s) "
               f"({pack['method']} v{pack['version']}, deterministic)"),
     )
+
+
+# --- Risk management family (deterministic, propose & draft only) ---
+
+def risk_intake_handle(env: dict[str, Any], db: Any = None) -> dict[str, Any]:
+    """ingest_findings → upsert_register (stable keys, deduped)."""
+    from . import portfolio as _pf
+    from .database import SessionLocal
+
+    payload = env.get("payload", {}) or {}
+    inv_id = payload.get("investigation_id")
+    if not inv_id:
+        raise ValueError("ingest_findings needs investigation_id")
+    db_close = False
+    if db is None:
+        db = SessionLocal()
+        db_close = True
+    try:
+        rows = _pf.derive_register(db, int(inv_id), persist=True)
+        for r in rows:
+            if r.get("inputs_hash"):
+                continue
+            try:
+                from .risk_register import score_and_persist
+
+                score_and_persist(db, r["entry_id"])
+            except Exception:
+                pass
+        for r in rows:
+            if not r.get("plain_summary"):
+                r["plain_summary"] = f"{r.get('title','')} — {r.get('layer')} {r.get('scope')} risk, severity {r.get('severity')}"
+        return reply_envelope(env, "risk-intake", "register_upserted", {"investigation_id": int(inv_id), "upserted": len(rows)}, note=f"{len(rows)} risks upserted")
+    finally:
+        if db_close:
+            db.close()
+
+
+def risk_triage_handle(env: dict[str, Any], db: Any = None) -> dict[str, Any]:
+    """score_priority + cluster_risks + suggest_sla (deterministic)."""
+    from .database import SessionLocal
+    from . import risk_scoring as rs
+
+    payload = env.get("payload", {}) or {}
+    inv_id = payload.get("investigation_id")
+    if not inv_id:
+        raise ValueError("score_priority needs investigation_id")
+    db_close = False
+    if db is None:
+        db = SessionLocal()
+        db_close = True
+    try:
+        from .models import RiskEntry
+
+        risks = db.query(RiskEntry).filter(RiskEntry.investigation_id == int(inv_id)).all()
+        clusters: dict[str, list] = {}
+        for r in risks:
+            key = (r.source_ref or r.layer or "unknown")[:20]
+            clusters.setdefault(key, []).append(r.id)
+        for r in risks:
+            row = {"layer": r.layer, "severity": r.severity, "exposure": r.exposure, "scope": r.scope, "evidence_ids": json.loads(r.evidence_ids_json or "[]"), "status": r.status, "owner": r.owner, "review_by": r.review_by.isoformat() if r.review_by else None, "aging_days": 0, "has_owner": bool(r.owner), "mitigation_ids": json.loads(r.mitigation_ids_json or "[]")}
+            try:
+                scored = rs.score_risk(row)
+                r.priority_score = scored["priority_score"]
+                r.band = scored["band"]
+            except Exception:
+                pass
+        db.commit()
+        return reply_envelope(env, "risk-triage", "triage_done", {"clusters": len(clusters), "scored": len(risks)}, note=f"{len(risks)} scored, {len(clusters)} clusters")
+    finally:
+        if db_close:
+            db.close()
+
+
+def risk_treatment_handle(env: dict[str, Any], db: Any = None) -> dict[str, Any]:
+    """propose_treatment — extends mitigation-advisor, links controls/experiments."""
+    from .database import SessionLocal
+    from . import portfolio as _pf
+
+    payload = env.get("payload", {}) or {}
+    inv_id = payload.get("investigation_id")
+    if not inv_id:
+        raise ValueError("propose_treatment needs investigation_id")
+    db_close = False
+    if db is None:
+        db = SessionLocal()
+        db_close = True
+    try:
+        pack = _pf.advise(db, int(inv_id))
+        stubs = []
+        for a in pack.get("advice", [])[:5]:
+            if not a.get("controls"):
+                continue
+            stubs.append({"risk_ids": [a["risk_id"]], "strategy": "mitigate", "steps": [{"action": c["title"], "control_ids": [c["control_id"]], "playbook": "", "effort": "M"} for c in a["controls"][:2]], "residual": a.get("residual_limitations", [""])[0] if a.get("residual_limitations") else "", "limitations": "Control reduces, not closes, risk"})
+        return reply_envelope(env, "risk-treatment", "treatment_proposed", {"treatments": stubs}, note=f"{len(stubs)} treatment stubs")
+    finally:
+        if db_close:
+            db.close()
+
+
+def risk_monitor_handle(env: dict[str, Any], db: Any = None) -> dict[str, Any]:
+    """detect_stale / drift / attention_queue — deterministic hygiene."""
+    from .database import SessionLocal
+    from . import executive as ex
+
+    payload = env.get("payload", {}) or {}
+    inv_id = payload.get("investigation_id")
+    if not inv_id:
+        raise ValueError("detect_stale needs investigation_id")
+    db_close = False
+    if db is None:
+        db = SessionLocal()
+        db_close = True
+    try:
+        attn = ex.attention(db, int(inv_id))
+        from .models import RiskEntry
+
+        for item in attn.get("items", [])[:10]:
+            rid = item.get("link", {}).get("risk_id")
+            if not rid:
+                continue
+            r = db.query(RiskEntry).filter(RiskEntry.risk_id == rid, RiskEntry.investigation_id == int(inv_id)).first()
+            if r:
+                flags = json.loads(r.monitor_flags_json or "[]")
+                if item["kind"] not in flags:
+                    flags.append(item["kind"])
+                r.monitor_flags_json = json.dumps(flags)
+                r.last_agent_review_at = datetime.now(timezone.utc)
+        db.commit()
+        return reply_envelope(env, "risk-monitor", "monitor_done", {"attention": len(attn.get("items", [])), "flags_updated": True}, note=f"attention {len(attn.get('items', []))} items")
+    finally:
+        if db_close:
+            db.close()
+
+
+def risk_reporter_handle(env: dict[str, Any], db: Any = None) -> dict[str, Any]:
+    """draft_brief / digest — structured, persona-aware, no vanity score."""
+    from .database import SessionLocal
+    from . import executive as ex
+
+    payload = env.get("payload", {}) or {}
+    inv_id = payload.get("investigation_id")
+    persona = payload.get("persona", "executive")
+    if not inv_id:
+        raise ValueError("draft_brief needs investigation_id")
+    db_close = False
+    if db is None:
+        db = SessionLocal()
+        db_close = True
+    try:
+        scope = ex.resolve_scope(db, int(inv_id))
+        md = ex.brief_markdown(db, int(inv_id), scope)
+        digest = md[:2000]
+        return reply_envelope(env, "risk-reporter", "brief_drafted", {"persona": persona, "markdown": digest, "full_markdown": md}, note=f"brief for {persona} ({len(md)} chars)")
+    finally:
+        if db_close:
+            db.close()
+
+
+def risk_governance_handle(env: dict[str, Any], db: Any = None) -> dict[str, Any]:
+    """draft_acceptance / transfer — never auto-status=accepted."""
+    payload = env.get("payload", {}) or {}
+    risk_ids = payload.get("risk_ids") or []
+    strategy = payload.get("strategy", "accept")
+    rationale = payload.get("rationale", "")
+    if not risk_ids:
+        raise ValueError("draft_acceptance needs risk_ids")
+    plan = {
+        "risk_ids": risk_ids,
+        "strategy": strategy,
+        "steps": [{"action": "Document residual", "control_ids": [], "playbook": "", "effort": "M"}],
+        "residual": rationale or "Residual accepted per policy",
+        "limitations": "Requires human approval; status remains open until approved",
+        "sources": [],
+    }
+    return reply_envelope(env, "risk-governance", "governance_drafted", {"plan": plan}, note=f"draft {strategy} for {len(risk_ids)} risks")
+
+
+def risk_orchestrator_handle(env: dict[str, Any], db: Any = None) -> dict[str, Any]:
+    """plan_risk_cycle — coordinates a risk-management run."""
+    from .database import SessionLocal
+
+    payload = env.get("payload", {}) or {}
+    inv_id = payload.get("investigation_id")
+    kind = payload.get("kind", "risk_review")
+    if not inv_id:
+        raise ValueError("plan_risk_cycle needs investigation_id")
+    db_close = False
+    if db is None:
+        db = SessionLocal()
+        db_close = True
+    try:
+        env1 = {"protocol": PROTOCOL, "task_id": env.get("task_id"), "from": "risk-orchestrator", "to": "risk-intake", "intent": "ingest_findings", "payload": {"investigation_id": int(inv_id)}, "trace": list(env.get("trace") or [])}
+        r1 = risk_intake_handle(env1, db)
+        env2 = {"protocol": PROTOCOL, "task_id": env.get("task_id"), "from": "risk-orchestrator", "to": "risk-triage", "intent": "score_priority", "payload": {"investigation_id": int(inv_id)}, "trace": r1.get("trace") or []}
+        r2 = risk_triage_handle(env2, db)
+        env3 = {"protocol": PROTOCOL, "task_id": env.get("task_id"), "from": "risk-orchestrator", "to": "risk-monitor", "intent": "attention_queue", "payload": {"investigation_id": int(inv_id)}, "trace": r2.get("trace") or []}
+        r3 = risk_monitor_handle(env3, db)
+        return reply_envelope(env, "risk-orchestrator", "risk_cycle_done", {"kind": kind, "intake": r1.get("payload"), "triage": r2.get("payload"), "monitor": r3.get("payload")}, note=f"{kind} cycle done")
+    finally:
+        if db_close:
+            db.close()
 
 
 # ------------------------------------------------- research-collector agent ---

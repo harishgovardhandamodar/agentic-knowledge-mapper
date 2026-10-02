@@ -120,6 +120,24 @@ _MIGRATIONS = [
     # ledger_audit_drops needs no entry: it is a new table, so create_all makes
     # it whole.
     ("ledger_events", "trace", "VARCHAR(48)"),
+    # Risk management + automated scoring: additive, never re-scored silently
+    ("risk_entries", "priority_score", "FLOAT"),
+    ("risk_entries", "cluster_id", "VARCHAR(100)"),
+    ("risk_entries", "cluster_label", "VARCHAR(200)"),
+    ("risk_entries", "suggested_owner_role", "VARCHAR(100)"),
+    ("risk_entries", "sla_due_at", "DATETIME"),
+    ("risk_entries", "treatment_plan_json", "TEXT"),
+    ("risk_entries", "last_agent_review_at", "DATETIME"),
+    ("risk_entries", "monitor_flags_json", "TEXT"),
+    ("risk_entries", "plain_summary", "TEXT"),
+    ("risk_entries", "inherent_score", "FLOAT"),
+    ("risk_entries", "residual_score", "FLOAT"),
+    ("risk_entries", "band", "VARCHAR(20)"),
+    ("risk_entries", "scoring_method", "VARCHAR(100)"),
+    ("risk_entries", "scoring_fingerprint", "VARCHAR(20)"),
+    ("risk_entries", "score_rationale", "TEXT"),
+    ("risk_entries", "inputs_hash", "VARCHAR(20)"),
+    ("risk_entries", "scored_at", "DATETIME"),
 ]
 
 

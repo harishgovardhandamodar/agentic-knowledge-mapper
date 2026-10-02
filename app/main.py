@@ -18,6 +18,8 @@ from .models import (Investigation, Artifact, Relationship, AgentRun, AgentEvent
 from . import llm, scheduler
 from . import ledger_api
 from . import drift as drift_mod
+from . import kb_search as search_mod
+from . import console as console_mod
 from . import yield_ as yld
 from . import recommend as rec
 from . import threatpack, evalkit
@@ -48,6 +50,8 @@ app = FastAPI(title="Agentic Knowledge Mapper",
 # Audit ledger: its own router so the review/audit surface can be reasoned about
 # (and locked down) separately from the product API.
 app.include_router(ledger_api.router)
+app.include_router(console_mod.router)
+RISK_CONSOLE_ENABLED = os.getenv("RISK_CONSOLE_ENABLED", "1") != "0"
 
 app.add_middleware(
     CORSMiddleware,
@@ -72,6 +76,28 @@ if os.path.isdir(static_dir):
             os.path.join(static_dir, "index.html"),
             headers={"Cache-Control": "no-cache"},
         )
+
+    @app.get("/console")
+    @app.get("/console/")
+    def serve_console():
+        if not RISK_CONSOLE_ENABLED:
+            raise HTTPException(404, "Risk Console disabled")
+        console_index = os.path.join(static_dir, "console", "index.html")
+        if os.path.isfile(console_index):
+            return FileResponse(console_index, headers={"Cache-Control": "no-cache"})
+        raise HTTPException(404, "Console not built")
+
+    @app.get("/console/{path:path}")
+    def serve_console_assets(path: str):
+        if not RISK_CONSOLE_ENABLED:
+            raise HTTPException(404, "Risk Console disabled")
+        console_file = os.path.join(static_dir, "console", path)
+        if os.path.isfile(console_file):
+            return FileResponse(console_file)
+        console_index = os.path.join(static_dir, "console", "index.html")
+        if os.path.isfile(console_index):
+            return FileResponse(console_index, headers={"Cache-Control": "no-cache"})
+        raise HTTPException(404, "Not found")
 
 
 @app.on_event("startup")
@@ -970,15 +996,32 @@ def create_relationship(data: RelationshipCreate, db: Session = Depends(get_db))
 
 
 @app.get("/api/search")
-def search(q: str = Query(...), investigation_id: int = Query(...),
-           db: Session = Depends(get_db)):
-    items = (db.query(Artifact)
-             .filter(Artifact.investigation_id == investigation_id,
-                     Artifact.title.ilike(f"%{q}%")
-                     | Artifact.description.ilike(f"%{q}%")
-                     | Artifact.tags.ilike(f"%{q}%"))
-             .limit(20).all())
-    return {"items": [_artifact_json(a) for a in items]}
+def search(
+    q: str = Query("", description="Query string with optional field filters"),
+    types: str = Query("", description="Comma-separated types: risks,evidence,assets,decisions"),
+    layer: str | None = Query(None),
+    severity: str | None = Query(None),
+    status: str | None = Query(None),
+    limit: int = Query(20, le=50),
+    offset: int = Query(0, ge=0),
+    investigation_id: int | None = Query(None),
+    accepted_only: bool = Query(True, description="Accepted-only default for DPO/Legal/Exec"),
+    db: Session = Depends(get_db),
+):
+    types_list = [t.strip() for t in types.split(",") if t.strip()] if types else None
+    return search_mod.search(
+        q=q, types=types_list, layer=layer, severity=severity, status=status,
+        limit=limit, offset=offset, investigation_id=investigation_id, accepted_only=accepted_only,
+    )
+
+
+@app.get("/api/search/suggest")
+def search_suggest(
+    q: str = Query("", description="Prefix for as-you-type suggestions"),
+    investigation_id: int | None = Query(None),
+    db: Session = Depends(get_db),
+):
+    return search_mod.suggest(q=q, investigation_id=investigation_id, limit=8)
 
 
 # ---------- explainer ----------
@@ -3464,3 +3507,126 @@ def get_dashboard_brief_pdf(investigation_id: int, window_days: int = 90,
         headers={"Content-Disposition":
                  f'attachment; filename="leadership-brief-'
                  f'{scope["investigation_id"]}.pdf"'})
+
+
+# ---------------------------------------------------------------------------
+# risk scoring + risk management
+# ---------------------------------------------------------------------------
+
+class RiskRescoreRequest(BaseModel):
+    investigation_id: int | None = None
+    initiative_id: int | None = None
+    scope: str | None = None
+
+
+@app.post("/api/risks/rescore")
+def post_risks_rescore(data: RiskRescoreRequest, request: Request, db: Session = Depends(get_db)):
+    from . import risk_register as rr
+
+    scope = data.scope or "investigation"
+    if scope == "all":
+        out = rr.rescore_scope(db, None, None)
+    elif data.initiative_id:
+        out = rr.rescore_scope(db, data.investigation_id, data.initiative_id)
+    elif data.investigation_id:
+        _landscape_inv(data.investigation_id, db)
+        out = rr.rescore_scope(db, data.investigation_id, None)
+    else:
+        raise HTTPException(400, "investigation_id required")
+    ledger_api.human_action(request, "risks_rescored", {"scope": scope, **out})
+    return out
+
+
+@app.post("/api/risks/{risk_id}/rescore")
+def post_risk_rescore(risk_id: int, request: Request, db: Session = Depends(get_db)):
+    from . import risk_register as rr
+
+    try:
+        out = rr.score_and_persist(db, risk_id)
+    except LookupError as e:
+        raise HTTPException(404, str(e))
+    ledger_api.human_action(request, "risk_rescored", {"risk_id": risk_id, **{k: out.get(k) for k in ("band", "residual_score", "priority_score")}})
+    return out
+
+
+@app.get("/api/risks/{risk_id}")
+def get_risk(risk_id: int, db: Session = Depends(get_db)):
+    from .models import RiskEntry
+
+    r = db.get(RiskEntry, risk_id)
+    if not r:
+        raise HTTPException(404, "Risk not found")
+    return {
+        "id": r.id, "risk_id": r.risk_id, "layer": r.layer, "scope": r.scope, "title": r.title,
+        "status": r.status, "owner": r.owner, "inherent_score": r.inherent_score, "residual_score": r.residual_score,
+        "priority_score": r.priority_score, "band": r.band, "confidence": r.confidence, "scoring_method": r.scoring_method,
+        "scoring_fingerprint": r.scoring_fingerprint, "score_rationale": r.score_rationale, "inputs_hash": r.inputs_hash,
+        "scored_at": r.scored_at.isoformat() if r.scored_at else None,
+        "plain_summary": r.plain_summary, "treatment_plan": json.loads(r.treatment_plan_json or "{}") if r.treatment_plan_json else None,
+        "monitor_flags": json.loads(r.monitor_flags_json or "[]") if r.monitor_flags_json else [],
+    }
+
+
+class RiskSyncRequest(BaseModel):
+    investigation_id: int
+
+
+@app.post("/api/risks/sync")
+def post_risks_sync(data: RiskSyncRequest, request: Request, db: Session = Depends(get_db)):
+    _landscape_inv(data.investigation_id, db)
+    from .agents import risk_intake_handle, new_envelope
+
+    env = new_envelope("api-caller", "risk-intake", "ingest_findings", {"investigation_id": data.investigation_id})
+    try:
+        res = risk_intake_handle(env, db)
+    except Exception as e:
+        raise HTTPException(500, str(e))
+    ledger_api.human_action(request, "risk_sync", {"investigation_id": data.investigation_id, **res.get("payload", {})})
+    return res.get("payload", {})
+
+
+@app.post("/api/risks/review")
+def post_risks_review(data: RiskSyncRequest, request: Request, db: Session = Depends(get_db)):
+    _landscape_inv(data.investigation_id, db)
+    from .agents import risk_orchestrator_handle, new_envelope
+
+    env = new_envelope("api-caller", "risk-orchestrator", "plan_risk_cycle", {"investigation_id": data.investigation_id, "kind": "risk_review"})
+    try:
+        res = risk_orchestrator_handle(env, db)
+    except Exception as e:
+        raise HTTPException(500, str(e))
+    ledger_api.human_action(request, "risk_review", {"investigation_id": data.investigation_id, **res.get("payload", {})})
+    return res.get("payload", {})
+
+
+class RiskDecideRequest(BaseModel):
+    risk_ids: list[str]
+    strategy: str = "accept"
+    rationale: str = ""
+
+
+@app.post("/api/risks/decide")
+def post_risks_decide(data: RiskDecideRequest, request: Request, db: Session = Depends(get_db)):
+    from .agents import risk_governance_handle, new_envelope
+
+    env = new_envelope("api-caller", "risk-governance", "draft_acceptance", {"risk_ids": data.risk_ids, "strategy": data.strategy, "rationale": data.rationale})
+    try:
+        res = risk_governance_handle(env, db)
+    except Exception as e:
+        raise HTTPException(400, str(e))
+    ledger_api.human_action(request, "risk_decide_drafted", {"risk_ids": data.risk_ids, "strategy": data.strategy})
+    return res.get("payload", {})
+
+
+@app.post("/api/risks/enrich")
+def post_risks_enrich(data: RiskSyncRequest, request: Request, db: Session = Depends(get_db)):
+    _landscape_inv(data.investigation_id, db)
+    from .agents import risk_intake_handle, new_envelope
+
+    env = new_envelope("api-caller", "risk-intake", "ingest_findings", {"investigation_id": data.investigation_id})
+    try:
+        res = risk_intake_handle(env, db)
+    except Exception as e:
+        raise HTTPException(500, str(e))
+    ledger_api.human_action(request, "risk_enrich", {"investigation_id": data.investigation_id})
+    return res.get("payload", {})

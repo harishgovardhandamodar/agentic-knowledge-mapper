@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from . import leakage as _lk
@@ -840,8 +840,62 @@ def _overlay_state(rows: list[dict[str, Any]],
         row["entry_id"] = prev.id if prev else None
         row["owner_missing"] = not row["owner"]
         row["review_missing"] = not row["review_by"]
+        # scoring fields: prefer stored, else compute on the fly (no DB write)
+        if prev and prev.scoring_method:
+            row["inherent_score"] = prev.inherent_score
+            row["residual_score"] = prev.residual_score
+            row["priority_score"] = prev.priority_score
+            row["band"] = prev.band
+            row["confidence"] = prev.confidence
+            row["scoring_method"] = prev.scoring_method
+            row["scoring_fingerprint"] = prev.scoring_fingerprint
+            row["score_rationale"] = prev.score_rationale
+            row["inputs_hash"] = prev.inputs_hash
+            row["scored_at"] = prev.scored_at.isoformat() if prev.scored_at else None
+            row["plain_summary"] = prev.plain_summary
+            row["cluster_id"] = prev.cluster_id
+            row["cluster_label"] = prev.cluster_label
+            row["monitor_flags"] = json.loads(prev.monitor_flags_json or "[]") if prev.monitor_flags_json else []
+        else:
+            try:
+                from . import risk_scoring as rs
+
+                scored = rs.score_risk(
+                    {
+                        "layer": row.get("layer"),
+                        "severity": row.get("severity"),
+                        "exposure": row.get("exposure"),
+                        "scope": row.get("scope"),
+                        "evidence_ids": row.get("evidence_ids") or [],
+                        "status": row.get("status") or "open",
+                        "owner": row.get("owner"),
+                        "review_by": row.get("review_by"),
+                        "created_at": None,
+                        "confidence": row.get("confidence"),
+                        "mitigation_ids": row.get("mitigation_ids") or [],
+                    }
+                )
+                row.update(
+                    {
+                        "inherent_score": scored["inherent_score"],
+                        "residual_score": scored["residual_score"],
+                        "priority_score": scored["priority_score"],
+                        "band": scored["band"],
+                        "confidence": scored["confidence"],
+                        "scoring_method": scored["scoring_method"],
+                        "scoring_fingerprint": scored["scoring_fingerprint"],
+                        "score_rationale": scored["score_rationale"],
+                        "inputs_hash": scored["inputs_hash"],
+                        "scored_at": scored["scored_at"],
+                    }
+                )
+                row["plain_summary"] = row.get("plain_summary") or f"{row.get('title','')} — {row.get('layer')} {row.get('scope')} risk"
+                row["monitor_flags"] = []
+            except Exception:
+                pass
         out.append(row)
-    return sorted(out, key=lambda r: (-(r.get("severity") or 0), r["risk_id"]))
+    # default sort: priority desc for console, severity desc for classic — keep severity for now, console sorts by priority
+    return sorted(out, key=lambda r: (-(r.get("priority_score") or r.get("severity") or 0), r["risk_id"]))
 
 
 def register_with_state(db, inv_id: int,
@@ -863,24 +917,62 @@ def register_with_state(db, inv_id: int,
 
 
 def _persist_register(db, inv_id: int, rows: list[dict[str, Any]]) -> None:
-    """Upsert derived fields, never touch human state."""
+    """Upsert derived fields, never touch human state. Also scores via risk_scoring."""
+    from . import risk_scoring as rs
+
     existing = {x.stable_key: x for x in (db.query(RiskEntry)
-                                          .filter(RiskEntry.investigation_id == inv_id).all())}
+                                           .filter(RiskEntry.investigation_id == inv_id).all())}
     for r in rows:
         e = existing.get(r["stable_key"])
+        # score via risk_scoring (pure, no DB writes)
+        try:
+            scored = rs.score_risk(
+                {
+                    "layer": r.get("layer"),
+                    "severity": r.get("severity"),
+                    "exposure": r.get("exposure"),
+                    "scope": r.get("scope"),
+                    "evidence_ids": r.get("evidence_ids") or [],
+                    "status": (e.status if e else "open"),
+                    "owner": (e.owner if e else None),
+                    "review_by": (e.review_by.isoformat() if e and e.review_by else None),
+                    "created_at": (e.created_at.isoformat() if e and e.created_at else None),
+                    "confidence": r.get("confidence"),
+                    "mitigation_ids": json.loads(e.mitigation_ids_json or "[]") if e and e.mitigation_ids_json else [],
+                    "treatment_plan": json.loads(e.treatment_plan_json or "{}") if e and e.treatment_plan_json else {},
+                }
+            )
+        except Exception:
+            scored = {}
         vals = dict(
             risk_id=r["risk_id"], layer=r["layer"], title=r["title"][:500],
             source_catalog=r.get("source_catalog"), source_ref=r.get("source_ref"),
             scope=r.get("scope") or "own",
             situation_tags_json=json.dumps(r.get("situation_tags") or []),
             exposure=r.get("exposure"), severity=r.get("severity"),
-            confidence=r.get("confidence"),
-            confidence_band=r.get("confidence_band") or "unknown",
+            confidence=scored.get("confidence", r.get("confidence")),
+            confidence_band=scored.get("band", r.get("confidence_band") or "unknown"),
             evidence_ids_json=json.dumps(r.get("evidence_ids") or []),
             assessment_ids_json=json.dumps(r.get("assessment_ids") or []),
             catalog_version=r.get("catalog_version"),
             catalog_fingerprint=r.get("catalog_fingerprint"),
         )
+        # scoring fields: only if new or inputs changed (idempotent)
+        if not e or e.inputs_hash != scored.get("inputs_hash"):
+            vals.update(
+                {
+                    "inherent_score": scored.get("inherent_score"),
+                    "residual_score": scored.get("residual_score"),
+                    "priority_score": scored.get("priority_score"),
+                    "band": scored.get("band"),
+                    "scoring_method": scored.get("scoring_method"),
+                    "scoring_fingerprint": scored.get("scoring_fingerprint"),
+                    "score_rationale": scored.get("score_rationale"),
+                    "inputs_hash": scored.get("inputs_hash"),
+                    "scored_at": datetime.now(timezone.utc) if scored else None,
+                }
+            )
+        vals["plain_summary"] = r.get("plain_summary") or f"{r.get('title','')} — {r.get('layer')} {r.get('scope')} risk"
         if e is None:
             e = RiskEntry(investigation_id=inv_id, stable_key=r["stable_key"],
                           status="open", **vals)

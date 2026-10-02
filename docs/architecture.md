@@ -33,29 +33,34 @@ failing), and the standards dashboard is a read-only consumer source that
 returns 503 with a reason when unreachable. Neither is on the critical path of
 collecting or answering.
 
-## Four applications, one subject
+## Seven applications, one subject
 
 ![fox-services gateway, the LLM dependency](screenshots/06-fox-services.png)
 
-The word "mapper" undersells what is deployed. Four applications are involved,
+The word "mapper" undersells what is deployed. Seven applications are involved,
 and they are not layers of one thing — they are peers with different jobs:
 
-| App | Port | Role | Talks to |
+| App | Port | Route | Role | Talks to |
 |---|---|---|---|
-| **Agentic Knowledge Mapper** | 8204 | investigations, graph, explainer, security | fox-services, standards dashboard, OpenShell, web |
-| **fox-services** | 8210 | LLM gateway (OpenAI-compatible) | local Ollama, mesh peers, OpenShell broker |
-| **AI Standards dashboard** | 5173 | browsable standards taxonomy | its own `data.json` |
-| **OpenShell broker** | 8210 (in fox-services) | sandboxed fetch, egress policy | Mapper's fetch requests |
+| **Agentic Knowledge Mapper** | 8204 | `/` (`static/index.html`) | investigations, graph, explainer, security | fox-services, standards dashboard, OpenShell, web |
+| **Risk Console** | 8204 | `/console` (`static/console/index.html`) | risk-first alternative GUI, same REST | same backend as Mapper (no fork) |
+| **Leadership Dashboard** | 8204 | `#dashboard` (pane) | availability / distribution / robustness | executive, scheduler |
+| **fox-services** | 8210 | `/v1/chat/completions` | LLM gateway (OpenAI-compatible) | local Ollama, mesh peers, OpenShell broker |
+| **AI Standards dashboard** | 5173 | `/` | browsable standards taxonomy | its own `data.json` |
+| **OpenShell broker** | 8210 (in fox-services) | `/broker/fetch` | sandboxed fetch, egress policy | Mapper's fetch requests |
 
 The mapper is the only one that holds research data. Everything else is either
-a dependency it calls or a dataset it reads.
+a dependency it calls or a dataset it reads. Risk Console and Leadership
+Dashboard are **presentation layers** over the same FastAPI — no new scoring,
+no forked business logic: every number is a read from stored rows.
 
-Do not confuse this with the **five app tabs** in the mapper's own UI. AI
-Standards is a separate container that the Mapper *iframes*; the other four
-tabs — Mapper, AI Security, Agentic Manager, and Design & Architecture — are
-pane switches inside the single `static/index.html`. Design & Architecture
-additionally has no service of its own: it reads `design/` through
-`app/design_docs.py`.
+Do not confuse containers with **app tabs** in the mapper's own UI. AI
+Standards is a separate container that the Mapper *iframes*; the other six
+tabs — Mapper, AI Security, **Leadership Dashboard**, **Risk Console** (also at
+`/console`), Agentic Manager, and Design & Architecture — are pane switches
+inside `static/index.html` (Risk Console also served as a standalone shell at
+`/console` for the toggle). Design & Architecture additionally has no service of
+its own: it reads `design/` through `app/design_docs.py`.
 
 ![The standalone standards dashboard](screenshots/24-standards-dashboard.png)
 
@@ -64,10 +69,11 @@ additionally has no service of its own: it reads `design/` through
 ```mermaid
 flowchart TB
     subgraph Browser["Browser (vanilla JS SPA)"]
-        UI["static/index.html\nsingle-file GUI"]
+        UI["static/index.html\nsingle-file GUI (Mapper + Security + Dashboard)"]
+        RC["static/console/index.html\nRisk Console shell<br/>persona presets · Risk Cards · Report Reader"]
     end
     subgraph App["FastAPI :8204 (Docker: agentic-knowledge-mapper)"]
-        API["main.py<br/>93 REST paths"]
+        API["main.py<br/>~110 REST paths"]
         AG["agent.py<br/>collection loop"]
         EX["explainer.py<br/>Q&A pipeline"]
         SEC["security_agent.py<br/>+ agents.py (A2A)<br/>+ security.py (engine)"]
@@ -76,19 +82,26 @@ flowchart TB
         BRW["headless Chromium<br/>+ vendored mermaid.js"]
         MGR["manager.py<br/>fan-out + synthesis"]
         JOB["jobqueue.py<br/>durable queue (security runs)"]
-        SCH["scheduler.py<br/>cron ticks"]
+        SCH["scheduler.py<br/>cron ticks + dashboard snapshots"]
         SRCH["search.py<br/>RSS · arXiv · web"]
+        KBS["kb_search.py<br/>FTS5 → LIKE fallback"]
+        CON["console.py<br/>BFF aggregators (console/home)"]
+        PORT["portfolio.py<br/>unified register · leakage LP01-08"]
+        EXEC["executive.py<br/>availability · distribution · robustness"]
+        PP["provider_posture.py<br/>PDP01-10 · SAF01-06 · RLHF01-08"]
+        MEM["memorization.py<br/>RM01-06 · preference memorization"]
+        LEAK["leakage.py<br/>pathways + PB01-07"]
         LLM["llm.py<br/>gateway client"]
         LED["ledger.py<br/>hash-chained audit"]
     end
-    DB[("SQLite WAL<br/>data/akm.db · 17 tables")]
-    UI --> API
-    API --> AG & EX & SEC & MGR & SCH
+    DB[("SQLite WAL<br/>data/akm.db · 20+ tables<br/>initiatives · risks · snapshots")]
+    UI & RC --> API
+    API --> AG & EX & SEC & MGR & SCH & CON & KBS
     SEC --> JOB
     JOB --> SEC
     AG --> SRCH
     AG & EX & SEC --> LLM
-    AG & EX & SEC & MGR & LED --> DB
+    AG & EX & SEC & MGR & LED & PORT & EXEC & PP & MEM --> DB
     SEC --> LED
     API --> DOS
     DOS --> MMP
@@ -99,44 +112,80 @@ flowchart TB
 
 | Container / module | Responsibility |
 |---|---|
-| `static/index.html` | All GUI: 5 apps (Mapper with 9 views, Security with 9 sub-tabs, Manager, Standards, Design & Architecture), sidebar, overlays, polling, mermaid rendering |
+| `static/index.html` | Classic GUI: 7 apps (Mapper 9 views, Security 9 sub-tabs, Leadership Dashboard, Risk Console shell, Manager, Standards, Design & Architecture), sidebar, overlays, polling, mermaid + vis-network |
+| `static/console/index.html` | Risk Console shell: persona presets, 10 areas, Risk Cards, Report Reader, charts (Chart.js), graphs (lite/risk/pathway), search suggest, saved views, master–detail, drawers |
 | `app/design_docs.py` | Fixed index over `design/`; serves a design document by id for the Design & Architecture tab |
-| `app/main.py` | FastAPI routes, request schemas, JSON serializers |
-| `app/agent.py` | Collection loop: plan → search → analyze → map → refine (background thread) |
-| `app/explainer.py` | Question answering: graph-first research → compose → ground → critique → diagram |
-| `app/security_agent.py` + `app/agents.py` + `app/security.py` + `app/threatpack.py` | Security assessments via the A2A envelope protocol, scored against a versioned pack |
-| `app/dossier.py` | Report assembly: executive summary + 7 sections from stored rows, Markdown prose, Markdown+images bundle |
+| `app/main.py` | FastAPI routes (~110 paths), request schemas, JSON serializers, `/console` + `/api/console/*` + `/api/search` |
+| `app/agent.py` | Collection loop: plan → search → analyze → map → refine (background thread); provider posture + RLHF + memorization query packs |
+| `app/explainer.py` | Question answering: graph-first research → compose → ground → critique → diagram; investigation_summary now carries `manager_synthesis` |
+| `app/security_agent.py` + `app/agents.py` + `app/security.py` + `app/threatpack.py` | Security assessments via A2A envelope protocol, scored against versioned pack; agents now include `model-adv-intel` RM01-06, hypothesis `H-RM01/05`, mitigation `MM16` |
+| `app/dossier.py` | Report assembly: executive summary + 7 sections + model synthesis RM01-06 + W3 from stored rows, Markdown/HTML, Markdown+images bundle |
 | `app/mermaid_png.py` | Figure renderer: batch-draws mermaid sources to PNG via headless Chromium, cached by source hash |
-| `app/model_eval.py` | Model-engineering core: family/modality enums, attack taxonomy, `adversarial_coverage_v1` + `adoption_risk_v1` scoring, method versions/fingerprints (no LLM, evalkit-pinned) |
+| `app/model_eval.py` | Model-engineering core: family/modality enums, attack taxonomy (`memorization`/`alignment_data_leakage` + subtypes `preference_memorization` etc., `method_general` 0.25), `adversarial_coverage_v1` + `adoption_risk_v1` (`preference_data_exposure` signal), method versions 2.0.0/1.1.0, fingerprints (no LLM, evalkit-pinned) |
 | Chromium + vendored `mermaid.min.js` | Baked into the image so PDF/bundle exports draw real pictures with no network |
-| `app/manager.py` | Command parsing, fan-out over topics, summary compilation |
+| `app/manager.py` | Command parsing (provider template per lab, `provider_data_privacy_agi`), fan-out over topics, summary compilation with provider compare + RLHF tier tables + datapoint answers + synthesis safety subsection |
+| `app/portfolio.py` | Unified register (`product`/`model`/`privacy`/`supply_chain` + `rm` subclass `preference_feedback`/`rlhf_memorization`), initiatives (`Initiative`), situation profiles, leakage `LP01-08` + `PB01-07`, cascade, mitigation advisor (org-controllable), intel + metrics |
+| `app/leakage.py` | Leakage pathways, process patterns `PR01-05`, playbooks `PB01-07` (incl. RLHF), fingerprints |
+| `app/provider_posture.py` | `provider_data_posture_v1` PDP01-10 + `provider_safety_context_v1` SAF01-06 (firewalled) + `akm-rlhf-feedback-retention` RLHF01-08, contribution map direct vs indirect (+ safety-feedback gated on PDP06), claim guard |
+| `app/memorization.py` | `akm-rlhf-memorization` RM01-06 (data_class `preference_pair`/`sft_demo`/…, pipeline stages `sft`/`reward_model`/`rl_finetune`), query pack, `PB07` mapping, hypothesis drafts `H-RM01/05`, write-guard |
+| `app/executive.py` | Leadership dashboard: availability (initiative/model/product/PDP/safety), distribution (`by_provider`, top RM*), robustness (mapping/validation/acceptance/inventory lift, approval hygiene, pack hygiene with safety), attention queue, snapshots/trends, briefs |
+| `app/console.py` | BFF aggregators `GET /api/console/home|risks|brief` (persona-aware, read-only, no new scoring) |
+| `app/kb_search.py` | FTS5 → LIKE fallback KB search over risks/artifacts/assets/decisions, `GET /api/search` + `suggest`, field filters, prefix `memoriz*`, highlights, facets, persona `accepted_only` |
 | `app/standards_matrix.py` | Relevance-ranked standards score matrix served to the security pane |
 | `app/cve.py` | CVE collection and enrichment (NVD → CIRCL → recorded unknown) |
 | `app/recommend.py` | Coverage gaps, control leverage, stale brief, per-query-shape yields |
 | `app/drift.py` | Deterministic prefilter + LLM judge for watch re-answers |
-| `app/writeguard.py` | audit → repair → strip → drift gate on the way out of the explainer |
+| `app/writeguard.py` | audit → repair → strip → drift gate on the way out of the explainer; provider/memorization phrases tier-gated |
 | `app/grounding.py` | Verbatim citation checks (stdlib only) |
 | `app/jobqueue.py` | Row-before-thread queue for security runs: leases, backoff, orphan recovery |
 | `app/approvals.py` | Requester ≠ approver, fails closed |
 | `app/openshell.py` | Sandboxed fetch, egress policy generation, posture reporting |
 | `app/ledger.py` + `app/ledger_api.py` + `app/ledger_models.py` | Hash-chained audit ledger, mandates, sessions, proofs, approvals, exports |
-| `app/evalkit.py` | Pinned scoring cases and invariants, a CI gate on the threat pack |
-| `app/scheduler.py` | Cron timetables for investigations + watch/drift re-answers |
-| `app/search.py` | Keyless providers: RSS feeds, arXiv API, DuckDuckGo HTML |
+| `app/evalkit.py` | Pinned scoring cases (8+5+15+4+8+4+10+5, now 50 cases/21 invariants) and invariants, CI gate on threat/model/portfolio/provider packs + RM01-06 |
+| `app/scheduler.py` | Cron timetables for investigations + watch/drift re-answers + hourly `dashboard_snapshots` |
+| `app/search.py` | Keyless providers: RSS feeds, arXiv API, DuckDuckGo HTML (unchanged; KB search is `kb_search.py`) |
 | `app/llm.py` | OpenAI-compatible gateway client with base-chain failover + `chat_json` |
 | `app/obs.py` | Traces and contextvars, re-bound at job claim |
-| `app/models.py` / `database.py` | SQLAlchemy models (17 tables), WAL engine, column migrations |
+| `app/models.py` / `database.py` | SQLAlchemy models (20+ tables: `initiatives`, `risk_entries`, `dashboard_snapshots`, `security_assessments.situation_json`/`initiative_id`/`requested_by`/`pdp_json`), WAL engine, column migrations |
 
 ## Component dependencies (UML)
 
 ```mermaid
 classDiagram
+    class RiskConsole {
+        +persona presets
+        +Risk Cards + Report Reader
+        +charts + graphs + search
+    }
+    class Executive {
+        +availability / distribution / robustness
+        +snapshots + briefs
+    }
+    class Portfolio {
+        +unified register
+        +leakage + cascade + advisor
+    }
+    class ProviderPosture {
+        +PDP/SAF/RLHF assess
+        +contribution map + guard
+    }
+    class Memorization {
+        +RM01-06 + subtypes
+        +rm_rows + write-guard
+    }
+    class KBSearch {
+        +search() + suggest()
+    }
+    class ConsoleBFF {
+        +home() + risks() + brief()
+    }
     class FastAPI {
         +investigations CRUD
         +runs & events
         +artifacts & graph
         +explainer
         +security
+        +console + search
     }
     class CollectionAgent {
         +run_investigation_agent()
@@ -187,6 +236,15 @@ classDiagram
     FastAPI --> SecurityAgent : launches via queue
     FastAPI --> Scheduler : starts on boot
     FastAPI --> Store : get_db
+    FastAPI --> RiskConsole : serves /console
+    FastAPI --> ConsoleBFF : /api/console/*
+    FastAPI --> KBSearch : /api/search
+    RiskConsole --> ConsoleBFF : reads
+    RiskConsole --> KBSearch : suggest
+    ConsoleBFF --> Portfolio : composes
+    ConsoleBFF --> Executive : composes
+    Portfolio --> ProviderPosture : PDP/RLHF/SAF
+    Portfolio --> Memorization : RM rows
     SecurityAgent --> JobQueue : enqueue + claim
     CollectionAgent --> SearchProviders : queries
     CollectionAgent --> LLMClient : plan/analyze
