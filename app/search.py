@@ -45,17 +45,33 @@ def _parse_date(value) -> datetime | None:
         return None
 
 
+def _fetch_via_fox(url: str, timeout: int = 12) -> bytes | None:
+    """Fetch via fox-services OpenShell broker only (no direct fallback).
+
+    All web searches route only via fox-services; a down broker yields no
+    results rather than a direct fetch, so the audit can prove the path.
+    """
+    try:
+        from . import openshell as _osh
+
+        res = _osh.fetch_url(url, timeout=timeout)
+        if res.get("ok") and res.get("body"):
+            return res["body"].encode("utf-8") if isinstance(res["body"], str) else res["body"]
+    except Exception:
+        pass
+    return None
+
+
 def search_rss(query: str, feeds: list | None = None, per_feed: int = 8) -> list:
-    """Keyword-filtered scan of RSS feeds (no key needed)."""
+    """Keyword-filtered scan of RSS feeds (no key needed) — via fox-services only."""
     out = []
     terms = [t.lower() for t in re.split(r"[,\s]+", query) if t]
     for feed in (feeds or DEFAULT_RSS):
+        content = _fetch_via_fox(feed["url"], timeout=10)
+        if content is None:
+            continue
         try:
-            with httpx.Client(timeout=10, headers=UA, follow_redirects=True) as client:
-                r = client.get(feed["url"])
-                if r.status_code != 200:
-                    continue
-                parsed = feedparser.parse(r.content)
+            parsed = feedparser.parse(content)
         except Exception:
             continue
         for e in parsed.entries[:30]:
@@ -81,16 +97,16 @@ def search_rss(query: str, feeds: list | None = None, per_feed: int = 8) -> list
 
 
 def search_arxiv(query: str, max_results: int = 15) -> list:
-    """arXiv API full-text search."""
+    """arXiv API full-text search — via fox-services only."""
     out = []
     q = urllib.parse.quote(query)
     url = (f"http://export.arxiv.org/api/query?search_query=all:{q}"
            f"&start=0&max_results={max_results}&sortBy=submittedDate&sortOrder=descending")
+    content = _fetch_via_fox(url, timeout=15)
+    if content is None:
+        return out
     try:
-        with httpx.Client(timeout=15, headers=UA) as client:
-            r = client.get(url)
-            r.raise_for_status()
-            root = ET.fromstring(r.content)
+        root = ET.fromstring(content)
     except Exception:
         return out
     ns = {"a": "http://www.w3.org/2005/Atom"}
@@ -121,36 +137,43 @@ def search_arxiv(query: str, max_results: int = 15) -> list:
 
 
 def search_web(query: str, max_results: int = 10) -> list:
-    """DuckDuckGo HTML endpoint (no key). Best-effort; may rate-limit."""
+    """DuckDuckGo HTML endpoint (no key) — via fox-services only."""
     out = []
+    # Use broker to fetch the search page (POST via curl)
     try:
-        with httpx.Client(timeout=12, headers={**UA, "Referer": "https://duckduckgo.com/"}) as client:
-            r = client.post("https://html.duckduckgo.com/html/",
-                            data={"q": query, "b": "", "kl": ""})
-            if r.status_code != 200:
-                return out
-            soup = BeautifulSoup(r.text, "html.parser")
-            for res in soup.select(".result")[:max_results]:
-                a = res.select_one(".result__a")
-                snip = res.select_one(".result__snippet")
-                if not a:
-                    continue
-                href = a.get("href", "")
-                m = re.search(r"uddg=([^&]+)", href)
-                url = urllib.parse.unquote(m.group(1)) if m else href
-                if url.startswith("//"):
-                    url = "https:" + url
-                out.append({
-                    "title": _clean(a.get_text(), 500) or "(untitled)",
-                    "url": url,
-                    "description": _clean(snip.get_text() if snip else "", 600),
-                    "content": "",
-                    "source": urllib.parse.urlparse(url).netloc or "web",
-                    "author": "",
-                    "date_published": None,
-                    "artifact_type": "news",
-                    "query": query,
-                })
+        from . import openshell as _osh
+
+        # Broker's curl can POST: use curl -X POST -d "q=..." 
+        res = _osh.broker_exec(
+            ["curl", "-sSL", "--max-time", "12", "-A", UA["User-Agent"], "-H", "Referer: https://duckduckgo.com/",
+             "-X", "POST", "-d", f"q={urllib.parse.quote(query)}&b=&kl=", "https://html.duckduckgo.com/html/"],
+            timeout_s=15,
+        )
+        html = res.get("stdout", "")
+        if not html or res.get("exit_code") != 0:
+            return out
+        soup = BeautifulSoup(html, "html.parser")
+        for r in soup.select(".result")[:max_results]:
+            a = r.select_one(".result__a")
+            snip = r.select_one(".result__snippet")
+            if not a:
+                continue
+            href = a.get("href", "")
+            m = re.search(r"uddg=([^&]+)", href)
+            url = urllib.parse.unquote(m.group(1)) if m else href
+            if url.startswith("//"):
+                url = "https:" + url
+            out.append({
+                "title": _clean(a.get_text(), 500) or "(untitled)",
+                "url": url,
+                "description": _clean(snip.get_text() if snip else "", 600),
+                "content": "",
+                "source": urllib.parse.urlparse(url).netloc or "web",
+                "author": "",
+                "date_published": None,
+                "artifact_type": "news",
+                "query": query,
+            })
     except Exception:
         pass
     return out

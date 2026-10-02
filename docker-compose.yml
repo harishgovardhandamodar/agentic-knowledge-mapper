@@ -5,14 +5,12 @@ services:
     ports:
       - "8204:8204"
     environment:
-      # Primary LLM: axiom-1 mesh peer Ollama (2x RTX 5080), discovered via
-      # fox-services mesh. Addressed by mesh name: the peer's tailscale IP
-      # (100.101.3.115) is not routable from the container bridge, and pointing
-      # at it made every call time out and silently fall back to the local
-      # gateway instead of the peer. Falls back to the local gateway only if
-      # the peer is genuinely down.
-      - LLM_BASE_URL=${LLM_BASE_URL:-http://axiom:11434/v1}
-      - LLM_FALLBACK_URL=${LLM_FALLBACK_URL:-http://host.docker.internal:8210/v1}
+      # All agentic and web-search traffic routes only via fox-services,
+      # and only to the local model (no mesh peer, no direct LLM). The
+      # gateway at :8210 proxies to the local Ollama; direct web fetches
+      # go through its OpenShell broker when available.
+      - LLM_BASE_URL=${LLM_BASE_URL:-http://host.docker.internal:8210/v1}
+      - LLM_FALLBACK_URL=${LLM_FALLBACK_URL:-}
       - LLM_MODEL=${LLM_MODEL:-qwen3.8:27b}
       - LLM_FALLBACK_MODEL=${LLM_FALLBACK_MODEL:-qwen3.8:27b}
       - LLM_TIMEOUT_S=${LLM_TIMEOUT_S:-180}
