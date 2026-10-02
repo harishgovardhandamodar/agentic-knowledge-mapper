@@ -7603,8 +7603,16 @@ function secLandRender() {
     const g = secLandGraph;
     if (!g) { body.innerHTML = '<div class="std-err">Loading the knowledge graph slice…</div>'; return; }
     const nodes = (g.nodes || []).map(n => `<div class="std-row"><b>${escHtml(n.label || n.id)}</b> <span class="std-note">${escHtml(n.kind)}</span></div>`).join('');
-    const rels = (g.relationships || []).map(r => `<div class="std-row"><span class="std-note">${escHtml(r.source)}</span> → <b>${escHtml(r.relation)}</b> → <span class="std-note">${escHtml(r.target)}</span>${r.scope ? ' ' + secLandScopeBadge(r.scope) : ''}</div>`).join('');
-    body.innerHTML = `<div class="std-grid2"><div><h4 style="font-size:12px;margin:8px 0 4px;">Nodes (${(g.nodes || []).length})</h4>${nodes || '<div class="std-note">none</div>'}</div><div><h4 style="font-size:12px;margin:8px 0 4px;">Edges (${(g.relationships || []).length})</h4>${rels || '<div class="std-note">none</div>'}</div></div>`;
+    // edges carry from/to as node ids and the scope inside the payload; label
+    // them from the node map so a reader sees names, not row ids
+    const label = {};
+    (g.nodes || []).forEach(n => { label[n.id] = n.label || n.title || String(n.id); });
+    const rels = (g.edges || []).map(e => {
+      const scope = e.payload && (e.payload.scope || (e.payload.register && e.payload.register.scope));
+      const detail = e.payload && (e.payload.mechanism || e.payload.attack_class || e.payload.evidence_scope || '');
+      return `<div class="std-row"><span class="std-note">${escHtml(label[e.from] || e.from)}</span> → <b>${escHtml(e.relationship_type || e.type || e.label || '')}</b> → <span class="std-note">${escHtml(label[e.to] || e.to)}</span>${scope ? ' ' + secLandScopeBadge(scope) : ''}${detail ? ' <span class="std-note">' + escHtml(String(detail)) + '</span>' : ''}</div>`;
+    }).join('');
+    body.innerHTML = `<div class="std-grid2"><div><h4 style="font-size:12px;margin:8px 0 4px;">Nodes (${(g.nodes || []).length})</h4>${nodes || '<div class="std-note">none</div>'}</div><div><h4 style="font-size:12px;margin:8px 0 4px;">Edges (${(g.edges || []).length})</h4>${rels || '<div class="std-note">none</div>'}</div></div>`;
     if (foot) foot.textContent = 'This is the same knowledge graph as the Graph tab, filtered to model-security nodes. Every risk edge carries its scope payload, so a client can label a cascade edge without guessing.';
   } else if (secLandView === 'insights') {
     const cards = p.insight_cards || [];
@@ -7673,20 +7681,39 @@ function secLandTogglePick(key) {
 }
 
 function secLandCompareHtml(c) {
-  const head = (c.ranked || []).map(r => `<th>${escHtml(r.model_key)}<div class="std-note">${escHtml(String(r.score))}</div></th>`).join('');
   const axisRow = (label, fn) => `<tr><th>${escHtml(label)}</th>${(c.models || []).map(m => `<td>${fn(m)}</td>`).join('')}</tr>`;
   const val = v => (v === null || v === undefined) ? '<span class="std-note">no evidence</span>' : escHtml(String(v));
-  return `<div class="std-note" style="margin-bottom:6px;">${c.ranked ? 'Ranked by the weights you supplied — every input that fed the number is shown below, and an excluded model is reported as excluded with its reason.' : 'Comparison only. No ranking, because no weights were supplied — a default winner would be a fabricated verdict.'}</div>
-    <table class="std-table"><thead><tr><th>Axis</th>${(c.models || []).map(m => `<th>${escHtml(m.model_key)}</th>`).join('')}${head ? '' : ''}</tr></thead><tbody>
-      ${axisRow('Risk (own)', m => val((m.own || []).length ? Math.max(...m.own.map(r => r.severity)) : null))}
-      ${axisRow('Inherited risk', m => val((m.inherited || []).length ? Math.max(...m.inherited.map(r => r.severity)) : null))}
-      ${axisRow('Cascade exposure', m => val((m.cascade || []).length ? m.cascade.length + ' path(s): ' + m.cascade.map(r => r.mechanism || r.exposure).join(', ') : null))}
-      ${axisRow('Evidence base', m => val((m.evidence_count !== undefined ? m.evidence_count : null)))}
-      ${axisRow('Experiment coverage', m => val(m.untested_risks !== undefined ? (m.untested_risks.length ? m.untested_risks.length + ' untested' : 'none untested') : null))}
-      ${axisRow('Open questions', m => val((m.open_questions || []).length ? m.open_questions.length : null))}
-      ${axisRow('W1', m => val(m.w1_pct === undefined ? null : m.w1_pct))}
+  // the rows in `models` are scorecard rows: counts the landscape already
+  // derived. Reading a field the payload does not carry would render "no
+  // evidence" for a model that has plenty, which is the one thing this view
+  // must never do.
+  const cnt = (m, k) => (m[k] === undefined || m[k] === null) ? null : m[k];
+  const list = (m, k) => (Array.isArray(m[k]) && m[k].length) ? m[k].join(', ') : null;
+  const signs = c.axis_signs || {};
+  const contrib = (c.ranked || []).map(r => {
+    const parts = Object.entries(r.contributions || {}).map(([a, v]) =>
+      `${escHtml(a)} ${(signs[a] === -1 ? 'rewarded' : 'penalised')}: ${escHtml(String(v))}`).join(' · ');
+    return `<div class="std-note">#${r.rank} ${escHtml(r.model_key)} — ${escHtml(String(r.score))}${parts ? ' (' + parts + ')' : ''}</div>`;
+  }).join('');
+  return `<div class="std-note" style="margin-bottom:6px;">${c.ranked ? 'Ranked by the weights you supplied, lowest score first — every input that fed the number is shown next to it, and an excluded model is reported as excluded with its reason.' : 'Comparison only. No ranking, because no weights were supplied — a default winner would be a fabricated verdict.'}</div>
+    ${contrib ? `<div style="margin-bottom:6px;">${contrib}</div>` : ''}
+    <table class="std-table"><thead><tr><th>Axis</th>${(c.models || []).map(m => `<th>${escHtml(m.model_key)}</th>`).join('')}</tr></thead><tbody>
+      ${axisRow('Own risk (high confidence)', m => val(cnt(m, 'own_high_count')))}
+      ${axisRow('Own risk rows', m => val(list(m, 'own_high_confidence')))}
+      ${axisRow('Inherited risk', m => val(cnt(m, 'inherited_count')))}
+      ${axisRow('Inherited classes', m => val(list(m, 'inherited_classes')))}
+      ${axisRow('Cascade exposure', m => val((cnt(m, 'cascade_count') || 0) ? (cnt(m, 'cascade_count') + ' path(s)' + (list(m, 'cascade_mechanisms') ? ': ' + list(m, 'cascade_mechanisms') : '')) : null))}
+      ${axisRow('Unrated W2 dimensions', m => val(list(m, 'w2_unknown_dimensions')))}
+      ${axisRow('Mitigation burden (points)', m => val(cnt(m, 'mm_burden_points')))}
+      ${axisRow('Mitigations proposed / deferred', m => val((cnt(m, 'mm_proposed') || cnt(m, 'mm_deferred')) === null ? null : `${cnt(m, 'mm_proposed')} / ${cnt(m, 'mm_deferred')}`))}
+      ${axisRow('Experiments planned', m => val(cnt(m, 'experiment_count')))}
+      ${axisRow('W1', m => val(cnt(m, 'w1_pct')))}
+      ${axisRow('W2', m => val(cnt(m, 'w2_pct')))}
+      ${axisRow('W2 uncertainty', m => val(cnt(m, 'w2_uncertainty_pct')))}
+      ${axisRow('Exposure', m => val(m.exposure))}
+      ${axisRow('Weights source', m => val(m.weights_source))}
     </tbody></table>
-    ${(c.excluded || []).length ? `<div class="std-note" style="margin-top:6px;">Excluded: ${c.excluded.map(x => `${escHtml(x.model_key)} (${escHtml(x.reason)})`).join('; ')}</div>` : ''}`;
+    ${(c.excluded || []).length ? `<div class="std-note" style="margin-top:6px;">Excluded: ${c.excluded.map(x => `${escHtml(x.model_key)} (${escHtml((x.exclusion_reasons || []).join('; ') || 'excluded by filter')})`).join('; ')}</div>` : ''}`;
 }
 
 async function secLandCompare() {

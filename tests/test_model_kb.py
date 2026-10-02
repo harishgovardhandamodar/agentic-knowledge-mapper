@@ -49,6 +49,17 @@ def _loads(text):
     return json.loads(text)
 
 
+def _meta(model_name, **over):
+    """Model identity for :func:`_model_json`, so one landscape can hold two."""
+    m = {"model_name": model_name, "model_family": "tabular_fm",
+         "weights_source": "open_weights",
+         "training_data_posture": "proprietary",
+         "deployment_pattern": "on_prem",
+         "workflows": ["adversarial_research", "adoption_risk"]}
+    m.update(over)
+    return m
+
+
 def _model_json(attacks, **over):
     base = {
         "meta": {"model_name": "Acme TabPFN v2", "model_family": "tabular_fm",
@@ -1015,7 +1026,59 @@ class TestDerivedExperimentPlan(KBTestCase):
         self.assertTrue([e for e in g["edges"] if e["type"] == "tested_by"])
         out = kb.compare(self.db, self.inv.id,
                          weights={"experiments": 1.0})
-        self.assertGreater(out["ranked"][0]["contributions"]["experiments"], 0)
+        self.assertEqual(out["axis_signs"]["experiments"], -1)
+        self.assertNotEqual(out["ranked"][0]["contributions"]["experiments"], 0)
+
+    def test_a_rewarded_axis_ranks_the_better_model_first(self):
+        """"experiments" is documented as rewarded, so more of it must rank first.
+
+        The old suite only checked that the axis contributed *a* number, which
+        passed while the sign ranked the better-placed model last. Both models
+        live in one investigation so a single ranking sees them side by side,
+        and both have no stored plan so the count is derived, not planted.
+        """
+        one = [{"attack_id": "MA-01", "attack_class": "extraction",
+                "applies_to": "model_specific", "confidence": 0.8}]
+        two = one + [{"attack_id": "MA-02", "attack_class": "evasion",
+                      "applies_to": "model_specific", "confidence": 0.8}]
+        few = self._assessment(one, model_json=_model_json(
+            one, experiments=[], meta=_meta("Acme TabPFN v2")))
+        many = self._assessment(two, model_json=_model_json(
+            two, experiments=[], meta=_meta("Acme TabPFN v3")))
+        kb.sync_model_kb(self.db, few.id)
+        kb.sync_model_kb(self.db, many.id)
+        rows = {r["model_key"]: r for r in
+                kb.landscape(self.db, self.inv.id)["scorecard"]}
+        thin, thick = rows["acme-tabpfn-v2"], rows["acme-tabpfn-v3"]
+        self.assertGreater(thick["experiment_count"], thin["experiment_count"],
+                           "the second model should plan more experiments")
+        out = kb.compare(self.db, self.inv.id, weights={"experiments": 1.0})
+        self.assertEqual(out["axis_signs"]["experiments"], -1)
+        rank = {r["model_key"]: r["rank"] for r in out["ranked"]}
+        self.assertLess(rank["acme-tabpfn-v3"], rank["acme-tabpfn-v2"],
+                        "more planned experiments must rank first when the "
+                        "experiments axis is weighted")
+        score = {r["model_key"]: r["score"] for r in out["ranked"]}
+        self.assertLess(score["acme-tabpfn-v3"], score["acme-tabpfn-v2"])
+
+    def test_a_penalised_axis_ranks_the_riskier_model_last(self):
+        risky_attack = [{"attack_id": "MA-01", "attack_class": "extraction",
+                         "applies_to": "model_specific", "confidence": 0.9}]
+        risky = self._assessment(risky_attack, model_json=_model_json(
+            risky_attack, meta=_meta("Acme TabPFN v2")))
+        clean = self._assessment([], model_json=_model_json(
+            [], meta=_meta("Acme TabPFN v3")))
+        kb.sync_model_kb(self.db, risky.id)
+        kb.sync_model_kb(self.db, clean.id)
+        rows = {r["model_key"]: r for r in
+                kb.landscape(self.db, self.inv.id)["scorecard"]}
+        self.assertGreater(rows["acme-tabpfn-v2"]["own_high_count"],
+                           rows["acme-tabpfn-v3"]["own_high_count"])
+        out = kb.compare(self.db, self.inv.id, weights={"own_risk": 1.0})
+        self.assertEqual(out["axis_signs"]["own_risk"], 1)
+        rank = {r["model_key"]: r["rank"] for r in out["ranked"]}
+        self.assertGreater(rank["acme-tabpfn-v2"], rank["acme-tabpfn-v3"],
+                           "more own risk must rank last when penalised")
 
     def test_a_plan_that_could_not_be_planned_is_reported_not_hidden(self):
         rec = self._assessment([

@@ -1662,7 +1662,9 @@ def selection_scorecard(latest: dict[str, dict],
 
 #: Selection axes a caller may weight. Each is a count or burden the landscape
 #: already derived, so a weight multiplies something visible in the payload
-#: rather than a hidden score. Positive weights reward, negative penalise.
+#: rather than a hidden score. The weight says how much an axis matters; the
+#: axis itself says which direction is better, and that is recorded here rather
+#: than left to the reader to infer from a sign.
 SELECTION_AXES: dict[str, str] = {
     "own_risk": "high-confidence own risk rows (penalised)",
     "inherited_risk": "inherited risk rows (penalised)",
@@ -1672,6 +1674,12 @@ SELECTION_AXES: dict[str, str] = {
     "experiments": "experiments planned (rewarded)",
     "w1_pct": "W1 adversarial coverage percentage (penalised)",
 }
+
+#: +1 when more of the thing is worse (the default, and true of every risk
+#: count), -1 when more is better. Ranking is ascending on the total, so a
+#: penalty raises the score and pushes a model down. Without this sign an axis
+#: documented as "rewarded" would quietly rank the better model lower.
+_AXIS_SIGN: dict[str, int] = {"experiments": -1}
 
 _FILTERS: dict[str, str] = {
     "exclude_open_weights": "drop models whose weights are open",
@@ -1762,10 +1770,14 @@ def compare(db, inv_id: int, model_keys: list[str] | None = None,
     ranked = None
     if w:
         def _score(r):
-            parts = {axis: round(w[axis] * _axis_value(r, axis), 3)
+            parts = {axis: round(w[axis] * _AXIS_SIGN.get(axis, 1)
+                                 * _axis_value(r, axis), 3)
                      for axis in w}
             return round(sum(parts.values()), 3), parts
         scored = [(r, *_score(r)) for r in kept]
+        # ascending: a lower total is the better-placed model, because every
+        # axis is signed so that "more" means "worse" except where the axis
+        # says more is better
         scored.sort(key=lambda t: (t[1], -len(t[0].get("own_high_confidence") or []),
                                    str(t[0].get("model_key"))))
         ranked = [{"model_key": r.get("model_key"), "score": total,
@@ -1776,12 +1788,14 @@ def compare(db, inv_id: int, model_keys: list[str] | None = None,
             "case": "scorecard" if ranked else "comparison",
             "axes_used": sorted(w),
             "axes_available": sorted(SELECTION_AXES),
+            "axis_signs": {a: _AXIS_SIGN.get(a, 1) for a in sorted(w)},
             "models": kept, "excluded": applied,
             "ranked": ranked,
             "note": "multi-axis comparison; no single winner without weights"
             if not ranked else
-            "ranked by the weights you supplied; every contribution is shown "
-            "next to the score, and a model with no evidence on an axis "
+            "ranked by the weights you supplied, lowest score first; every "
+            "contribution is shown next to the score with the direction it "
+            "counts in (axis_signs), and a model with no evidence on an axis "
             "contributes nothing rather than a guess"}
 
 
