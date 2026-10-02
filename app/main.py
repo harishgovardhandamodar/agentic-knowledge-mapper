@@ -2428,6 +2428,104 @@ def manager_run_detail(run_id: int, db: Session = Depends(get_db)):
     return manager_mod._run_row(db, rec)
 
 
+@app.get("/api/manager/runs/{run_id}/summary-report")
+def manager_run_summary_report(run_id: int, db: Session = Depends(get_db)):
+    """The full run summary report (risks, findings, experiments, hypotheses,
+    diagrams, artifact inventory, synthesis) for an agentic-manager run."""
+    from . import run_summary as _rs
+    try:
+        return _rs.manager_run_report(db, run_id)
+    except LookupError:
+        raise HTTPException(404, "Manager run not found")
+
+
+@app.get("/api/investigations/{inv_id}/summary-report")
+def investigation_summary_report(inv_id: int, db: Session = Depends(get_db)):
+    """The full run summary report for one investigation."""
+    from . import run_summary as _rs
+    try:
+        return _rs.investigation_report(db, inv_id)
+    except LookupError:
+        raise HTTPException(404, "Investigation not found")
+
+
+@app.get("/api/manager/runs/{run_id}/summary-report/markdown")
+def manager_run_summary_report_markdown(run_id: int,
+                                        db: Session = Depends(get_db)):
+    """Export the run summary report as markdown."""
+    from . import run_summary as _rs
+    try:
+        rep = _rs.manager_run_report(db, run_id)
+    except LookupError:
+        raise HTTPException(404, "Manager run not found")
+    return Response(
+        content=rep["markdown"], media_type="text/markdown",
+        headers={"Content-Disposition":
+                 f'attachment; filename="manager-run-{run_id}-summary.md"'})
+
+
+@app.get("/api/manager/runs/{run_id}/summary-report/pdf")
+def manager_run_summary_report_pdf(run_id: int,
+                                   db: Session = Depends(get_db)):
+    """Export the run summary report as PDF (requires reportlab)."""
+    from . import run_summary as _rs
+    try:
+        rep = _rs.manager_run_report(db, run_id)
+    except LookupError:
+        raise HTTPException(404, "Manager run not found")
+    try:
+        pdf = sec_engine.build_pdf(
+            rep["markdown"], title=f"Run summary report — #{run_id}",
+            meta={"report_name": "Run summary report",
+                  "product": f"Manager run #{run_id}",
+                  "highlights_title": "What this run produced"})
+    except RuntimeError as e:
+        return Response(content=str(e), status_code=501,
+                        media_type="text/plain")
+    return Response(
+        content=pdf, media_type="application/pdf",
+        headers={"Content-Disposition":
+                 f'attachment; filename="manager-run-{run_id}-summary.pdf"'})
+
+
+@app.get("/api/investigations/{inv_id}/summary-report/markdown")
+def investigation_summary_report_markdown(inv_id: int,
+                                          db: Session = Depends(get_db)):
+    """Export an investigation's summary report as markdown."""
+    from . import run_summary as _rs
+    try:
+        rep = _rs.investigation_report(db, inv_id)
+    except LookupError:
+        raise HTTPException(404, "Investigation not found")
+    return Response(
+        content=rep["markdown"], media_type="text/markdown",
+        headers={"Content-Disposition":
+                 f'attachment; filename="investigation-{inv_id}-summary.md"'})
+
+
+@app.get("/api/investigations/{inv_id}/summary-report/pdf")
+def investigation_summary_report_pdf(inv_id: int,
+                                     db: Session = Depends(get_db)):
+    """Export an investigation's summary report as PDF (requires reportlab)."""
+    from . import run_summary as _rs
+    try:
+        rep = _rs.investigation_report(db, inv_id)
+    except LookupError:
+        raise HTTPException(404, "Investigation not found")
+    try:
+        pdf = sec_engine.build_pdf(
+            rep["markdown"], title=rep["title"],
+            meta={"report_name": "Run summary report",
+                  "product": rep["title"]})
+    except RuntimeError as e:
+        return Response(content=str(e), status_code=501,
+                        media_type="text/plain")
+    return Response(
+        content=pdf, media_type="application/pdf",
+        headers={"Content-Disposition":
+                 f'attachment; filename="investigation-{inv_id}-summary.pdf"'})
+
+
 @app.post("/api/manager/runs/{run_id}/compile")
 def manager_compile(run_id: int, db: Session = Depends(get_db)):
     """Synthesize finished children into the summary investigation.

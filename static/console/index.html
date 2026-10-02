@@ -7,6 +7,7 @@
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/vis-network/9.1.6/standalone/umd/vis-network.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
 <style>
 :root{--bg:#0d1117;--bg2:#161b22;--bg3:#21262d;--border:#30363d;--text:#f0f6fc;--text2:#8b949e;--accent:#58a6ff;--green:#3fb950;--orange:#d29922;--red:#f85149;--purple:#bc8cff;--teal:#56d4dd;--yellow:#d29922}
 *{box-sizing:border-box;margin:0;padding:0}body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:var(--bg);color:var(--text);min-height:100vh}
@@ -73,7 +74,10 @@ a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
     <select id="scopeIni" title="Initiative scope"><option value="">Portfolio</option></select>
   </div>
   <div style="display:flex;gap:6px;align-items:center">
-    <button onclick="toggleFoxCore()" class="btn" style="padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg3);color:var(--text);font-size:12px;cursor:pointer" title="Toggle Fox Research Core"><i class="fas fa-fox"></i> <span id="foxCoreLabel">Fox Core</span></button>
+    <select id="coreSelect" onchange="setFoxCore(this.value)" style="padding:6px 8px;border-radius:6px;border:1px solid var(--border);background:var(--bg3);color:var(--text);font-size:12px;cursor:pointer" title="Switchable core">
+      <option value="classic">Classic Core</option>
+      <option value="fox" selected>Fox Research Core</option>
+    </select>
     <button onclick="location.href='/'" class="btn" style="padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg3);color:var(--text);font-size:12px;cursor:pointer" title="Switch to Classic Mapper"><i class="fas fa-diagram-project"></i> Classic</button>
     <button onclick="toggleConsoleTheme()" class="btn" style="padding:6px 8px;border-radius:6px;border:1px solid var(--border);background:var(--bg3);color:var(--text);font-size:12px;cursor:pointer" title="Toggle light/dark"><i id="consoleThemeIcon" class="fas fa-moon"></i></button>
   </div>
@@ -397,8 +401,42 @@ async function renderBriefs(){
   let h='<div class="card"><h3>Reporting studio</h3><p style="font-size:12px">Choose type → current filters → preview → export MD/PDF/bundle.</p>';
   h+='<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">';
   ["board","privacy","counsel","tech"].forEach(t=>{ h+=`<button class="badge" onclick="openBrief('${t}')">${t}</button>`;});
+  h+='<button class="badge" onclick="openSummaryReport()" title="Risks, findings, experiments, hypotheses, diagrams + artifact inventory for this run">Run summary report</button>';
   h+='</div></div><div id="briefPreview"></div>';
   el.innerHTML=h;
+}
+async function openSummaryReport(){
+  const el=viewEl("reader"); el.style.display=""; showView("reader");
+  const host=document.getElementById("briefPreview");
+  if(host) host.innerHTML='<div class="skeleton" style="height:120px"></div>';
+  try{
+    const d=await api("/api/investigations/"+scopeInv+"/summary-report");
+    viewEl("reader").innerHTML='<div class="card"><div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:6px"><h3 style="margin:0">Run summary report</h3>'+
+      '<a class="badge" href="'+API+'/api/investigations/'+scopeInv+'/summary-report/markdown" download="investigation-'+scopeInv+'-summary.md">Export MD</a>'+
+      '<a class="badge" href="'+API+'/api/investigations/'+scopeInv+'/summary-report/pdf" download="investigation-'+scopeInv+'-summary.pdf">Export PDF</a>'+
+      '<span style="font-size:11px;color:var(--text2)">'+(d.counts||{}).diagrams+' diagrams · '+(d.counts||{}).artifacts+' artifacts</span></div>'+
+      renderReaderMd(d.markdown||"")+'</div>';
+    runMermaid();
+  }catch(e){ viewEl("reader").innerHTML='<p style="color:var(--red)">'+esc(e.message)+'</p>'; }
+}
+function renderReaderMd(md){
+  // reader that preserves ```mermaid fences for live rendering
+  let html=esc(md);
+  html=html.replace(/```mermaid\n([\s\S]*?)```/g,function(_,body){ return '<div class="mermaid">'+esc(body)+'</div>'; });
+  html=html.replace(/^### (.*$)/gm,'<h3>$1</h3>').replace(/^## (.*$)/gm,'<h2>$1</h2>').replace(/^# (.*$)/gm,'<h1>$1</h1>');
+  html=html.replace(/\*\*(.*?)\*\*/g,'<strong>$1</strong>');
+  html=html.replace(/`([^`]+)`/g,'<code>$1</code>');
+  html=html.replace(/\n\n/g,'</p><p>').replace(/\n/g,'<br>');
+  return '<div class="reader">'+html+'</div>';
+}
+function runMermaid(){
+  if(!window.mermaid) return;
+  try{ window.mermaid.initialize({startOnLoad:false,securityLevel:"strict",theme:"base",themeVariables:{fontSize:"12px"}}); }catch(e){}
+  document.querySelectorAll(".reader .mermaid").forEach(node=>{
+    if(node.getAttribute("data-processed")) return;
+    node.setAttribute("data-processed","1");
+    window.mermaid.run({nodes:[node],suppressErrors:true}).catch(()=>{ node.innerHTML=node.textContent; });
+  });
 }
 async function openBrief(type){
   const el=document.getElementById("briefPreview"); if(!el) return; el.innerHTML='<div class="skeleton" style="height:120px"></div>';
@@ -477,9 +515,17 @@ function showSearch(q){
 document.getElementById("globalQ").addEventListener("keydown",e=>{ if(e.key==="Enter"){ e.preventDefault(); showSearch(e.target.value); }});
 function toggleConsoleTheme(){ const cur=document.documentElement.classList.contains("light")?"dark":"light"; if(cur==="light") document.documentElement.classList.add("light"); else document.documentElement.classList.remove("light"); localStorage.setItem("console.theme",cur); const ic=document.getElementById("consoleThemeIcon"); if(ic) ic.className=cur==="light"?"fas fa-sun":"fas fa-moon"; }
 (function(){ const t=localStorage.getItem("console.theme"); if(t==="light") document.documentElement.classList.add("light"); const ic=document.getElementById("consoleThemeIcon"); if(ic) ic.className=t==="light"?"fas fa-sun":"fas fa-moon"; })();
-function toggleFoxCore(){ const cur=localStorage.getItem("console.core")||"fox"; const nxt=cur==="fox"?"classic":"fox"; localStorage.setItem("console.core",nxt); document.getElementById("foxCoreLabel").textContent=nxt==="fox"?"Fox Core":"Classic Core"; /* next API calls will carry header */ }
-(function(){ const c=localStorage.getItem("console.core")||"fox"; document.getElementById("foxCoreLabel").textContent=c==="fox"?"Fox Core":"Classic Core"; })();
-const _origFetch=window.fetch; window.fetch=function(url,opts){ opts=opts||{}; opts.headers=Object.assign({},opts.headers||{}, (localStorage.getItem("console.core")||"fox")==="fox"?{"X-Fox-Core":"fox"}:{}); return _origFetch(url,opts); };
+function setFoxCore(v){ localStorage.setItem("console.core",v); const sel=document.getElementById("coreSelect"); if(sel) sel.value=v; }
+(function(){ const c=localStorage.getItem("console.core")||"fox"; const sel=document.getElementById("coreSelect"); if(sel) sel.value=c; })();
+const _origFetch=window.fetch; window.fetch=function(url,opts){
+  try{
+    opts=opts||{}; let h=opts.headers||{}; if(h instanceof Headers){ h.set("X-Fox-Core", (localStorage.getItem("console.core")||"fox")==="fox"?"fox":"classic"); }
+    else if(Array.isArray(h)){ h.push(["X-Fox-Core",(localStorage.getItem("console.core")||"fox")==="fox"?"fox":"classic"]); }
+    else { h=Object.assign({},h,{"X-Fox-Core":(localStorage.getItem("console.core")||"fox")==="fox"?"fox":"classic"}); }
+    opts.headers=h;
+  }catch(e){}
+  return _origFetch(url,opts);
+};
 personaBar(); loadInvestigations().then(()=>route());
 window.addEventListener("hashchange",()=>{ const v=location.hash.slice(1); if(v) showView(v); route();});
 if(location.hash) showView(location.hash.slice(1));

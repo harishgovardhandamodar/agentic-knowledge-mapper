@@ -153,5 +153,46 @@ class TestConsoleAccess(ConsoleCase):
             self.assertIn("Risk Console", r.text)
 
 
+class TestRunSummaryReport(ConsoleCase):
+    def _assessed_inv(self):
+        inv = self._inv(title="Summary Report Test")
+        rec = SecurityAssessment(
+            investigation_id=inv.id, product_name="TestModel",
+            exposure="confidential_data", overall_pct=46.6, residual_pct=22.0,
+            scoring_json=_scoring(), model_json=_model_json(),
+            threats_json=json.dumps([{
+                "id": "T01", "title": "Accidental paste", "severity": "Critical",
+                "inherent_score": 80, "residual_score": 25, "coverage": 50}]),
+            diagrams_json=json.dumps({"dataflow": "flowchart TD\nA-->B"}),
+            markdown="# report")
+        self.db.add(rec)
+        self.db.add(Artifact(investigation_id=inv.id, title="Evidence A",
+                             artifact_type="paper", review="accepted",
+                             description="test"))
+        self.db.commit()
+        return inv
+
+    def test_investigation_summary_report(self):
+        inv = self._assessed_inv()
+        r = self.client.get(f"/api/investigations/{inv.id}/summary-report")
+        self.assertEqual(r.status_code, 200, r.text)
+        d = r.json()
+        self.assertEqual(d["kind"], "investigation")
+        self.assertIn("## Security & privacy risks", d["markdown"])
+        self.assertIn("```mermaid", d["markdown"])
+        self.assertIn("Collected artifacts", d["markdown"])
+        self.assertIn("Evidence A", d["markdown"])
+        self.assertGreaterEqual(len(d["diagrams"]), 1)
+        self.assertEqual(d["counts"]["artifacts"], 1)
+
+    def test_investigation_summary_report_exports(self):
+        inv = self._assessed_inv()
+        r = self.client.get(f"/api/investigations/{inv.id}/summary-report/markdown")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.headers["content-type"].split(";")[0], "text/markdown")
+        r = self.client.get(f"/api/investigations/{inv.id}/summary-report/pdf")
+        self.assertIn(r.status_code, (200, 501))  # 501 when reportlab absent
+
+
 if __name__ == "__main__":
     unittest.main()

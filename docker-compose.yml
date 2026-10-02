@@ -5,11 +5,11 @@ services:
     ports:
       - "8204:8204"
     environment:
-      # All agentic and web-search traffic routes only via fox-services,
-      # and only to the local model (no mesh peer, no direct LLM). The
-      # gateway at :8210 proxies to the local Ollama; direct web fetches
-      # go through its OpenShell broker when available.
-      - LLM_BASE_URL=${LLM_BASE_URL:-http://host.docker.internal:8210/v1}
+      # LLM inference routes to the fox-services node on the GPU server
+      # (axiom-1, 2x RTX 5080) at :8210; no fallback is configured, so a
+      # down gateway fails fast instead of silently hopping to a peer.
+      # Direct web fetches go through the local broker's OpenShell sandbox.
+      - LLM_BASE_URL=${LLM_BASE_URL:-http://192.168.1.173:8210/v1}
       - LLM_FALLBACK_URL=${LLM_FALLBACK_URL:-}
       - LLM_MODEL=${LLM_MODEL:-qwen3.8:27b}
       - LLM_FALLBACK_MODEL=${LLM_FALLBACK_MODEL:-qwen3.8:27b}
