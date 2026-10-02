@@ -2842,6 +2842,93 @@ def _load(raw, default=None):
         return default
 
 
+@app.post("/api/security/assessments/{assessment_id}/pdp/sync")
+def post_assessment_pdp_sync(assessment_id: int, request: Request,
+                             db: Session = Depends(get_db)):
+    """(Re)derive provider-posture findings from accepted evidence.
+
+    Idempotent: findings come from accepted artifacts only, so re-running
+    changes nothing unless the evidence did. Deterministic derivation yields
+    ``partial`` at best; ``supported`` needs a human override below.
+    """
+    from . import provider_posture as _pp
+    from .models import Artifact as _Art
+    rec = db.query(SecurityAssessment).filter(
+        SecurityAssessment.id == assessment_id).first()
+    if not rec:
+        raise HTTPException(404, "Assessment not found")
+    accepted = [
+        {"id": a.id, "title": a.title, "tags": a.tags,
+         "artifact_type": a.artifact_type, "review": a.review}
+        for a in db.query(_Art).filter(
+            _Art.investigation_id == rec.investigation_id,
+            _Art.review == "accepted").all()]
+    result = _pp.assess_pdp(accepted)
+    rec.pdp_json = json.dumps(result)
+    db.commit()
+    ledger_api.human_action(
+        request, "provider_posture_synced",
+        {"target_type": "assessment", "target_id": rec.id,
+         "assessment_id": rec.id, "findings": len(result["findings"]),
+         "accepted_sources": len(accepted),
+         "catalog": _pp.PDP_ID, "version": _pp.PDP_VERSION})
+    return result
+
+
+class PdpStateRequest(BaseModel):
+    assessment_id: int
+    dimension_id: str
+    standing: str
+    summary: str = ""
+    evidence_ids: Optional[list[int]] = None
+    actor: str = ""
+    rationale: str = ""
+
+
+@app.post("/api/portfolio/pdp/state")
+def post_pdp_state(data: PdpStateRequest, request: Request,
+                   db: Session = Depends(get_db)):
+    """Human override of one PDP dimension. The only path to supported.
+
+    A dimension names tier-specific terms a human verified, so the override
+    needs who decided and what they read. Ledgered like any other scope
+    decision.
+    """
+    from . import provider_posture as _pp
+    rec = db.query(SecurityAssessment).filter(
+        SecurityAssessment.id == data.assessment_id).first()
+    if not rec:
+        raise HTTPException(404, "Assessment not found")
+    try:
+        stored = json.loads(rec.pdp_json or "") or {}
+    except Exception:
+        stored = {}
+    findings = stored.get("findings") if isinstance(stored, dict) else None
+    if not findings:
+        findings = _pp.blank_findings()
+    try:
+        updated = _pp.set_pdp_finding(
+            findings, data.dimension_id, standing=data.standing,
+            summary=data.summary, evidence_ids=data.evidence_ids,
+            actor=data.actor or ledger_api.request_actor(request))
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    rec.pdp_json = json.dumps({
+        "method": "provider_posture_v1", "version": _pp.PDP_VERSION,
+        "catalog": _pp.PDP_ID, "fingerprint": _pp.pdp_fingerprint(),
+        "findings": findings,
+        "note": "Includes human-overridden standings; see reviewed_by.",
+    })
+    db.commit()
+    ledger_api.human_action(
+        request, "provider_posture_override",
+        {"target_type": "assessment", "target_id": rec.id,
+         "assessment_id": rec.id, "dimension_id": data.dimension_id,
+         "standing": data.standing, "actor": data.actor,
+         "rationale": data.rationale})
+    return updated
+
+
 @app.get("/api/portfolio/initiatives")
 def get_initiatives(investigation_id: int, db: Session = Depends(get_db)):
     """Every initiative in the portfolio, with how far each one is described.
@@ -2971,12 +3058,13 @@ def post_situation(data: SituationRequest, request: Request,
 
 @app.get("/api/portfolio/register")
 def get_register(investigation_id: int, layer: str = "", status: str = "",
-                db: Session = Depends(get_db)):
+                 tag: str = "", db: Session = Depends(get_db)):
     """The unified register: product, model, privacy and supply-chain rows.
 
     Every row names the stored assessment it came from and the catalog version
     that produced it, so a row can be traced to the evidence behind it. Rows
-    with no owner say so; nothing is silently assigned.
+    with no owner say so; nothing is silently assigned. ``tag`` filters on
+    the row's situation tags (e.g. ``provider_posture``).
     """
     from . import portfolio as _pf
     inv_id = _landscape_inv(investigation_id, db)
@@ -2985,6 +3073,8 @@ def get_register(investigation_id: int, layer: str = "", status: str = "",
         rows = [r for r in rows if r["layer"] == layer]
     if status:
         rows = [r for r in rows if r["status"] == status]
+    if tag:
+        rows = [r for r in rows if tag in (r.get("situation_tags") or [])]
     counts: dict[str, int] = {}
     for r in rows:
         counts[r["layer"]] = counts.get(r["layer"], 0) + 1

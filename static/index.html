@@ -1359,6 +1359,7 @@ body.pane-sec-top-collapsed .sec-topbar-sub { display: none; }
           <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
             <button class="btn btn-primary" id="mgrParseBtn" onclick="mgrParse()"><i class="fas fa-wand-magic-sparkles"></i> Understand</button>
             <button class="btn btn-ghost btn-sm" onclick="mgrFillExample()">Try the finance example</button>
+            <button class="btn btn-ghost btn-sm" onclick="mgrFillProviderExample()" title="Multi-provider data-posture investigation: training use, retention, collection, datapoint risks">Provider / lab data posture</button>
           </div>
         </div>
         <div class="sec-card" id="mgrPlanCard" hidden>
@@ -8171,6 +8172,10 @@ function secStdRender() {
  */
 function mgrFillExample() {
   document.getElementById('mgrCommand').value = 'Run detailed security investigations on AI agents in finance domain, especially agent-initiated payments / trade agents / DeFi agents / crypto trading';
+}
+
+function mgrFillProviderExample() {
+  document.getElementById('mgrCommand').value = 'Detailed security and privacy investigation of data exposure to AGI labs and model providers: OpenAI, Anthropic, Google, Meta — training use of customer content, retention and deletion, what they collect, whether we are datapoints, and indirect contribution through the public web and supply chain.';
 }
 
 async function mgrParse() {

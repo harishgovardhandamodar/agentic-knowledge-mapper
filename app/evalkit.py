@@ -580,7 +580,7 @@ def portfolio_cases() -> list[dict[str, Any]]:
         {"name": "pf-catalog-fingerprints",
          "kind": "pf-fingerprints",
          "expect": {"leakage": "be5648831fa9",
-                     "playbooks": "e0aa39ab7db2"},
+                     "playbooks": "19a8032e8954"},
          "note": "a catalog edit must show up here before it moves a number"},
     ]
 
@@ -725,6 +725,146 @@ def portfolio_invariants() -> list[dict[str, Any]]:
     return out
 
 
+def provider_cases() -> list[dict[str, Any]]:
+    """Pinned provider-posture behaviour. Rebaseline deliberately.
+
+    Same rule as the other suites: only pure functions, so the gate runs
+    with no database and no network. Anything needing stored rows lives in
+    ``tests/test_provider_posture.py`` instead.
+    """
+    return [
+        {"name": "pdp-command-names-providers",
+         "kind": "pdp-detect",
+         "command": ("Data exposure investigation: OpenAI, Anthropic -- "
+                     "training use, retention, are we datapoints?"),
+         "expect": {"providers": ["OpenAI", "Anthropic"],
+                     "posture": True},
+         "note": "subjects are provider names, never the verb phrase"},
+        {"name": "pdp-capability-question-rejected",
+         "kind": "pdp-detect",
+         "command": "Who leads on benchmarks, OpenAI or Google?",
+         "expect": {"providers": ["OpenAI", "Google"],
+                     "posture": False},
+         "note": "a lab without a data question is not a posture command"},
+        {"name": "pdp-policy-reads-partial-rest-unknown",
+         "kind": "pdp-assess",
+         "artifacts": [
+             {"id": 1, "title": "OpenAI privacy policy training opt-out "
+                               "retention terms",
+              "tags": "policy", "artifact_type": "paper",
+              "review": "accepted"}],
+         "expect": {"PDP01": "partial", "PDP02": "partial",
+                     "PDP07": "unknown", "supported": []},
+         "note": "one policy touches what it touches; the rest stays unknown"},
+        {"name": "pdp-pending-is-not-evidence",
+         "kind": "pdp-assess",
+         "artifacts": [
+             {"id": 2, "title": "Vendor privacy policy training terms",
+              "tags": "policy", "artifact_type": "paper",
+              "review": "pending"}],
+         "expect": {"all": "unknown"},
+         "note": "pending artifacts count for nothing"},
+        {"name": "pdp-catalog-fingerprint",
+         "kind": "pdp-fingerprints",
+         "expect": {},
+         "note": "a catalog edit must show up here before it moves a finding"},
+        {"name": "pdp-definite-claim-stripped",
+         "kind": "pdp-guard",
+         "text": ("The vendor trains on your API data. "
+                  "Retention defaults apply."),
+         "expect": {"removed_count": 1, "kept_contains": "Retention"},
+         "note": "definite training claims need tier terms or they go"},
+    ]
+
+
+def _run_provider_case(case: dict[str, Any]) -> dict[str, Any]:
+    from . import provider_posture as _pp
+    kind = case["kind"]
+    exp = case.get("expect", {})
+    failures = []
+    result: dict[str, Any] = {}
+    if kind == "pdp-detect":
+        found = [p["name"] for p in _pp.detect_providers(case["command"])]
+        posture = _pp.is_posture_command(case["command"])
+        result = {"providers": found, "posture": posture}
+        if found != exp.get("providers"):
+            failures.append({"field": "providers",
+                              "expected": exp.get("providers"),
+                              "actual": found})
+        if posture != exp.get("posture"):
+            failures.append({"field": "posture",
+                              "expected": exp.get("posture"),
+                              "actual": posture})
+    elif kind == "pdp-assess":
+        assessed = _pp.assess_pdp(case.get("artifacts") or [])
+        by_id = {f["id"]: f["standing"] for f in assessed["findings"]}
+        result = {"standings": by_id}
+        if "all" in exp:
+            if set(by_id.values()) != {exp["all"]}:
+                failures.append({"field": "all standings",
+                                  "expected": exp["all"],
+                                  "actual": sorted(set(by_id.values()))})
+        for dim, want in exp.items():
+            if dim in ("all",):
+                continue
+            if dim == "supported":
+                got = [k for k, v in by_id.items() if v == "supported"]
+                if got != want:
+                    failures.append({"field": "supported",
+                                      "expected": want, "actual": got})
+            elif by_id.get(dim) != want:
+                failures.append({"field": dim, "expected": want,
+                                  "actual": by_id.get(dim)})
+    elif kind == "pdp-fingerprints":
+        result = {"fingerprint": _pp.pdp_fingerprint()}
+    elif kind == "pdp-guard":
+        out = _pp.guard_provider_claims(case.get("text") or "")
+        result = {"removed_count": out["removed_count"]}
+        if out["removed_count"] != exp.get("removed_count"):
+            failures.append({"field": "removed_count",
+                              "expected": exp.get("removed_count"),
+                              "actual": out["removed_count"]})
+        if exp.get("kept_contains") not in out["text"]:
+            failures.append({"field": "kept text",
+                              "expected": f"contains {exp['kept_contains']!r}",
+                              "actual": out["text"]})
+    else:
+        failures.append({"field": "kind", "expected": "known pdp kind",
+                          "actual": kind})
+    return {"name": case["name"], "note": case.get("note", ""),
+            "ok": not failures, "failures": failures, "result": result}
+
+
+def provider_invariants() -> list[dict[str, Any]]:
+    """Properties the posture layer must hold whatever the catalog says."""
+    from . import provider_posture as _pp
+    out = []
+    policy = [{"id": 1, "title": "Provider privacy policy training "
+                                 "retention enterprise terms",
+               "tags": "policy", "artifact_type": "paper",
+               "review": "accepted"}]
+    derived = {f["id"]: f["standing"]
+               for f in _pp.assess_pdp(policy)["findings"]}
+    out.append({
+        "name": "supported-never-derived",
+        "ok": "supported" not in set(derived.values()),
+        "detail": {"standings": sorted(set(derived.values()))},
+    })
+    blank = {f["id"]: f["standing"] for f in _pp.blank_findings()}
+    out.append({
+        "name": "blank-means-unknown",
+        "ok": set(blank.values()) == {"unknown"} and len(blank) == 10,
+        "detail": {"dimensions": len(blank)},
+    })
+    out.append({
+        "name": "detection-needs-both-halves",
+        "ok": not _pp.is_posture_command("training data retention")
+        and not _pp.is_posture_command("OpenAI model quality"),
+        "detail": {},
+    })
+    return out
+
+
 def run_eval() -> dict[str, Any]:
     """Run every case and invariant. ``ok`` is the gate."""
     results = [_run_case(c) for c in cases()]
@@ -739,9 +879,14 @@ def run_eval() -> dict[str, Any]:
     pf_invs = portfolio_invariants()
     failed_pf = [r for r in pf_results if not r["ok"]]
     failed_pf_inv = [i for i in pf_invs if not i["ok"]]
+    pdp_results = [_run_provider_case(c) for c in provider_cases()]
+    pdp_invs = provider_invariants()
+    failed_pdp = [r for r in pdp_results if not r["ok"]]
+    failed_pdp_inv = [i for i in pdp_invs if not i["ok"]]
     return {
         "ok": not failed and not failed_inv and not failed_model
-        and not failed_model_inv and not failed_pf and not failed_pf_inv,
+        and not failed_model_inv and not failed_pf and not failed_pf_inv
+        and not failed_pdp and not failed_pdp_inv,
         "pack": tp.pack_manifest(),
         "cases_run": len(results),
         "cases_failed": len(failed),
@@ -761,6 +906,12 @@ def run_eval() -> dict[str, Any]:
         "portfolio_invariants_failed": len(failed_pf_inv),
         "portfolio_cases": pf_results,
         "portfolio_invariants": pf_invs,
+        "provider_cases_run": len(pdp_results),
+        "provider_cases_failed": len(failed_pdp),
+        "provider_invariants_run": len(pdp_invs),
+        "provider_invariants_failed": len(failed_pdp_inv),
+        "provider_cases": pdp_results,
+        "provider_invariants": pdp_invs,
         "failures": [{"case": r["name"], "why": r["failures"]} for r in failed]
                    + [{"invariant": i["name"], "detail": i["detail"]}
                       for i in failed_inv]
@@ -771,7 +922,11 @@ def run_eval() -> dict[str, Any]:
                    + [{"portfolio_case": r["name"], "why": r["failures"]}
                       for r in failed_pf]
                    + [{"portfolio_invariant": i["name"], "detail": i["detail"]}
-                      for i in failed_pf_inv],
+                      for i in failed_pf_inv]
+                   + [{"provider_case": r["name"], "why": r["failures"]}
+                      for r in failed_pdp]
+                   + [{"provider_invariant": i["name"], "detail": i["detail"]}
+                      for i in failed_pdp_inv],
     }
 
 
@@ -830,13 +985,25 @@ def render(report: dict[str, Any]) -> str:
     for i in report.get("portfolio_invariants", []):
         mark = "ok  " if i["ok"] else "FAIL"
         lines.append(f"  [{mark}] portfolio invariant: {i['name']}")
+    for r in report.get("provider_cases", []):
+        mark = "ok  " if r["ok"] else "FAIL"
+        lines.append(f"  [{mark}] provider: {r['name']}")
+        for f in r["failures"]:
+            lines.append(f"         {f['field']}: expected {f['expected']}, "
+                         f"got {f['actual']}")
+    for i in report.get("provider_invariants", []):
+        mark = "ok  " if i["ok"] else "FAIL"
+        lines.append(f"  [{mark}] provider invariant: {i['name']}")
     lines.append(f"{'PASS' if report['ok'] else 'FAIL'}: "
                  f"{report['cases_run']} cases, {report['invariants_run']} "
                  f"invariants, {report.get('model_cases_run', 0)} model cases, "
                  f"{report.get('model_invariants_run', 0)} model invariants, "
                  f"{report.get('portfolio_cases_run', 0)} portfolio cases, "
                  f"{report.get('portfolio_invariants_run', 0)} "
-                 f"portfolio invariants")
+                 f"portfolio invariants, "
+                 f"{report.get('provider_cases_run', 0)} provider cases, "
+                 f"{report.get('provider_invariants_run', 0)} "
+                 f"provider invariants")
     return "\n".join(lines)
 
 

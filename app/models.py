@@ -255,6 +255,11 @@ class SecurityAssessment(Base):
     # re-read after a catalog edit is two different results wearing one id.
     threat_pack_version = Column(String(20), nullable=True)
     threat_pack_fingerprint = Column(String(20), nullable=True)
+    # Provider data-posture findings (PDP01-PDP10): standings per dimension
+    # from accepted evidence, never scores. Nullable: only assessments in a
+    # provider-posture investigation carry them; stamping every row would
+    # assert posture knowledge nobody collected.
+    pdp_json = Column(Text, nullable=True)
     # Model-engineering assessments: subject metadata + method versions.
     # Product assessments leave this NULL; mode lives in the scoring payload.
     model_json = Column(Text, nullable=True)

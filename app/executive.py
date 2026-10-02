@@ -285,6 +285,20 @@ def availability(db, inv_id: int, scope: dict[str, Any] | None = None,
             synced += 1
     kb_health = _pct(synced, len(model_recs))
 
+    # provider posture coverage: assessed providers with fresh PDP findings.
+    # A provider counts when an in-window assessment carries PDP findings;
+    # anything else is uncovered, not "low risk".
+    providers_seen: dict[str, bool] = {}
+    for r in recs:
+        name = r.product_name or "unnamed"
+        fresh = bool(r.created_at and r.created_at >= cutoff
+                     and getattr(r, "pdp_json", None))
+        providers_seen[name] = providers_seen.get(name, False) or fresh
+    uncovered_providers = sorted(k for k, v in providers_seen.items()
+                                 if not v)
+    pdp_coverage = _pct(len(providers_seen) - len(uncovered_providers),
+                        len(providers_seen))
+
     lights = [
         _light("initiative coverage", initiative_coverage["pct"],
                f"{initiative_coverage['n']} of {initiative_coverage['of']} "
@@ -309,6 +323,9 @@ def availability(db, inv_id: int, scope: dict[str, Any] | None = None,
         _light("KB sync health", kb_health["pct"],
                f"{kb_health['n']} of {kb_health['of']} model assessments "
                "synced"),
+        _light("provider posture", pdp_coverage["pct"],
+               f"{pdp_coverage['n']} of {pdp_coverage['of']} assessed "
+               "providers with fresh PDP findings"),
     ]
     return {
         "method": EXECUTIVE_METHOD, "version": EXECUTIVE_VERSION,
@@ -327,6 +344,8 @@ def availability(db, inv_id: int, scope: dict[str, Any] | None = None,
                            "models_scored": models_scored,
                            "dimensions_each": dims_total},
         "kb_sync_health": kb_health,
+        "pdp_coverage": pdp_coverage,
+        "uncovered_providers": uncovered_providers,
         "note": ("Availability is a set of lights plus the tables behind "
                  "them, not one number. An empty denominator reads as "
                  "unknown, never as covered."),
@@ -436,6 +455,13 @@ def distribution(db, inv_id: int, scope: dict[str, Any] | None = None,
 
     by_initiative = _count_by(rows, _initiative)
 
+    providers = _count_by(
+        rows, lambda r: r.get("product_name") or r.get("model_key")
+        or "unknown")
+    top_providers = sorted(providers.items(),
+                           key=lambda kv: (-kv[1]["open_high"],
+                                           -kv[1]["total"]))[:TOP_N]
+
     # assessment volume from stored runs, per day in-window
     runs = (db.query(AgentRun)
             .filter(AgentRun.investigation_id == inv_id).all())
@@ -465,6 +491,8 @@ def distribution(db, inv_id: int, scope: dict[str, Any] | None = None,
         "by_pattern": by_pattern,
         "top_patterns": [{"pattern": k, **v} for k, v in top_patterns],
         "by_initiative": by_initiative,
+        "by_provider": providers,
+        "top_providers": [{"name": k, **v} for k, v in top_providers],
         "assessment_volume": {"per_day": volume, "by_status": run_status,
                               "awaiting_approval": awaiting},
         "insight_cards": cards,

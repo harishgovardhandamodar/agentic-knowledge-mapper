@@ -232,12 +232,23 @@ def _llm_parse(command: str) -> dict[str, Any]:
 def parse_command(command: str) -> dict[str, Any]:
     """Understand a command.
 
-    LLM first; the deterministic splitter whenever the model is unreachable
+    Provider posture commands match a deterministic template first: a
+    multi-provider data question has a known-good shape (one topic per named
+    lab, policy-first focus), and routing it through the generic LLM parse
+    risks a verb-phrase subject or a benchmark-flavoured plan. LLM first
+    otherwise; the deterministic splitter whenever the model is unreachable
     *or* its plan validates to nothing. Only raises when both paths fail.
     """
     command = (command or "").strip()
     if not command:
         raise ValueError("command is empty")
+    try:
+        from . import provider_posture as _pp
+        template = _pp.provider_plan(command)
+        if template is not None:
+            return validate_plan(template)
+    except Exception:
+        pass
     try:
         return validate_plan(_llm_parse(command))
     except Exception:
@@ -401,19 +412,32 @@ def run_plan(db, plan: dict[str, Any], options: dict[str, Any] | None = None,
             # explicit gap claim rather than an empty register.
             _prof = profile_model_subject(subject[:120], use_case,
                                           t.get("focus", []))
-            _modes = (["target", "adversarial", "hypothesis"]
-                      if _prof["is_model_query"] else [""])
+            _is_provider = (t.get("task") or "") == "provider_data_posture"
+            # A provider topic asks about data handling, not weight
+            # extraction: one product-style assessment, never the three
+            # model-engineering modes, even when the lab name profiles as a
+            # model subject.
+            _modes = ([""] if _is_provider
+                      else (["target", "adversarial", "hypothesis"]
+                            if _prof["is_model_query"] else [""]))
             for _mode in _modes:
-                launch_security_assessment(
-                    inv.id,
-                    {"product_name": subject[:120],
-                     "use_case": use_case,
-                     "exposure": (t.get("exposure") or plan["exposure"]),
-                     "declared_controls": [],
-                     "doc_urls": [],
-                     "focus": t.get("focus", []),
-                     "assessment_mode": _mode},
-                    requested_by=f"manager run {run.id}")
+                _params = {"product_name": subject[:120],
+                           "use_case": use_case,
+                           "exposure": (t.get("exposure") or plan["exposure"]),
+                           "declared_controls": [],
+                           "doc_urls": [],
+                           "focus": t.get("focus", []),
+                           "assessment_mode": _mode}
+                if _is_provider:
+                    # A provider posture assessment is judged against the
+                    # org's actual exposure, not a blank profile: org
+                    # confidential data possibly containing PII, reached over
+                    # the API by employees and service accounts. Stated
+                    # defaults -- the operator corrects them per org.
+                    from . import provider_posture as _pp
+                    _params["situation"] = dict(_pp.PROVIDER_SITUATION)
+                launch_security_assessment(inv.id, _params,
+                                           requested_by=f"manager run {run.id}")
     summary = plan.get("summary") or {}
     names = ", ".join(f"#{t.get('investigation_id')} {t['title']}"
                       for t in plan["topics"])
@@ -587,7 +611,8 @@ def compile_run(db, run_id: int) -> dict[str, Any]:
                         + "".join(f"### {title}\n"
                                   + "".join(f"- {g}\n" for g in gaps)
                                   for title, gaps in topic_gaps))
-    markdown = tables + gaps_section + "\n## Synthesis\n\n" + (text or "").strip() + "\n"
+    markdown = (tables + gaps_section + _provider_section(db, plan, row)
+                + "\n## Synthesis\n\n" + (text or "").strip() + "\n")
     art = Artifact(investigation_id=summary_id,
                    title=f"Manager synthesis (run #{run.id})",
                    artifact_type="research",
@@ -610,6 +635,84 @@ class PendingChildren(Exception):
     def __init__(self, pending: list[str]):
         super().__init__("children still running")
         self.pending = pending
+
+
+def _provider_section(db, plan: dict[str, Any],
+                      row: dict[str, Any]) -> str:
+    """Deterministic provider-posture compare for posture runs.
+
+    Returns "" for non-posture runs. Like the gaps section, this is computed,
+    not generated, so the compare table survives the LLM paraphrase intact --
+    and a run with no PDP findings still says which questions are open rather
+    than rendering an empty table.
+    """
+    from . import provider_posture as _pp
+    topics = plan.get("topics") or []
+    if (plan.get("domain") or "") != "provider_data_privacy_agi" and not any(
+            (t.get("task") or "") == "provider_data_posture" for t in topics
+            if isinstance(t, dict)):
+        return ""
+    children = row.get("children") or []
+    per_provider: list[tuple[str, list[dict[str, Any]]]] = []
+    for t, c in zip(topics, children):
+        if not isinstance(t, dict) or not isinstance(c, dict):
+            continue
+        inv_id = (c.get("investigation_id")
+                  or (t.get("investigation_id") if isinstance(t, dict) else None))
+        findings: list[dict[str, Any]] = []
+        if inv_id:
+            rec = (db.query(SecurityAssessment)
+                   .filter(SecurityAssessment.investigation_id == inv_id)
+                   .order_by(SecurityAssessment.id.desc()).first())
+            if rec is not None:
+                try:
+                    findings = json.loads(getattr(rec, "pdp_json", None)
+                                          or "[]")
+                except Exception:
+                    findings = []
+                if isinstance(findings, dict):
+                    findings = findings.get("findings") or []
+        provider = str(t.get("subject") or t.get("title") or "?")
+        per_provider.append((provider, findings if isinstance(findings, list)
+                             else []))
+    if not per_provider:
+        return ""
+    L = ["\n## Provider data posture compare", "",
+         "Standing per dimension and provider. `partial` means a source "
+         "exists, not that the practice is confirmed; `unknown` means no "
+         "accepted evidence was assessed. No scores here by design -- a "
+         "number would read as safety from lab training, which nothing "
+         "measured.", ""]
+    header = "| Dimension | " + " | ".join(p for p, _ in per_provider) + " |"
+    L.append(header)
+    L.append("|" + "---|" * (len(per_provider) + 1))
+    for d in _pp.PDP_DIMENSIONS:
+        cells = []
+        for _, findings in per_provider:
+            f = next((x for x in findings if x.get("id") == d["id"]), None)
+            cells.append(f.get("standing", "unknown") if f else "unknown")
+        L.append(f"| {d['id']} {d['name']} | " + " | ".join(cells) + " |")
+    L.append("")
+    L.append("### Am I a datapoint? (per provider)")
+    L.append("")
+    for provider, findings in per_provider:
+        L.append(f"#### {provider}")
+        L.append("")
+        cmap = _pp.contribution_map([])
+        L.append(_pp.datapoint_summary(provider, findings, cmap))
+        L.append("")
+    L.append("### Indirect contribution map")
+    L.append("")
+    L.append("```mermaid")
+    L.append(_pp.contribution_mermaid(_pp.contribution_map([]),
+                                      provider="provider"))
+    L.append("```")
+    L.append("")
+    L.append("Dashed paths are possible-but-unevidenced shapes; solid paths "
+             "activate only from stated situations or findings. The public "
+             "web is common to all labs.")
+    L.append("")
+    return "\n".join(L)
 
 
 def manager_links(db) -> dict[str, Any]:

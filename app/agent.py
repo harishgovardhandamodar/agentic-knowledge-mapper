@@ -86,6 +86,7 @@ def _plan_queries(inv: Investigation) -> dict:
         clean.append({"text": q["text"][:120], "sources": srcs})
     _ensure_vendor_doc_query(inv, clean, enabled)
     _ensure_model_queries(inv, clean, enabled)
+    _ensure_provider_posture_queries(inv, clean, enabled)
     return {"rationale": plan.get("rationale", ""), "queries": clean or
             [{"text": inv.keywords.split(",")[0].strip() or inv.title, "sources": list(enabled)}]}
 
@@ -193,6 +194,43 @@ def _ensure_vendor_doc_query(inv: Investigation, clean: list[dict],
         return
     clean.append({"text": f"{' '.join(vendors)} security architecture "
                           "data flow"[:120], "sources": srcs})
+
+
+def _ensure_provider_posture_queries(inv: Investigation, clean: list[dict],
+                                     enabled: set[str]) -> None:
+    """Policy/trust query families for provider posture investigations.
+
+    A posture brief needs official terms (privacy policy, API data usage,
+    opt-out, enterprise/ZDR terms, DPA/subprocessors), trust material (SOC 2,
+    whitepapers -- claims, not proof) and independent reporting (practices,
+    incidents, regulatory actions). Without these families the collection
+    fills with capability chatter the brief explicitly anti-focused. Mutates
+    ``clean`` in place; capped at six queries total.
+    """
+    from . import provider_posture as _pp
+    blob = f"{inv.title or ''}\n{inv.keywords or ''}\n{inv.description or ''}"
+    if not _pp.is_provider_investigation(inv.title or "", inv.keywords or "",
+                                         inv.description or ""):
+        return
+    providers = _pp.detect_providers(blob)
+    subject = providers[0]["name"] if providers else "AI provider"
+    families = [
+        f"{subject} privacy policy API data usage training",
+        f"{subject} enterprise zero retention DPA subprocessors",
+        f"{subject} trust center SOC 2 security whitepaper",
+        f"{subject} training data practices incident regulatory",
+    ]
+    have = " ".join(q.get("text") or "" for q in clean).lower()
+    srcs = ["web"] if "web" in enabled else sorted(enabled)
+    if not srcs:
+        return
+    for text in families:
+        if len(clean) >= 6:
+            return
+        if text.lower() in have:
+            continue
+        clean.append({"text": text[:120], "sources": srcs})
+        have += " " + text.lower()
 
 
 def _search_one(args) -> list:

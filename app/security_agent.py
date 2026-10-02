@@ -460,6 +460,43 @@ def run_security_assessment(run_id: int, params: dict):
                    f"itself is unaffected and can be re-synced from the "
                    f"Landscape tab.", {"error": str(_kb_err)[:200]})
 
+        # Provider posture findings: PDP standings from accepted evidence,
+        # unknowns otherwise. Fail-open like the KB sync -- posture is
+        # derived, never scored, and must never fail the run.
+        try:
+            from . import provider_posture as _pp
+            if _pp.is_provider_investigation(
+                    inv.title or "", inv.keywords or "",
+                    params.get("use_case") or ""):
+                from .models import Artifact as _Art
+                _accepted = [
+                    {"id": a.id, "title": a.title, "tags": a.tags,
+                     "artifact_type": a.artifact_type, "review": a.review}
+                    for a in db.query(_Art).filter(
+                        _Art.investigation_id == inv.id,
+                        _Art.review == "accepted").all()]
+                _pdp = _pp.assess_pdp(_accepted)
+                rec.pdp_json = json.dumps(_pdp)
+                db.commit()
+                _stands: dict[str, int] = {}
+                for _f in _pdp.get("findings", []):
+                    _stands[_f.get("standing", "unknown")] = \
+                        _stands.get(_f.get("standing", "unknown"), 0) + 1
+                _event(db, run.id, "map",
+                       f"Provider posture assessed: "
+                       + ", ".join(f"{v} {k}" for k, v in
+                                   sorted(_stands.items()))
+                       + f" across {len(_accepted)} accepted source(s) "
+                       f"(fingerprint {_pdp['fingerprint']}).",
+                       {"standings": _stands,
+                        "catalog": _pp.PDP_ID,
+                        "version": _pp.PDP_VERSION})
+        except Exception as _pdp_err:
+            _event(db, run.id, "map",
+                   f"Provider posture assessment failed ({_pdp_err}); the "
+                   f"assessment itself is unaffected.",
+                   {"error": str(_pdp_err)[:200]})
+
         # Mitigation-advisor hop: the same deterministic pack the Portfolio
         # tab shows, recorded on the run so the pipeline and the tab cannot
         # disagree about what was advised. Fail-open like the KB sync: advice

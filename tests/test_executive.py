@@ -263,6 +263,16 @@ class TestAvailability(ExecCase):
         self.assertTrue(all(L["state"] == "unknown"
                             for L in avail["lights"][:3]))
 
+    def test_provider_posture_coverage_tracks_fresh_pdp(self):
+        import app.provider_posture as pp_mod  # noqa: E402
+        rec = self._model_assessment(situation=SITUATION)
+        rec.pdp_json = json.dumps({"findings": pp_mod.blank_findings()})
+        self.db.commit()
+        avail = ex.availability(self.db, self.inv.id)
+        self.assertEqual(avail["pdp_coverage"]["of"], 1)
+        self.assertEqual(avail["pdp_coverage"]["pct"], 100.0)
+        self.assertEqual(avail["uncovered_providers"], [])
+
 
 class TestDistribution(ExecCase):
     def test_layers_scopes_and_statuses_stay_separate(self):
@@ -275,6 +285,9 @@ class TestDistribution(ExecCase):
         self.assertNotIn("score", dist.keys())
         self.assertNotIn("grade", dist.keys())
         self.assertNotIn("composite", json.dumps(dist))
+        self.assertIn("by_provider", dist)
+        providers = {p["name"] for p in dist["top_providers"]}
+        self.assertIn("churn-app", providers)
 
     def test_insight_cards_carry_numbers_and_links(self):
         self._model_assessment(situation=SITUATION)

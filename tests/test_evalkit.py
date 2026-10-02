@@ -171,6 +171,8 @@ class TestEvalGate(unittest.TestCase):
         self.assertGreaterEqual(report["invariants_run"], 4)
         self.assertGreaterEqual(report["portfolio_cases_run"], 8)
         self.assertGreaterEqual(report["portfolio_invariants_run"], 4)
+        self.assertGreaterEqual(report["provider_cases_run"], 6)
+        self.assertGreaterEqual(report["provider_invariants_run"], 3)
 
     def test_portfolio_cases_name_themselves_and_stay_unique(self):
         names = [c["name"] for c in evalkit.portfolio_cases()]
@@ -179,6 +181,15 @@ class TestEvalGate(unittest.TestCase):
         for c in evalkit.portfolio_cases():
             self.assertTrue(c["note"])
         for i in evalkit.portfolio_invariants():
+            self.assertTrue(i["name"])
+
+    def test_provider_cases_name_themselves_and_stay_unique(self):
+        names = [c["name"] for c in evalkit.provider_cases()]
+        self.assertTrue(all(names))
+        self.assertEqual(len(names), len(set(names)))
+        for c in evalkit.provider_cases():
+            self.assertTrue(c["note"])
+        for i in evalkit.provider_invariants():
             self.assertTrue(i["name"])
 
     def test_every_case_names_itself(self):

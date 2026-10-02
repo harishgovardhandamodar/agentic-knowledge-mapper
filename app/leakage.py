@@ -284,6 +284,25 @@ PLAYBOOKS: list[dict[str, Any]] = [
             "unrelated question.",
         ],
     },
+    {
+        "id": "PB05",
+        "name": "Provider AGI-era collection posture",
+        "select_when": ["external_llm", "confidential_data"],
+        "match": "any",
+        "forced": ["LP04", "LP05", "LP03"],
+        "checks": [
+            "Use contracted enterprise or zero-retention tiers for "
+            "confidential data; consumer defaults are the riskiest tier.",
+            "Confirm in writing whether the provider trains on submitted "
+            "content, per tier, before the first prompt.",
+            "Decide retention and deletion terms up front, with a runbook "
+            "for exercising them.",
+            "Ask downstream vendors about their AI provider use; "
+            "questionnaire, not trust.",
+            "Public terms can change; re-read them on a schedule, so this "
+            "advice expires with the terms it was read from.",
+        ],
+    },
 ]
 
 PLAYBOOK_BY_ID: dict[str, dict[str, Any]] = {p["id"]: p for p in PLAYBOOKS}

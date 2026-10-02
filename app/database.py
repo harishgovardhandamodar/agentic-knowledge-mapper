@@ -93,6 +93,10 @@ _MIGRATIONS = [
     ("security_assessments", "situation_json", "TEXT"),
     ("security_assessments", "initiative_id", "INTEGER"),
     ("security_assessments", "requested_by", "VARCHAR(120)"),
+    # Provider data posture: PDP findings live on the assessment that
+    # produced them. Nullable for the same reason as situation_json -- an
+    # older row has no honest posture finding to report.
+    ("security_assessments", "pdp_json", "TEXT"),
     ("security_assessments", "controls_json", "TEXT"),
     ("security_assessments", "scoring_json", "TEXT"),
     ("security_assessments", "workflow_text", "TEXT"),

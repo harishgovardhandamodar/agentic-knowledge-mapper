@@ -128,6 +128,33 @@ Legend: `[ ]` todo · `[x]` done. Inherits every §0 non-negotiable above.
 - [x] Evalkit: 5 KB partition cases (15/15 green)
 - [x] Full suite green with the known A2A hang deselected
 
+# TODO — provider AGI data posture (`provider_data_posture`)
+
+Branch: `provider-data-posture`.
+Legend: `[ ]` todo · `[x]` done. Same non-negotiables plus: stated policy vs reporting vs unknown; no scores for posture; nothing invented about internal systems.
+
+## PDP-1 — Manager template + collection
+- [x] Deterministic provider-first parse (named providers + data question; capability-only rejected)
+- [x] One topic per provider, canonical subjects, task preserved, single product-style assessment per topic
+- [x] Situation defaults (org confidential+PII, API, employees+service accounts) + keyword marker seeded
+- [x] Planner policy/trust/reporting query families, capped at six
+- [x] Manager template chip pre-filling the command
+
+## PDP-2 — Findings, register, contribution map
+- [x] `provider_data_posture_v1` PDP01–PDP10, fingerprinted; standings (supported/partial/unknown/contradicted), never scores
+- [x] Deterministic assess from accepted evidence only (partial at best); human override the sole path to supported
+- [x] Register rows with null severity, `provider_posture` tag, catalog stamps; tag filter on the register endpoint
+- [x] Direct/indirect contribution map + mermaid + datapoint one-pager
+- [x] Claim guard stripping definite training assertions without tier terms
+
+## PDP-3 — Synthesis, advice, surfaces
+- [x] Compile compare section (PDP table, datapoint answers, indirect map, unknowns) for posture runs
+- [x] PB05 provider playbook selected by confidential+external situations
+- [x] Dashboard `by_provider` distribution + PDP coverage light
+- [x] 24 provider tests, 6 evalkit cases + 3 invariants
+- [x] Full suite green with the known A2A case deselected
+- [x] Live image rebuild + live verification
+
 # TODO — executive / leadership dashboard
 
 Branch: `executive-dashboard`.
