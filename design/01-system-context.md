@@ -11,20 +11,20 @@ Related: [uml.md](02-uml.md) · [interaction.md](interaction.md) ·
 ```mermaid
 flowchart LR
     R["Researcher<br/>browser, no install"]
-    AKM["Agentic Knowledge Mapper<br/>:8204"]
-    GW["fox-services LLM gateway<br/>:8210"]
-    INF["Inference<br/>DGX Spark · RTX 5080 mesh"]
-    WEB["Open web<br/>RSS · arXiv · DuckDuckGo"]
+    AKM["Agentic Knowledge Mapper<br/>:8204<br/>Classic + Risk Console + Dashboard"]
+    GW["fox-services LLM gateway<br/>:8210 — sole LLM + OpenShell broker"]
+    INF["Local Ollama<br/>qwen3.8:27b (only)"]
+    WEB["Open web<br/>RSS · arXiv · DuckDuckGo<br/>via fox-services only"]
     SD["AI Standards dashboard<br/>:5173"]
-    OS["OpenShell sandbox broker<br/>:8210 /api/openshell/*"]
+    OS["OpenShell sandbox broker<br/>:8210 /api/openshell/* (fox-services)"]
     NVD["NVD · CIRCL<br/>CVE enrichment"]
     R -->|"HTTP + X-AKM-Session"| AKM
-    AKM -->|"OpenAI-compatible /v1/chat/completions"| GW
-    GW -->|"HTTP"| INF
-    AKM -->|"keyless fetch"| WEB
+    AKM -->|"OpenAI-compatible /v1/chat/completions<br/>only via fox-services, only local model"| GW
+    GW -->|"HTTP, local only"| INF
+    AKM -->|"keyless fetch via fox-services broker"| WEB
     AKM -->|"HTTP, read-only data.json"| SD
-    AKM -.->|"sandboxed fetch when reachable"| OS
-    AKM -.->|"best-effort enrichment"| NVD
+    AKM -->|"sandboxed fetch via fox-services"| OS
+    AKM -.->|"best-effort enrichment via fox-services"| NVD
     GW -.->|"brokers sandboxed exec"| OS
 
 ```
@@ -121,29 +121,28 @@ flowchart TB
 flowchart TB
     subgraph HOST["Operator machine — DGX Spark, aarch64"]
         subgraph COMPOSE["docker compose (this repo)"]
-            MAPPER["agentic-knowledge-mapper<br/>python:3.12-slim · :8204"]
+            MAPPER["agentic-knowledge-mapper<br/>python:3.12-slim · :8204<br/>Classic + Risk Console · Dashboard"]
             STD["ai-standards-dashboard<br/>nginx static build · :5173"]
             VOL[("named volume akm_data<br/>/app/data → data/akm.db")]
         end
         subgraph SIBLING["fox-services (sibling checkout)"]
-            FOX["fox-services · :8210<br/>OpenAI-compatible gateway<br/>mesh discovery · proofs · OpenShell broker"]
+            FOX["fox-services · :8210<br/>OpenAI-compatible gateway (local only)<br/>OpenShell broker · proofs · search proxy"]
         end
     end
-    subgraph PEER["Mesh peer — axiom-1, 2× RTX 5080"]
-        OLL["Ollama :11434/v1<br/>qwen3.8:27b and friends"]
+    subgraph LOCAL["Local Inference — via fox-services only"]
+        OLL["Ollama :11434/v1<br/>qwen3.8:27b (local, via fox-services)"]
     end
-    subgraph WAN["Internet — keyless, best-effort"]
-        FEEDS["RSS · arXiv · DuckDuckGo · NVD · CIRCL"]
+    subgraph WAN["Internet — keyless, via fox-services only"]
+        FEEDS["RSS · arXiv · DuckDuckGo · NVD · CIRCL<br/>all via fox-services broker"]
     end
     BROWSER["Researcher's browser"]
     BROWSER -->|":8204"| MAPPER
     MAPPER --> VOL
     MAPPER -.->|":5173 data.json"| STD
-    MAPPER -->|"100.101.3.115:11434/v1 (primary)"| OLL
-    MAPPER -->|"host.docker.internal:8210/v1 (fallback)"| FOX
-    MAPPER -.->|"host.docker.internal:8210<br/>OpenShell broker"| FOX
-    MAPPER --> FEEDS
-    FOX -->|"mesh HTTP"| OLL
+    MAPPER -->|"host.docker.internal:8210/v1<br/>only fox-services, only local model"| FOX
+    MAPPER -.->|"host.docker.internal:8210<br/>OpenShell broker + search via fox-services"| FOX
+    MAPPER -->|"via fox-services"| FEEDS
+    FOX -->|"local HTTP"| OLL
 
 ```
 
@@ -199,10 +198,11 @@ Everything the app reads from the environment, in one place. See
 
 | Variable | Default | Effect |
 |---|---|---|
-| `LLM_BASE_URL` | compose: mesh peer `http://100.101.3.115:11434/v1` | primary OpenAI-compatible backend |
-| `LLM_FALLBACK_URL` | `http://host.docker.internal:8210/v1` | second backend, tried on error |
-| `LLM_MODEL` / `LLM_FALLBACK_MODEL` | `qwen3.8:27b` | the model actually asked for, per backend |
+| `LLM_BASE_URL` | compose: fox-services `http://host.docker.internal:8210/v1` (only) | sole OpenAI-compatible backend — all agentic LLM calls via fox-services |
+| `LLM_FALLBACK_URL` | *(empty)* | no mesh peer fallback; local model only (was `http://host.docker.internal:8210/v1`) |
+| `LLM_MODEL` / `LLM_FALLBACK_MODEL` | `qwen3.8:27b` | local model via fox-services (mesh `qwen3.8:27b` no longer used) |
 | `LLM_TIMEOUT_S` | `180` | per-request timeout |
+| `RISK_CONSOLE_ENABLED` | `1` | `0` hides `/console` and Classic header pill |
 | `FOX_TELEMETRY_URL` | *(unset)* | digest-only gateway proof linkage on direct backends |
 | `LEDGER_CAPTURE_PAYLOADS` | `0` | `1` stores prompts and args verbatim; off means hashed + redacted |
 | `AKM_SESSION_IDLE_S` | `1800` | a browser sitting closes after this idle |

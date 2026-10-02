@@ -99,8 +99,8 @@ flowchart TB
     API --> AG & EX & SEC & MGR & SCH & CON & KBS
     SEC --> JOB
     JOB --> SEC
-    AG --> SRCH
-    AG & EX & SEC --> LLM
+    AG --> SRCH --> FOX
+    AG & EX & SEC --> LLM --> FOX
     AG & EX & SEC & MGR & LED & PORT & EXEC & PP & MEM --> DB
     SEC --> LED
     API --> DOS

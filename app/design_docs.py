@@ -77,6 +77,9 @@ _DOCS: list[dict[str, str]] = [
     {"id": "risk-scoring", "file": "risk-scoring.md", "title": "Risk Scoring",
      "group": "Structure", "kind": "scoring · bands · fingerprints",
      "answers": "How register-risk-scoring-v1 produces inherent, residual, priority and band"},
+    {"id": "fox-core", "file": "fox-core.md", "title": "Fox Security Research Core",
+     "group": "Structure", "kind": "switchable core · swarm · MCP",
+     "answers": "How the optimized Fox core (4 swarms + MCP + deterministic core) pairs with the Risk Console"},
 ]
 
 _FENCE_RE = re.compile(r"^\s*```(\w*)\s*$")

@@ -796,6 +796,7 @@ body.pane-sec-top-collapsed .sec-topbar-sub { display: none; }
       <span class="llm-dot" id="llmDot" title="LLM gateway status"><span class="dot"></span><span id="llmLabel">llm: …</span></span>
       <input class="search-box" id="searchInput" placeholder="Search this investigation..." />
       <button onclick="location.href='/console'" class="btn btn-ghost btn-sm" title="Switch to Risk Console"><i class="fas fa-table-columns"></i> Risk Console</button>
+      <button onclick="(function(){const cur=localStorage.getItem('console.core')||'fox';const nxt=cur==='fox'?'classic':'fox';localStorage.setItem('console.core',nxt);alert('Core: '+nxt);})()" class="btn btn-ghost btn-sm" title="Toggle Fox Research Core"><i class="fas fa-fox"></i> Fox Core</button>
       <button onclick="toggleTheme()" class="btn btn-ghost btn-sm" title="Toggle light/dark"><i id="themeIcon" class="fas fa-moon"></i></button>
       <button onclick="togglePane('top')" class="btn btn-ghost btn-sm" title="Collapse header to give the main panel more room"><i class="fas fa-chevron-up"></i></button>
     </div>
