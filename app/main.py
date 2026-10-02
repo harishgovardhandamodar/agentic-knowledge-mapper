@@ -2473,6 +2473,135 @@ def classify_security_subject(data: SecuritySubjectRequest):
     return out
 
 
+# --------------------------------------------------------------------------
+# model-security knowledge base: landscape, graph, selection
+# --------------------------------------------------------------------------
+
+def _landscape_inv(inv_id: int, db: Session) -> int:
+    from .models import Investigation as _Inv
+    if not db.query(_Inv).filter(_Inv.id == inv_id).first():
+        raise HTTPException(404, "Investigation not found")
+    return inv_id
+
+
+@app.get("/api/security/landscape")
+def get_landscape(investigation_id: int, db: Session = Depends(get_db)):
+    """The model-security landscape for one investigation.
+
+    Inventory, the own/inherited/cascade partition, exploit view, insight
+    cards, coverage gaps and catalog context — all derived from stored
+    assessment rows. Nothing here re-runs an agent or re-scores anything.
+    """
+    from . import model_kb as _kb
+    return _kb.landscape(db, _landscape_inv(investigation_id, db))
+
+
+@app.get("/api/security/landscape/graph")
+def get_landscape_graph(investigation_id: int,
+                        db: Session = Depends(get_db)):
+    """Model-security slice of the knowledge graph: KB nodes and edges only.
+
+    A filter over the existing graph rather than a second graph: node kinds and
+    relations are the KB's vocabulary, and every risk edge carries the scope
+    payload a client needs to label it.
+    """
+    from . import model_kb as _kb
+    return _kb.landscape_graph(db, _landscape_inv(investigation_id, db))
+
+
+class LandscapeCompareRequest(BaseModel):
+    investigation_id: int
+    model_keys: Optional[list[str]] = []
+    filters: dict = {}
+    weights: dict = {}
+
+
+@app.post("/api/security/landscape/compare")
+def post_landscape_compare(data: LandscapeCompareRequest,
+                           db: Session = Depends(get_db)):
+    """Multi-axis comparison for model selection.
+
+    Returns a comparison, not a winner. A ranked list appears only when the
+    caller supplies weights, and the payload says which case it is.
+    """
+    from . import model_kb as _kb
+    try:
+        return _kb.compare(db, data.investigation_id, data.model_keys,
+                           data.filters, data.weights)
+    except ValueError as e:
+        # an unknown filter/axis is a caller error, not a silently applied gate
+        raise HTTPException(422, str(e))
+
+
+class LandscapeDecisionRequest(BaseModel):
+    investigation_id: int
+    model_key: str
+    initiative_key: str
+    decision: str
+    actor: str
+    rationale: str = ""
+    weights: dict = {}
+
+
+@app.post("/api/security/landscape/decision")
+def post_landscape_decision(data: LandscapeDecisionRequest, request: Request,
+                            db: Session = Depends(get_db)):
+    """Record a selection decision.
+
+    Writes a ``selected_for`` / ``rejected_for`` edge with actor, rationale and
+    timestamp, and logs a ledger human action. It never touches a score: a
+    decision is a human judgement about a model, not a new measurement of it.
+    """
+    from . import model_kb as _kb
+    inv = _landscape_inv(data.investigation_id, db)
+    try:
+        out = _kb.record_decision(db, inv, data.model_key, data.initiative_key,
+                                  data.decision, data.actor, data.rationale,
+                                  data.weights)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    # The audit entry is signed by the request identity, never by a name in the
+    # payload: a decision is only attributable if it cannot be signed as
+    # somebody else. A payload actor that differs is recorded as declared, so
+    # the discrepancy is visible in the trail instead of silently resolved.
+    signer = ledger_api.request_actor(request)
+    declared = str(data.actor or "").strip()[:64]
+    ledger_api.human_action(request, f"model_{data.decision}",
+                            {"investigation_id": inv,
+                             "model": out["model_key"],
+                             "initiative": out["initiative_key"],
+                             "rationale": (data.rationale or "")[:300],
+                             "declared_actor": declared,
+                             "actor_matches_signer": declared == signer})
+    return out
+
+
+@app.post("/api/security/assessments/{assessment_id}/kb/sync")
+def post_assessment_kb_sync(assessment_id: int,
+                            db: Session = Depends(get_db)):
+    """Re-sync one assessment into the knowledge base.
+
+    Idempotent, so this is the safe way to repair a row whose sync failed or to
+    pick up a KB change on rows that predate it. Reads stored columns only.
+    """
+    from . import model_kb as _kb
+    rec = db.query(SecurityAssessment).filter(
+        SecurityAssessment.id == assessment_id).first()
+    if not rec:
+        raise HTTPException(404, "Assessment not found")
+    try:
+        return _kb.sync_model_kb(db, assessment_id)
+    except LookupError:
+        raise HTTPException(404, "Assessment not found")
+
+
+@app.post("/api/security/landscape/sync")
+def post_landscape_sync(investigation_id: int, db: Session = Depends(get_db)):
+    """Sync every model-path assessment in an investigation, oldest first."""
+    from . import model_kb as _kb
+    return _kb.sync_investigation_kb(db, _landscape_inv(investigation_id, db))
+
+
 @app.get("/.well-known/agents")
 def well_known_agents():
     from .agents import get_agent_cards, PROTOCOL

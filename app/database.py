@@ -71,11 +71,21 @@ _MIGRATIONS = [
     ("investigations", "auto_save_explanations", "INTEGER NOT NULL DEFAULT 1"),
     ("investigations", "hidden", "INTEGER NOT NULL DEFAULT 0"),
     ("artifacts", "drift", "INTEGER NOT NULL DEFAULT 0"),
+    # Model-security knowledge base: node identity + provenance, and edge
+    # payload. Additive only, so an investigation collected before the KB keeps
+    # every artifact and relationship it already had (stable_key stays NULL).
+    ("artifacts", "stable_key", "VARCHAR(200)"),
+    ("artifacts", "node_meta", "TEXT"),
+    ("artifacts", "assessment_id", "INTEGER"),
+    ("relationships", "payload_json", "TEXT"),
+    ("relationships", "stable_key", "VARCHAR(300)"),
     ("security_assessments", "inherent_pct", "FLOAT"),
     ("security_assessments", "residual_pct", "FLOAT"),
     ("security_assessments", "model_json", "TEXT"),
     ("security_assessments", "supersedes_id", "INTEGER"),
     ("security_assessments", "hypothesis_json", "TEXT"),
+    ("security_assessments", "kb_json", "TEXT"),
+    ("security_assessments", "kb_fingerprint", "VARCHAR(20)"),
     ("security_assessments", "controls_json", "TEXT"),
     ("security_assessments", "scoring_json", "TEXT"),
     ("security_assessments", "workflow_text", "TEXT"),

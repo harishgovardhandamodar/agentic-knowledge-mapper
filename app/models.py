@@ -65,7 +65,18 @@ class Artifact(Base):
     drift = Column(Integer, nullable=False, default=0)  # 0|1 — off-brief topic; kept but flagged
     origin = Column(String(20), nullable=False, default="agent")  # agent|manual
     run_id = Column(Integer, ForeignKey("agent_runs.id", ondelete="SET NULL"),
-                    nullable=True, index=True)  # collecting run, if any
+                    nullable=True, index=True)
+    # Knowledge-base identity. A collected page has no stable key and is
+    # deduplicated by title; a KB node (model, attack class, MM control) does,
+    # so re-running an assessment enriches the same row instead of piling up
+    # near-duplicates. Null on everything the graph already owned.
+    stable_key = Column(String(200), nullable=True, index=True)
+    node_meta = Column(Text, nullable=True)  # JSON: family/class/deployment/…
+    # Which assessment last wrote this node. Provenance for the landscape: the
+    # row a register entry points at is the row that measured it.
+    assessment_id = Column(Integer, ForeignKey("security_assessments.id",
+                                               ondelete="SET NULL"),
+                           nullable=True, index=True)
     created_at = Column(DateTime, default=_now)
 
     investigation = relationship("Investigation", back_populates="artifacts")
@@ -81,6 +92,13 @@ class Relationship(Base):
     target_id = Column(Integer, ForeignKey("artifacts.id", ondelete="CASCADE"), nullable=False)
     relationship_type = Column(String(50), nullable=False, default="similar_to")
     description = Column(String(500), nullable=True)
+    # Edge payload. A risk edge is not just "these two are related": it says at
+    # what scope (own / inherited / cascade), on whose evidence, with which
+    # catalog, and to which assessment. Those live in JSON so the relation
+    # vocabulary stays small and the semantics stay extensible.
+    payload_json = Column(Text, nullable=True)  # JSON: scope, confidence, …
+    # Idempotent edge key: "<source_key>|<relationship_type>|<target_key>".
+    stable_key = Column(String(300), nullable=True, index=True)
     origin = Column(String(20), nullable=False, default="agent")  # agent|manual
     run_id = Column(Integer, ForeignKey("agent_runs.id", ondelete="SET NULL"),
                     nullable=True, index=True)
@@ -246,6 +264,12 @@ class SecurityAssessment(Base):
     # (falsifiers, status, evidence links). Separate from threats_json and
     # scoring_json so builder edits can never move the scored confidence.
     hypothesis_json = Column(Text, nullable=True)
+    # Knowledge-base snapshot: this assessment's model inventory, risk /
+    # inheritance / cascade registers and catalog context, as written at score
+    # time. Stored, not recomputed, so a later catalog edit cannot rewrite what
+    # this row saw; kb_fingerprint makes drift visible.
+    kb_json = Column(Text, nullable=True)
+    kb_fingerprint = Column(String(20), nullable=True)
     created_at = Column(DateTime, default=_now)
 
 

@@ -282,13 +282,92 @@ def model_cases() -> list[dict[str, Any]]:
          "dimensions": [{"dimension": "memorization", "rating": "medium"}],
          "expect": {"proposed_excludes": ["MM01", "MM10"],
                     "deferred_contains": ["MM01", "MM10"]},
-         "note": "API-only customers cannot operate training or weight "
-                 "controls: API-side measures only"},
+"note": "API-only customers cannot operate training or weight "
+                  "controls: API-side measures only"},
+        # --- model-security knowledge base: the partition is the invariant ---
+        {"name": "kb-model-specific-finding-is-own",
+         "kind": "kb",
+         "finding": {"applies_to": "model_specific", "confidence": 0.8},
+         "expect": {"scope": "own", "weight": 1.0,
+                    "partition": {"own": 1},
+                    "confidence_is_null": False},
+         "note": "model-specific evidence is own risk"},
+        {"name": "kb-family-finding-is-inherited",
+         "kind": "kb",
+         "finding": {"applies_to": "family", "confidence": 0.6},
+         "expect": {"scope": "inherited", "weight": 0.6,
+                    "partition": {"inherited": 1}},
+         "note": "family evidence is inherited, and weighs less than own"},
+        {"name": "kb-modality-finding-is-inherited",
+         "kind": "kb",
+         "finding": {"applies_to": "modality", "confidence": 0.4},
+         "expect": {"scope": "inherited", "weight": 0.4,
+                    "partition": {"inherited": 1}},
+         "note": "modality evidence is the weakest transferable kind"},
+        {"name": "kb-composition-evidence-is-cascade-not-own",
+         "kind": "kb",
+         "finding": {"attack_class": "cascade", "applies_to": "modality",
+                     "mechanism": "fine_tune", "confidence": 0.7},
+         "expect": {"scope": "cascade", "partition": {"cascade": 1}},
+         "note": "a cascade row can never be filed as own risk: the base-model "
+                 "control that would close own risk does not close a "
+                 "composition path"},
+        {"name": "kb-missing-confidence-stays-null",
+         "kind": "kb",
+         "finding": {"applies_to": "model_specific"},
+         "expect": {"scope": "own", "confidence_is_null": True},
+         "note": "absent confidence is unknown, never zero"},
     ]
 
 
 def _run_model_case(case: dict[str, Any]) -> dict[str, Any]:
     from . import model_eval as _me
+    if case["kind"] == "kb":
+        from . import model_kb as _kb
+        exp = case.get("expect", {})
+        failures = []
+        finding = dict(case["finding"])
+        finding.setdefault("attack_class", "extraction")
+        finding.setdefault("attack_label", case["name"])
+        scope, evidence_scope = _kb.scope_of_finding(finding)
+        row = {"risk_id": f"{case['name']}:{scope}", "model_key": "kb-case",
+               "attack_class": finding["attack_class"],
+               "attack_label": finding["attack_label"], "scope": scope,
+               "evidence_scope": evidence_scope,
+               "severity": case.get("severity", 70),
+               "scope_weight": _me.scope_weight(finding.get("applies_to")),
+               "confidence": finding.get("confidence"),
+               "mechanism": finding.get("mechanism"),
+               "exposure": finding.get("exposure")}
+        if "scope" in exp and scope != exp["scope"]:
+            failures.append({"field": "scope", "expected": exp["scope"],
+                             "actual": scope})
+        if "weight" in exp and abs(row["scope_weight"] - exp["weight"]) > 1e-9:
+            failures.append({"field": "scope_weight",
+                             "expected": exp["weight"],
+                             "actual": row["scope_weight"]})
+        if exp.get("confidence_is_null") and row["confidence"] is not None:
+            failures.append({"field": "confidence", "expected": None,
+                             "actual": row["confidence"]})
+        part = _kb.partition_risks([row])
+        if "partition" in exp:
+            got = {k: len(v) for k, v in part.items() if v}
+            if got != exp["partition"]:
+                failures.append({"field": "partition",
+                                 "expected": exp["partition"], "actual": got})
+        # composition signals are read from the brief text, exactly as the
+        # snapshot reads them: a topic word is a labelled inference
+        for text, want in (case.get("briefs") or []):
+            got = sorted({s["mechanism"] for s in
+                          _kb.cascade_signals({}, use_case=text)})
+            if want not in got:
+                failures.append({"field": f"mechanisms in {text!r}",
+                                 "expected": want, "actual": got})
+        return {"name": case["name"], "note": case.get("note", ""),
+                "ok": not failures, "failures": failures,
+                "result": {"scope": scope,
+                           "scope_weight": row["scope_weight"],
+                           "partition": {k: len(v) for k, v in part.items()}}}
     if case["kind"] == "exp":
         plan = _me.plan_experiments(
             case["meta"], case.get("attacks", []),

@@ -947,6 +947,54 @@ def _diagram_index(rows: list[dict], answers: list[dict]) -> list[dict]:
         if any(g["diagrams"] for g in groups) else []
 
 
+def _kb_snapshot(db, rec) -> dict[str, Any]:
+    """This row's knowledge-base contribution, for the dossier's KB snapshot.
+
+    Prefers the snapshot stored at score time. A row that predates the KB has
+    none, so the registers are derived from its stored columns — still no agent
+    run and no re-score, which is the only rule that matters here.
+    """
+    stored = _load(getattr(rec, "kb_json", None), None)
+    snap = stored if isinstance(stored, dict) and stored.get("risk_register") \
+        is not None else None
+    derived = False
+    if snap is None:
+        try:
+            from . import model_kb as _kb
+            cand = _kb.build_snapshot(db, rec)
+            if not cand.get("skipped"):
+                snap, derived = cand, True
+        except Exception:
+            snap = None
+    if not snap:
+        return {}
+    counts = snap.get("counts") or {}
+    inv = snap.get("inventory") or {}
+    gaps: list[dict] = []
+    try:
+        from . import model_kb as _kb
+        gaps = _kb.coverage_gaps([snap], {snap.get("model_key") or "": snap})
+    except Exception:
+        gaps = []
+    return {
+        "method": snap.get("method"),
+        "version": snap.get("version"),
+        "fingerprint": snap.get("fingerprint") or getattr(rec, "kb_fingerprint", None),
+        "derived": derived,
+        "model_key": snap.get("model_key"),
+        "counts": counts,
+        "inventory": inv,
+        "partition": {"own": counts.get("own", 0),
+                      "inherited": counts.get("inherited", 0),
+                      "cascade": counts.get("cascade", 0)},
+        "cascade_mechanisms": sorted({str(r.get("mechanism") or "")
+                                     for r in snap.get("cascade") or []}),
+        "top_gaps": [{"kind": g.get("kind"), "severity": g.get("severity"),
+                      "label": g.get("label")} for g in gaps[:5]],
+        "catalogs": snap.get("catalogs") or {},
+    }
+
+
 def _score_audit(db, inv_id: int) -> dict[str, Any]:
     """Per-assessment score audit: inputs, arithmetic, and what moved the
     number. ``latest`` marks the row that currently stands for each path."""
@@ -1026,6 +1074,9 @@ def _score_audit(db, inv_id: int) -> dict[str, Any]:
             detail = _model_engineering_scoring(scoring, items, model_meta)
         else:
             detail = _dimension_scoring(path, scoring, items)
+        if path in ("model", "model_adversarial", "model_hypothesis",
+                    "model_engineering"):
+            detail["kb"] = _kb_snapshot(db, rec)
         _raw_score = scoring.get("overall_pct", rec.overall_pct)
         rows_out.append({
             "id": rec.id,
@@ -1881,6 +1932,36 @@ def dossier_markdown(db, inv_id: int, dossier: dict | None = None) -> str:
                   or "hop trace not recorded")
               + ".")
             A("")
+        kb = (det or {}).get("kb") or {}
+        if kb.get("counts"):
+            p = kb.get("partition") or {}
+            A(f"**KB snapshot.** {_short(str(kb.get('inventory', {}).get('model_name') or row.get('product_name') or ''), 60)}"
+              f" · {len(kb.get('inventory') or {}) and 1 or 0} model row(s) · "
+              f"risk register split **own {p.get('own', 0)} / "
+              f"inherited {p.get('inherited', 0)} / cascade {p.get('cascade', 0)}**"
+              + (f" (via {', '.join(kb['cascade_mechanisms'])})"
+                 if kb.get("cascade_mechanisms") else "")
+              + f" · {kb.get('counts', {}).get('experiments', 0)} planned "
+                f"experiment(s) · fingerprint "
+                f"{kb.get('fingerprint') or 'not recorded'}"
+              + (" (registers derived from stored rows at export)"
+                 if kb.get("derived") else "")
+              + ". Own risk is model-specific evidence; inherited is family or "
+                "modality level; cascade arrives through composition and is not "
+                "closed by a base-model control.")
+            A("")
+            for g in kb.get("top_gaps") or []:
+                A(f"- **{g.get('severity', '?')}** — {_short(str(g.get('label') or ''), 160)}")
+            if kb.get("top_gaps"):
+                A("")
+            cats = kb.get("catalogs") or {}
+            if cats:
+                A("Catalogs in this row: "
+                  + "; ".join(f"{k} {v.get('version')} "
+                              f"({v.get('fingerprint')})"
+                              for k, v in sorted(cats.items())
+                              if isinstance(v, dict)) + ".")
+                A("")
 
     # --- appendix: the current reports verbatim, older ones as a log ---
     # Reprinting every superseded assessment roughly triples this section

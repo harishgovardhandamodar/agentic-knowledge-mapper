@@ -326,7 +326,7 @@ def rank_mitigations(meta: dict[str, Any], attacks: list[dict],
         if not cls or cls in DEPRECATED["attack_classes"]:
             continue
         sev = ATTACK_CLASSES.get(cls, ATTACK_CLASSES["other"])["severity"]
-        scope = _SCOPE_WEIGHTS.get(str(f.get("applies_to") or ""), 0.4)
+        scope = scope_weight(f.get("applies_to"))
         try:
             conf = max(0.0, min(1.0, float(f.get("confidence", 0.5))))
         except (TypeError, ValueError):
@@ -414,7 +414,7 @@ def score_mitigation_residual(attacks: list[dict], dimensions: list[dict],
                 or cls in DEPRECATED["attack_classes"]:
             continue
         sev = ATTACK_CLASSES.get(cls, ATTACK_CLASSES["other"])["severity"]
-        scope = _SCOPE_WEIGHTS.get(str(f.get("applies_to") or ""), 0.4)
+        scope = scope_weight(f.get("applies_to"))
         try:
             conf = max(0.0, min(1.0, float(f.get("confidence", 0.5))))
         except (TypeError, ValueError):
@@ -780,6 +780,16 @@ def _clamp01(x: Any) -> float:
         return 0.0
 
 
+def scope_weight(applies_to: Any) -> float:
+    """Weight W1 gives a finding at this evidence scope.
+
+    Public so the knowledge base can label a register row with the same weight
+    the score used. If the two ever disagreed, the register would claim a
+    stronger or weaker standing than the number it sits beside.
+    """
+    return _SCOPE_WEIGHTS.get(str(applies_to or ""), 0.4)
+
+
 def score_adversarial(findings: list[dict],
                       exposure_weight: float = 1.0) -> dict[str, Any]:
     """W1 ``adversarial_coverage_v1``: applicable adversarial evidence as risk.
@@ -797,7 +807,7 @@ def score_adversarial(findings: list[dict],
         if cls in DEPRECATED["attack_classes"]:
             continue
         sev = ATTACK_CLASSES.get(cls, ATTACK_CLASSES["other"])["severity"]
-        scope = _SCOPE_WEIGHTS.get(str(f.get("applies_to") or ""), 0.4)
+        scope = scope_weight(f.get("applies_to"))
         conf = _clamp01(f.get("confidence", 0.5))
         contribs.append({"attack_id": f.get("attack_id") or f"MA-{i + 1:02d}",
                          "contribution": round(sev * scope * conf, 2)})

@@ -71,3 +71,63 @@ dossier, method+versions on every row).
 - [x] Per-stage durations surfaced (run stats + dossier §2)
 - [x] Manager synthesis: open gaps, incomplete stats, deferred MM, open falsifiers
 - [x] explainer_gap durability kept (no regression)
+
+---
+
+# TODO — model security knowledge base & landscape
+
+Plan: `docs/plans/model-security-kb-landscape.md`.
+Branch: `model-security-kb-landscape`.
+Legend: `[ ]` todo · `[x]` done. Inherits every §0 non-negotiable above.
+
+## KB-1 — Schema (additive only)
+- [x] `Artifact.stable_key` / `node_meta` / `assessment_id`
+- [x] `Relationship.payload_json` / `stable_key`
+- [x] `SecurityAssessment.kb_json` / `kb_fingerprint`
+- [x] Migrations additive — no column rewrite or backfill of existing rows
+
+## KB-2 — Sync layer
+- [x] `model_kb.sync_model_kb(db, assessment_id)` idempotent (re-run = no dupes)
+- [x] Post-assessment hook in `security_agent` — sync failure keeps the assessment
+- [x] Snapshot built from stored columns only, never a live re-score
+
+## KB-3 — Scope partition (own / inherited / cascade)
+- [x] `model_specific`→own, `family`/`modality`→inherited
+- [x] Cascade checked **first** — composition rows can never land in `inherited`
+- [x] No-evidence stays `null`; cascade rows keep basis + mechanism + note
+- [x] Explicit `assessment_path` honored (`standard` not re-judged by profiler)
+- [x] Product assessments never create model nodes
+
+## KB-4 — Landscape API + registers
+- [x] `GET /security/landscape` (inventory, registers, gaps, catalogs)
+- [x] `GET /security/landscape/graph` (filtered, scoped edges)
+- [x] `POST /security/landscape/compare` — hard-gate filters, opt-in weights
+- [x] No default winner; excluded models carry `exclusion_reasons`
+- [x] Unknown filter/axis name → 422, never silently dropped
+- [x] `POST /security/landscape/decision` — logged human judgement, no score
+- [x] `supersedes` edges persisted, lineage-aware, comparable versions only
+- [x] `POST /security/assessments/{id}/kb/sync` (stale/legacy rows)
+
+## KB-5 — Dossier
+- [x] KB snapshot JSON + Markdown section (partition counts, cascade, gaps, fingerprint)
+- [x] Reads stored rows only; derivation provenance recorded
+
+## KB-6 — Landscape UI
+- [x] Inventory / Risk / Graph / Insights / Compare / Gaps views
+- [x] Graph payload aliases match renderer field names
+- [x] Compare renderer reads `selection_scorecard` keys
+- [x] Decision recording (selected / rejected) with actor attribution
+
+## KB-7 — Hypotheses + experiments
+- [x] Falsifier→experiment links drive derived experiment plans
+- [x] Plan is deterministic, stored-row derived; failure surfaces as `experiment_plan_error`
+
+## KB-8 — Tests + evalkit
+- [x] 66 KB tests (partition, idempotency, cascade, filters, weights, decisions)
+- [x] Real-pipeline sync-hook test (`run_security_assessment` end to end)
+- [x] Evalkit: 5 KB partition cases (15/15 green)
+- [x] Full suite green with the known A2A hang deselected
+
+## Follow-ups (not blocking)
+- [ ] Verify inherited versioning baselines still deliberate for pack/model fingerprints
+- [ ] `SecurityAssessRequest.allow_partial` semantics confirmed against the KB path

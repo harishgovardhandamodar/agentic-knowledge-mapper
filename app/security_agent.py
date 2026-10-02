@@ -433,6 +433,29 @@ def run_security_assessment(run_id: int, params: dict):
         db.commit()
         db.refresh(rec)
 
+        # Sync the model-security knowledge base. Assessment -> graph nodes,
+        # edges and stored registers, idempotently: a second run on the same
+        # model enriches the same nodes instead of adding near-duplicates. A
+        # product assessment is skipped by the sync itself; a KB failure must
+        # never cost the operator their assessment, so it is reported as an
+        # event and the row stands.
+        try:
+            from . import model_kb as _kb
+            _kbres = _kb.sync_model_kb(db, rec.id)
+            if not _kbres.get("skipped"):
+                _event(db, run.id, "map",
+                       f"Knowledge base synced: {_kbres['nodes_created']} new "
+                       f"node(s), {_kbres['nodes_updated']} enriched, "
+                       f"{_kbres['edges_created']} new edge(s) "
+                       f"(fingerprint {_kbres['fingerprint']}).",
+                       {k: v for k, v in _kbres.items()
+                        if k not in ("skipped", "reason")})
+        except Exception as _kb_err:
+            _event(db, run.id, "map",
+                   f"Knowledge base sync failed ({_kb_err}); the assessment "
+                   f"itself is unaffected and can be re-synced from the "
+                   f"Landscape tab.", {"error": str(_kb_err)[:200]})
+
         # NOTE: build_assessment ran the A2A workflow on this same session;
         # expire everything so later reads see fresh state.
         db.expire_all()

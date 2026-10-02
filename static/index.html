@@ -1049,6 +1049,7 @@ body.pane-sec-top-collapsed .sec-topbar-sub { display: none; }
       <div class="sec-subtabs" id="secPaneTabs" role="tablist" aria-label="Security agent views">
         <button class="sec-subtab on" data-pane="assess" onclick="secSwitchPaneTab('assess')" role="tab"><i class="fas fa-wand-magic-sparkles"></i>Assessment</button>
         <button class="sec-subtab" data-pane="standards" onclick="secSwitchPaneTab('standards')" role="tab"><i class="fas fa-scale-balanced"></i>Standards coverage<span class="sec-subtab-n" id="secStdCount" hidden></span></button>
+        <button class="sec-subtab" data-pane="landscape" onclick="secSwitchPaneTab('landscape')" role="tab"><i class="fas fa-chart-network"></i>Landscape<span class="sec-subtab-n" id="secLandCount" hidden></span></button>
       </div>
       <div class="sec-grid" id="secAssessWrap">
         <div class="sec-setup">
@@ -1194,6 +1195,41 @@ body.pane-sec-top-collapsed .sec-topbar-sub { display: none; }
           <div id="secStdFindBar" hidden></div>
           <div id="secStdBody"></div>
           <div id="secStdFoot" class="std-note" style="margin-top:8px;"></div>
+        </div>
+      </div>
+      <div id="secLandscapeWrap" hidden>
+        <div class="sec-card">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;flex-wrap:wrap;">
+            <h3 style="font-size:13px;margin:0;"><i class="fas fa-chart-network" style="color:var(--teal);"></i> Security landscape</h3>
+            <span id="secLandCounts" style="font-size:11px;color:var(--text2);"></span>
+            <span style="flex:1"></span>
+            <button class="btn btn-ghost btn-sm" id="secLandSyncBtn" onclick="secLandSync()" title="Re-sync stored assessments into the knowledge base (idempotent)"><i class="fas fa-rotate"></i> Sync KB</button>
+            <button class="btn btn-ghost btn-sm" onclick="secLoadLandscape(true)"><i class="fas fa-rotate"></i></button>
+          </div>
+          <div class="std-note" style="margin-bottom:10px;">
+            Model security as a knowledge base for this investigation: inventory, the
+            <b>own / inherited / cascade</b> partition, exploits, engineering insights,
+            coverage gaps and selection aids. Reads stored assessment rows — nothing here
+            re-scores or executes. Risk from literature is evidence, not a measured
+            production residual.
+          </div>
+          <div class="std-filters">
+            <select id="secLandFilter" aria-label="Filter models" onchange="secLandRender()"></select>
+            <button class="std-viewbtn on" id="secLandViewInventory" onclick="secLandSetView('inventory')">Inventory</button>
+            <button class="std-viewbtn" id="secLandViewRisk" onclick="secLandSetView('risk')">Risk</button>
+            <button class="std-viewbtn" id="secLandViewGraph" onclick="secLandSetView('graph')">Graph</button>
+            <button class="std-viewbtn" id="secLandViewInsights" onclick="secLandSetView('insights')">Insights</button>
+            <button class="std-viewbtn" id="secLandViewCompare" onclick="secLandSetView('compare')">Selection</button>
+            <button class="std-viewbtn" id="secLandViewGaps" onclick="secLandSetView('gaps')">Gaps</button>
+          </div>
+          <div id="secLandBody"></div>
+          <div id="secLandDecision" hidden></div>
+          <div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap;">
+            <button class="btn btn-ghost btn-sm" onclick="secLandDecide('selected')"><i class="fas fa-circle-check"></i> Record selection</button>
+            <button class="btn btn-ghost btn-sm" onclick="secLandDecide('rejected')"><i class="fas fa-circle-xmark"></i> Record rejection</button>
+            <span class="std-note">A decision writes an edge with actor and rationale. It never changes a score.</span>
+          </div>
+          <div id="secLandFoot" class="std-note" style="margin-top:8px;"></div>
         </div>
       </div>
     </div>
@@ -5623,6 +5659,13 @@ let secStdOpen = null;
 let secStdFilters = { q: '', jur: 'all', kind: 'all' };
 let secStdPick = [];
 let secStdMode = 'single';
+/* Model-security landscape: investigation-scoped, derived from stored rows. */
+let secLandCache = null;
+let secLandGraph = null;
+let secLandView = 'inventory';
+let secLandModel = '';
+let secLandPick = [];
+let secLandCmp = null;
 let secCveCount = 0;
 /* The A2A task id doubles as this assessment's ledger run id, which is how the
    audit sub-tab knows which chain to show. */
@@ -7324,14 +7367,16 @@ function secPopulateForm(d) {
  * anything. Dense Matrix and expandable Detail are one toggle apart.
  */
 function secSwitchPaneTab(key) {
-  if (key !== 'assess' && key !== 'standards') return;
+  if (key !== 'assess' && key !== 'standards' && key !== 'landscape') return;
   secPaneTab = key;
   document.querySelectorAll('#secPaneTabs .sec-subtab').forEach(b => {
     b.classList.toggle('on', b.dataset.pane === key);
   });
   document.getElementById('secAssessWrap').hidden = key !== 'assess';
   document.getElementById('secStdWrap').hidden = key !== 'standards';
+  document.getElementById('secLandscapeWrap').hidden = key !== 'landscape';
   if (key === 'standards') secLoadStandards();
+  if (key === 'landscape') secLoadLandscape();
 }
 
 function secStdKey() { return secAssessmentId ? String(secAssessmentId) : 'all'; }
@@ -7402,6 +7447,263 @@ async function secLoadStandards(force) {
 function secStdSetView(v) {
   secStdView = v === 'detail' ? 'detail' : (v === 'findings' ? 'findings' : 'matrix');
   secStdRender();
+}
+
+/* ------------------------------------------------------------------ *
+ * Security landscape — the model-security knowledge base
+ *
+ * Everything here reads stored assessment rows through the landscape
+ * endpoints. The three-way partition is the whole point of the view, so
+ * own / inherited / cascade always carry their label and never merge:
+ * a cascade row is not a property of the base model, and a base-model
+ * control does not close it.
+ * ------------------------------------------------------------------ */
+
+function secLandInv() {
+  return (typeof currentInv !== 'undefined' && currentInv) ? currentInv.id
+       : (typeof INV_ID !== 'undefined' ? INV_ID : null);
+}
+
+async function secLoadLandscape(force) {
+  const body = document.getElementById('secLandBody');
+  const foot = document.getElementById('secLandFoot');
+  const inv = secLandInv();
+  if (!inv) {
+    if (body) body.innerHTML = '<div class="std-err">Open an investigation first — the landscape is scoped to one investigation, never global.</div>';
+    if (foot) foot.textContent = '';
+    return;
+  }
+  if (!force && secLandCache) { secLandRender(); return; }
+  if (body) body.innerHTML = '<div class="std-err">Loading the model-security landscape…</div>';
+  try {
+    const r = await fetch(`${API}/security/landscape?investigation_id=${inv}`, { cache: 'no-store' });
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      throw new Error((d && d.detail) ? d.detail : `HTTP ${r.status}`);
+    }
+    secLandCache = await r.json();
+    const models = secLandCache.inventory || [];
+    if (!models.some(m => m.model_key === secLandModel)) secLandModel = models.length ? models[0].model_key : '';
+    secLandPick = models.filter(m => m.model_key === secLandModel).map(m => m.model_key);
+    secLandCmp = null;
+  } catch (e) {
+    if (body) body.innerHTML = `<div class="std-err">Could not load the landscape: ${escHtml(e.message || e)}. <button class="btn btn-ghost btn-sm" onclick="secLoadLandscape(true)"><i class="fas fa-rotate"></i> Retry</button></div>`;
+    if (foot) foot.textContent = '';
+    return;
+  }
+  secLandRender();
+}
+
+async function secLandSync() {
+  const inv = secLandInv();
+  const foot = document.getElementById('secLandFoot');
+  if (!inv) return;
+  foot.textContent = 'Syncing stored assessments into the knowledge base…';
+  try {
+    const r = await fetch(`${API}/security/landscape/sync?investigation_id=${inv}`, { method: 'POST' });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
+    const n = (d.results || []).filter(x => !x.skipped).length;
+    foot.textContent = `Synced ${n} assessment(s) — this is idempotent; re-running enriches the same nodes instead of adding duplicates.`;
+    secLandCache = null;
+    await secLoadLandscape(true);
+  } catch (e) {
+    foot.textContent = `Sync failed: ${e.message || e}`;
+  }
+}
+
+function secLandSetView(v) {
+  secLandView = v;
+  if (v === 'graph') secLoadLandGraph();
+  else secLandRender();
+}
+
+function secLandScopeBadge(scope) {
+  const map = {
+    own: ['own — model-specific evidence', 'var(--teal)'],
+    inherited: ['inherited — family or modality level', 'var(--amber)'],
+    cascade: ['cascade — arrives through composition', 'var(--red)']
+  };
+  const m = map[scope] || [scope || 'unknown', 'var(--text2)'];
+  return `<span class="std-pill" style="border-color:${m[1]};color:${m[1]}" title="${escHtml(m[0])}">${escHtml(scope || 'unknown')}</span>`;
+}
+
+function secLandRows() {
+  const p = secLandCache;
+  if (!p) return [];
+  if (secLandModel) return (p.risk_register || []).filter(r => r.model_key === secLandModel);
+  return p.risk_register || [];
+}
+
+async function secLoadLandGraph() {
+  const inv = secLandInv();
+  if (!inv || secLandGraph) { secLandRender(); return; }
+  try {
+    const r = await fetch(`${API}/security/landscape/graph?investigation_id=${inv}`, { cache: 'no-store' });
+    if (r.ok) secLandGraph = await r.json();
+  } catch (e) { /* the graph is a convenience; the tables are the record */ }
+  secLandRender();
+}
+
+function secLandRender() {
+  const p = secLandCache;
+  if (!p) return;
+  const body = document.getElementById('secLandBody');
+  const counts = document.getElementById('secLandCounts');
+  const foot = document.getElementById('secLandFoot');
+  const badge = document.getElementById('secLandCount');
+  ['Inventory', 'Risk', 'Graph', 'Insights', 'Compare', 'Gaps'].forEach((label, i) => {
+    const b = document.getElementById('secLandView' + label);
+    if (b) b.classList.toggle('on', secLandView === ['inventory', 'risk', 'graph', 'insights', 'compare', 'gaps'][i]);
+  });
+  const models = p.inventory || [];
+  const c = p.counts || {};
+  if (counts) counts.textContent = `${models.length} model(s) · own ${c.own || 0} / inherited ${c.inherited || 0} / cascade ${c.cascade || 0} · ${c.risk_rows || 0} risk row(s) · ${c.experiments_planned || 0} planned experiment(s)`;
+  if (badge) { badge.hidden = false; badge.textContent = String(models.length); }
+
+  const sel = document.getElementById('secLandFilter');
+  if (sel) {
+    const want = '<option value="">All models</option>' + models.map(m =>
+      `<option value="${escHtml(m.model_key)}"${m.model_key === secLandModel ? ' selected' : ''}>${escHtml(m.model_name || m.model_key)}</option>`).join('');
+    if (sel.dataset.built !== String(models.length) + '|' + secLandModel) {
+      sel.innerHTML = want;
+      sel.dataset.built = String(models.length) + '|' + secLandModel;
+    }
+  }
+
+  if (secLandView === 'inventory') {
+    const rows = models.map(m => `<tr>
+        <td><b>${escHtml(m.model_name || m.model_key)}</b>${m.model_family ? `<div class="std-note">${escHtml(m.model_family)}</div>` : ''}</td>
+        <td>${escHtml(m.weights_source || 'unknown')}</td>
+        <td>${escHtml(m.deployment_pattern || 'unknown')}</td>
+        <td>${escHtml(m.training_data_posture || 'unknown')}</td>
+        <td>${m.w1_pct === null || m.w1_pct === undefined ? '<span class="std-note">no score — no evidence collected</span>' : escHtml(String(m.w1_pct)) + '%'}</td>
+        <td>${(m.counts && (m.counts.own || m.counts.inherited || m.counts.cascade)) ? `${m.counts.own || 0}/${m.counts.inherited || 0}/${m.counts.cascade || 0}` : '<span class="std-note">—</span>'}</td>
+        <td class="std-note">${escHtml(String(m.assessed_at || ''))}</td>
+      </tr>`).join('');
+    body.innerHTML = models.length
+      ? `<table class="std-table"><thead><tr><th>Model</th><th>Weights</th><th>Deployment</th><th>Training data</th><th>W1</th><th>own/inh/casc</th><th>Assessed</th></tr></thead><tbody>${rows}</tbody></table>`
+      : `<div class="std-err" style="border-color:var(--teal);"><strong>No model assessments in this investigation yet.</strong> The landscape fills itself from stored assessment rows — run a model-path assessment on the Assess tab first. Nothing is imported from elsewhere.</div>`;
+  } else if (secLandView === 'risk') {
+    const rows = secLandRows();
+    body.innerHTML = rows.length
+      ? `<table class="std-table"><thead><tr><th>Severity</th><th>Scope</th><th>Attack</th><th>Model</th><th>Mechanism</th><th>Confidence</th><th>Exposure</th><th>Basis</th></tr></thead><tbody>${rows.map(r => `<tr>
+          <td><b>${escHtml(String(r.severity))}</b></td>
+          <td>${secLandScopeBadge(r.scope)}</td>
+          <td>${escHtml(r.attack_label || r.attack_class)}</td>
+          <td>${escHtml(r.model_key)}</td>
+          <td>${escHtml(r.mechanism || r.exposure || '—')}</td>
+          <td>${r.confidence === null || r.confidence === undefined ? '<span class="std-note">unknown</span>' : escHtml(String(r.confidence))}</td>
+          <td>${escHtml(r.exposure || '—')}</td>
+          <td class="std-note">${escHtml(r.basis || '')}${r.evidence_ids && r.evidence_ids.length ? ' · ' + r.evidence_ids.length + ' evidence node(s)' : ''}</td>
+        </tr>`).join('')}</tbody></table>`
+      : '<div class="std-err">No risk rows for this selection. Risk comes from collected evidence, so empty means nothing was collected — it is not a clean bill of health.</div>';
+    if (foot) foot.textContent = 'Severity weights scope on purpose: cascade scores lower than own risk for the same attack, because a base-model control does not close a composition path.';
+  } else if (secLandView === 'graph') {
+    const g = secLandGraph;
+    if (!g) { body.innerHTML = '<div class="std-err">Loading the knowledge graph slice…</div>'; return; }
+    const nodes = (g.nodes || []).map(n => `<div class="std-row"><b>${escHtml(n.label || n.id)}</b> <span class="std-note">${escHtml(n.kind)}</span></div>`).join('');
+    const rels = (g.relationships || []).map(r => `<div class="std-row"><span class="std-note">${escHtml(r.source)}</span> → <b>${escHtml(r.relation)}</b> → <span class="std-note">${escHtml(r.target)}</span>${r.scope ? ' ' + secLandScopeBadge(r.scope) : ''}</div>`).join('');
+    body.innerHTML = `<div class="std-grid2"><div><h4 style="font-size:12px;margin:8px 0 4px;">Nodes (${(g.nodes || []).length})</h4>${nodes || '<div class="std-note">none</div>'}</div><div><h4 style="font-size:12px;margin:8px 0 4px;">Edges (${(g.relationships || []).length})</h4>${rels || '<div class="std-note">none</div>'}</div></div>`;
+    if (foot) foot.textContent = 'This is the same knowledge graph as the Graph tab, filtered to model-security nodes. Every risk edge carries its scope payload, so a client can label a cascade edge without guessing.';
+  } else if (secLandView === 'insights') {
+    const cards = p.insight_cards || [];
+    body.innerHTML = cards.length ? cards.map(k => `<div class="std-card" style="margin-bottom:8px;">
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+          <b>${escHtml(k.title)}</b>
+          <span class="std-pill">${escHtml(k.kind)}</span>
+          ${k.severity !== null && k.severity !== undefined ? `<span class="std-pill">severity ${escHtml(String(k.severity))}</span>` : ''}
+          ${(k.models || []).map(m => `<span class="std-note">${escHtml(m)}</span>`).join('')}
+        </div>
+        <div style="font-size:12px;color:var(--text2);margin-top:4px;">${escHtml(k.claim)}</div>
+        ${(k.evidence || []).length ? `<div class="std-note" style="margin-top:4px;">Evidence: ${(k.evidence || []).slice(0, 4).map(e => escHtml(String(e))).join('; ')}</div>` : '<div class="std-note" style="margin-top:4px;">Evidence: none recorded — this is a hypothesis, not a finding.</div>'}
+      </div>`).join('') : '<div class="std-err">No insight cards yet — they are derived from risk rows and coverage, so they appear once assessments exist.</div>';
+    if (foot) foot.textContent = 'Deterministic: every card is derived from stored rows, never written by a model. A card with no evidence is labelled as a hypothesis.';
+  } else if (secLandView === 'compare') {
+    body.innerHTML = `<div class="std-note" style="margin-bottom:8px;">Pick models, then compare. A comparison shows every axis side by side; a <b>ranked</b> list appears only when you supply weights, and only then is it a scorecard. Nothing is ranked by default — a selection decision is a human judgement, not an output.</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;">${(p.inventory || []).map(m => `<button class="std-viewbtn${secLandPick.includes(m.model_key) ? ' on' : ''}" onclick="secLandTogglePick('${escHtml(m.model_key)}')">${escHtml(m.model_name || m.model_key)}</button>`).join('')}</div>
+      <div id="secLandCmpBox">${secLandCmp ? secLandCompareHtml(secLandCmp) : '<div class="std-note">Pick two or more models, then run the comparison.</div>'}
+      <button class="btn btn-primary btn-sm" onclick="secLandCompare()"${secLandPick.length < 2 ? ' disabled' : ''}><i class="fas fa-scale-balanced"></i> Compare</button></div>`;
+    if (foot) foot.textContent = '';
+  } else {
+    const gaps = p.coverage_gaps || [];
+    body.innerHTML = gaps.length ? `<table class="std-table"><thead><tr><th>Severity</th><th>Kind</th><th>Label</th><th>Why it matters</th></tr></thead><tbody>${gaps.map(g => `<tr><td><b>${escHtml(String(g.severity))}</b></td><td><span class="std-pill">${escHtml(g.kind)}</span></td><td>${escHtml(g.label)}</td><td class="std-note">${escHtml(g.why || '')}</td></tr>`).join('')}</tbody></table>`
+      : '<div class="std-err">No coverage gaps detected.</div>';
+    if (foot) foot.textContent = 'A gap is a decision the map cannot make for you: missing evidence, an unresolved scope, or a hypothesis with no refutation test.';
+  }
+  const dec = document.getElementById('secLandDecision');
+  if (dec) {
+    dec.hidden = !(p.decisions && p.decisions.length);
+    if (!dec.hidden) {
+      dec.innerHTML = `<h4 style="font-size:12px;margin:6px 0 4px;">Recorded decisions</h4>` +
+        p.decisions.map(d => `<div class="std-row"><b>${escHtml(d.decision)}</b> <span class="std-note">${escHtml(d.model_key)} → ${escHtml(d.initiative_key)}</span> <span class="std-note">by ${escHtml(d.actor)}${d.rationale ? ': ' + escHtml(d.rationale) : ''} · ${escHtml(String(d.decided_at || ''))}</span></div>`).join('');
+    }
+  }
+}
+
+function secLandDecide(decision) {
+  const p = secLandCache;
+  if (!p) return;
+  const model = secLandModel || (p.inventory && p.inventory[0] ? p.inventory[0].model_key : '');
+  if (!model) return;
+  const initiative = (prompt('Which initiative is this decision about? (a stable key you use to track the selection)') || '').trim();
+  if (!initiative) return;
+  const rationale = (prompt('Rationale — one line, kept with the decision') || '').trim();
+  const actor = (prompt('Recorded as (your name or handle)') || '').trim();
+  if (!actor) return;
+  fetch(`${API}/security/landscape/decision`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ investigation_id: secLandInv(), model_key: model,
+                           initiative_key: initiative, decision, actor, rationale })
+  }).then(async r => {
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
+    secLandCache = null;
+    await secLoadLandscape(true);
+  }).catch(e => {
+    document.getElementById('secLandFoot').textContent = `Could not record the decision: ${e.message || e}`;
+  });
+}
+
+function secLandTogglePick(key) {
+  const i = secLandPick.indexOf(key);
+  if (i >= 0) secLandPick.splice(i, 1); else secLandPick.push(key);
+  secLandCmp = null;
+  secLandRender();
+}
+
+function secLandCompareHtml(c) {
+  const head = (c.ranked || []).map(r => `<th>${escHtml(r.model_key)}<div class="std-note">${escHtml(String(r.score))}</div></th>`).join('');
+  const axisRow = (label, fn) => `<tr><th>${escHtml(label)}</th>${(c.models || []).map(m => `<td>${fn(m)}</td>`).join('')}</tr>`;
+  const val = v => (v === null || v === undefined) ? '<span class="std-note">no evidence</span>' : escHtml(String(v));
+  return `<div class="std-note" style="margin-bottom:6px;">${c.ranked ? 'Ranked by the weights you supplied — every input that fed the number is shown below, and an excluded model is reported as excluded with its reason.' : 'Comparison only. No ranking, because no weights were supplied — a default winner would be a fabricated verdict.'}</div>
+    <table class="std-table"><thead><tr><th>Axis</th>${(c.models || []).map(m => `<th>${escHtml(m.model_key)}</th>`).join('')}${head ? '' : ''}</tr></thead><tbody>
+      ${axisRow('Risk (own)', m => val((m.own || []).length ? Math.max(...m.own.map(r => r.severity)) : null))}
+      ${axisRow('Inherited risk', m => val((m.inherited || []).length ? Math.max(...m.inherited.map(r => r.severity)) : null))}
+      ${axisRow('Cascade exposure', m => val((m.cascade || []).length ? m.cascade.length + ' path(s): ' + m.cascade.map(r => r.mechanism || r.exposure).join(', ') : null))}
+      ${axisRow('Evidence base', m => val((m.evidence_count !== undefined ? m.evidence_count : null)))}
+      ${axisRow('Experiment coverage', m => val(m.untested_risks !== undefined ? (m.untested_risks.length ? m.untested_risks.length + ' untested' : 'none untested') : null))}
+      ${axisRow('Open questions', m => val((m.open_questions || []).length ? m.open_questions.length : null))}
+      ${axisRow('W1', m => val(m.w1_pct === undefined ? null : m.w1_pct))}
+    </tbody></table>
+    ${(c.excluded || []).length ? `<div class="std-note" style="margin-top:6px;">Excluded: ${c.excluded.map(x => `${escHtml(x.model_key)} (${escHtml(x.reason)})`).join('; ')}</div>` : ''}`;
+}
+
+async function secLandCompare() {
+  const box = document.getElementById('secLandCmpBox');
+  if (box) box.innerHTML = '<div class="std-note">Comparing…</div>';
+  try {
+    const r = await fetch(`${API}/security/landscape/compare`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ investigation_id: secLandInv(), model_keys: secLandPick, filters: {}, weights: {} })
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
+    secLandCmp = d;
+    secLandRender();
+  } catch (e) {
+    if (box) box.innerHTML = `<div class="std-err">Compare failed: ${escHtml(e.message || e)}</div>`;
+  }
 }
 
 function secStdToggleRow(id) {
