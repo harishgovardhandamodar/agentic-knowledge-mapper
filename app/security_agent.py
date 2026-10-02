@@ -371,6 +371,7 @@ def run_security_assessment(run_id: int, params: dict):
         rec = SecurityAssessment(
             investigation_id=inv.id,
             run_id=run.id,
+            requested_by=params.get("requested_by"),
             product_name=result["product_name"],
             product_url=result["product_url"],
             exposure=result["exposure"],
@@ -388,6 +389,9 @@ def run_security_assessment(run_id: int, params: dict):
                 "openshell": result.get("openshell", {}),
             }),
             scoring_json=json.dumps(result.get("scoring", {})),
+            situation_json=json.dumps(params["situation"])
+            if params.get("situation") else None,
+            initiative_id=params.get("initiative_id"),
             perspectives_json=json.dumps(result.get("perspectives", [])),
             posture=result["posture"],
             markdown=result["markdown"],
@@ -455,6 +459,33 @@ def run_security_assessment(run_id: int, params: dict):
                    f"Knowledge base sync failed ({_kb_err}); the assessment "
                    f"itself is unaffected and can be re-synced from the "
                    f"Landscape tab.", {"error": str(_kb_err)[:200]})
+
+        # Mitigation-advisor hop: the same deterministic pack the Portfolio
+        # tab shows, recorded on the run so the pipeline and the tab cannot
+        # disagree about what was advised. Fail-open like the KB sync: advice
+        # is derived from stored rows and versioned catalogs, never a
+        # re-score, so it must never fail the run.
+        try:
+            from .agents import new_envelope as _new_env, dispatch as _dispatch
+            _adv_res = _dispatch(_new_env(
+                "security-orchestrator", "mitigation-advisor",
+                "advise_portfolio_risks",
+                {"investigation_id": inv.id,
+                 "initiative_id": params.get("initiative_id")}), db)
+            _adv_payload = _adv_res.get("payload", {}) or {}
+            _adv_items = _adv_payload.get("advice", []) or []
+            _event(db, run.id, "advise",
+                   f"mitigation-advisor: {len(_adv_items)} advice item(s), "
+                   f"{sum(1 for a in _adv_items if a.get('quick_win'))} "
+                   f"quick win(s) ({_adv_payload.get('method')} "
+                   f"v{_adv_payload.get('version')}, deterministic).",
+                   {"advice_count": len(_adv_items),
+                    "initiative_id": params.get("initiative_id")})
+        except Exception as _adv_err:
+            _event(db, run.id, "advise",
+                   f"mitigation-advisor unavailable ({_adv_err}); advice "
+                   f"remains available from the Portfolio tab.",
+                   {"error": str(_adv_err)[:200]})
 
         # NOTE: build_assessment ran the A2A workflow on this same session;
         # expire everything so later reads see fresh state.

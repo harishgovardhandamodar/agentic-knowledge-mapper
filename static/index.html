@@ -1050,6 +1050,7 @@ body.pane-sec-top-collapsed .sec-topbar-sub { display: none; }
         <button class="sec-subtab on" data-pane="assess" onclick="secSwitchPaneTab('assess')" role="tab"><i class="fas fa-wand-magic-sparkles"></i>Assessment</button>
         <button class="sec-subtab" data-pane="standards" onclick="secSwitchPaneTab('standards')" role="tab"><i class="fas fa-scale-balanced"></i>Standards coverage<span class="sec-subtab-n" id="secStdCount" hidden></span></button>
         <button class="sec-subtab" data-pane="landscape" onclick="secSwitchPaneTab('landscape')" role="tab"><i class="fas fa-chart-network"></i>Landscape<span class="sec-subtab-n" id="secLandCount" hidden></span></button>
+        <button class="sec-subtab" data-pane="portfolio" onclick="secSwitchPaneTab('portfolio')" role="tab"><i class="fas fa-shield-halved"></i>Portfolio<span class="sec-subtab-n" id="secPfCount" hidden></span></button>
       </div>
       <div class="sec-grid" id="secAssessWrap">
         <div class="sec-setup">
@@ -1230,6 +1231,49 @@ body.pane-sec-top-collapsed .sec-topbar-sub { display: none; }
             <span class="std-note">A decision writes an edge with actor and rationale. It never changes a score.</span>
           </div>
           <div id="secLandFoot" class="std-note" style="margin-top:8px;"></div>
+        </div>
+      </div>
+      <div id="secPortfolioWrap" hidden>
+        <div class="sec-card">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;flex-wrap:wrap;">
+            <h3 style="font-size:13px;margin:0;"><i class="fas fa-shield-halved" style="color:var(--teal);"></i> Portfolio risk</h3>
+            <span id="secPfCounts" style="font-size:11px;color:var(--text2);"></span>
+            <span style="flex:1"></span>
+            <button class="btn btn-ghost btn-sm" onclick="secLoadPortfolio(true)"><i class="fas fa-rotate"></i></button>
+          </div>
+          <div class="std-note" style="margin-bottom:10px;">
+            One register across product, model, privacy and supply-chain rows. Every row names the
+            assessment and catalog it came from, and reports its own control coverage split into
+            <b>evidenced</b> and <b>declared only</b>. Severity is comparable within a layer; the
+            layers are not collapsed into one number. Nothing here marks a risk secured.
+          </div>
+          <div class="std-filters">
+            <select id="secPfLayer" aria-label="Filter layer" onchange="secPfRender()">
+              <option value="">All layers</option>
+              <option value="product">Product</option>
+              <option value="model">Model</option>
+              <option value="privacy">Privacy</option>
+              <option value="supply_chain">Supply chain</option>
+            </select>
+            <select id="secPfStatus" aria-label="Filter status" onchange="secPfRender()">
+              <option value="">All statuses</option>
+              <option value="open">Open</option>
+              <option value="mitigating">Mitigating</option>
+              <option value="accepted">Accepted</option>
+              <option value="transferred">Transferred</option>
+              <option value="closed">Closed</option>
+            </select>
+            <div class="std-viewbtn" style="cursor:default;" id="secPfMetrics"></div>
+          </div>
+          <div class="std-filters">
+            <button class="std-viewbtn on" id="secPfViewRegister" onclick="secPfSetView('register')">Register</button>
+            <button class="std-viewbtn" id="secPfViewLeakage" onclick="secPfSetView('leakage')">Leakage</button>
+            <button class="std-viewbtn" id="secPfViewCascade" onclick="secPfSetView('cascade')">Cascade</button>
+            <button class="std-viewbtn" id="secPfViewAdvice" onclick="secPfSetView('advice')">Advice</button>
+            <button class="std-viewbtn" id="secPfViewIntel" onclick="secPfSetView('intel')">Intel</button>
+          </div>
+          <div id="secPfBody"></div>
+          <div id="secPfFoot" class="std-note" style="margin-top:8px;"></div>
         </div>
       </div>
     </div>
@@ -7367,7 +7411,8 @@ function secPopulateForm(d) {
  * anything. Dense Matrix and expandable Detail are one toggle apart.
  */
 function secSwitchPaneTab(key) {
-  if (key !== 'assess' && key !== 'standards' && key !== 'landscape') return;
+  if (key !== 'assess' && key !== 'standards' && key !== 'landscape'
+      && key !== 'portfolio') return;
   secPaneTab = key;
   document.querySelectorAll('#secPaneTabs .sec-subtab').forEach(b => {
     b.classList.toggle('on', b.dataset.pane === key);
@@ -7375,8 +7420,10 @@ function secSwitchPaneTab(key) {
   document.getElementById('secAssessWrap').hidden = key !== 'assess';
   document.getElementById('secStdWrap').hidden = key !== 'standards';
   document.getElementById('secLandscapeWrap').hidden = key !== 'landscape';
+  document.getElementById('secPortfolioWrap').hidden = key !== 'portfolio';
   if (key === 'standards') secLoadStandards();
   if (key === 'landscape') secLoadLandscape();
+  if (key === 'portfolio') secLoadPortfolio();
 }
 
 function secStdKey() { return secAssessmentId ? String(secAssessmentId) : 'all'; }
@@ -8385,3 +8432,238 @@ window.addEventListener('resize', () => { if (network) network.fit({ animation: 
 </script>
 </body>
 </html>
+
+/* ------------------------------------------------------------------ *
+ * Portfolio: unified register, leakage pathways, cascade, advice.
+ *
+ * Every table here is derived from stored rows on the server. The client
+ * never computes a score, a severity or a recommendation: it renders what
+ * the portfolio layer decided and says which catalog decided it. An empty
+ * column means unknown, not zero, and that distinction is the whole point
+ * of the view.
+ * ------------------------------------------------------------------ */
+
+let secPfCache = null, secPfView = 'register';
+
+function secPfInv() {
+  return (typeof currentInv !== 'undefined' && currentInv) ? currentInv.id
+       : (typeof INV_ID !== 'undefined' ? INV_ID : null);
+}
+
+function secPfSetView(v) {
+  secPfView = v;
+  ['register', 'leakage', 'cascade', 'advice', 'intel'].forEach(k => {
+    const b = document.getElementById(`secPfView${k[0].toUpperCase()}${k.slice(1)}`);
+    if (b) b.classList.toggle('on', k === v);
+  });
+  secPfRender();
+}
+
+function secPfBadge(text, tone) {
+  const c = tone === 'bad' ? 'var(--red, #f85149)'
+          : tone === 'warn' ? 'var(--yellow, #d29922)'
+          : tone === 'good' ? 'var(--green, #3fb950)' : 'var(--text2)';
+  return `<span style="font-size:10.5px;padding:1px 6px;border-radius:6px;border:1px solid ${c};color:${c};">${escHtml(text)}</span>`;
+}
+
+function secPfUnknown(value, known) {
+  // the difference between "nothing here" and "we do not know" is the
+  // reason this column exists
+  return known ? escHtml(value)
+    : '<span style="color:var(--text3);font-style:italic;">unknown</span>';
+}
+
+async function secLoadPortfolio(force) {
+  const body = document.getElementById('secPfBody');
+  const inv = secPfInv();
+  if (!inv) {
+    if (body) body.innerHTML = '<div class="std-err">Open an investigation first — the portfolio is scoped to one investigation, never global.</div>';
+    return;
+  }
+  if (!force && secPfCache) { secPfRender(); return; }
+  if (body) body.innerHTML = '<div class="std-err">Loading the portfolio register…</div>';
+  const need = { register: 1, leakage: 1, cascade: 1, intel: 1 };
+  try {
+    const get = async (path, opts) => {
+      const r = await fetch(`${API}/portfolio/${path}`, Object.assign({ cache: 'no-store' }, opts || {}));
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      return r.json();
+    };
+    const [reg, leak, casc, intel] = await Promise.all([
+      get(`register?investigation_id=${inv}`),
+      get(`leakage?investigation_id=${inv}`),
+      get(`cascade?investigation_id=${inv}`),
+      get(`intel?investigation_id=${inv}`),
+    ]);
+    let advice = null;
+    if (secPfView === 'advice' || need.advice) {
+      advice = await (await fetch(`${API}/portfolio/advisor`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ investigation_id: inv }),
+      })).json();
+    }
+    let metrics = null;
+    if (secPfView === 'register' || secPfView === 'intel') {
+      metrics = await get(`metrics?investigation_id=${inv}`);
+    }
+    secPfCache = { register: reg, leakage: leak, cascade: casc, intel, advice, metrics };
+  } catch (e) {
+    if (body) body.innerHTML = `<div class="std-err">Could not load the portfolio: ${escHtml(e.message || e)}. <button class="btn btn-ghost btn-sm" onclick="secLoadPortfolio(true)"><i class="fas fa-rotate"></i> Retry</button></div>`;
+    return;
+  }
+  secPfRender();
+}
+
+function secPfRender() {
+  const body = document.getElementById('secPfBody');
+  const foot = document.getElementById('secPfFoot');
+  const counts = document.getElementById('secPfCounts');
+  if (!body || !secPfCache) return;
+  const c = secPfCache;
+  if (counts) {
+    counts.textContent = `${c.register.total} risks · ${c.leakage.total} pathways · ${c.intel.total} intel`;
+    const badge = document.getElementById('secPfCount');
+    if (badge) { badge.hidden = false; badge.textContent = String(c.register.total); }
+  }
+  const m = c.metrics;
+  if (m) {
+    const box = document.getElementById('secPfMetrics');
+    if (box) {
+      const p = (v) => v === null || v === undefined ? 'unknown' : `${Math.round(v * 100)}%`;
+      const acc = m.accepted_vs_open || {};
+      const accTxt = (acc.accepted === undefined || acc.open === undefined)
+        ? 'accepted unknown'
+        : `accepted ${acc.accepted} · open ${acc.open}`;
+      box.innerHTML = `<b style="color:var(--text)">${c.register.total}</b> risks · owned ${p(m.pct_with_owner)} · reviewed ${p(m.pct_with_review_date)} · with mitigation ${p(m.pct_with_mitigation)} · ${accTxt}`;
+    }
+  }
+  if (secPfView === 'register') body.innerHTML = secPfRegisterHtml();
+  else if (secPfView === 'leakage') body.innerHTML = secPfLeakageHtml();
+  else if (secPfView === 'cascade') body.innerHTML = secPfCascadeHtml();
+  else if (secPfView === 'advice') body.innerHTML = secPfAdviceHtml();
+  else body.innerHTML = secPfIntelHtml();
+  if (foot) foot.textContent = c.register.note || '';
+}
+
+function secPfRegisterHtml() {
+  const c = secPfCache;
+  const layer = (document.getElementById('secPfLayer') || {}).value || '';
+  const status = (document.getElementById('secPfStatus') || {}).value || '';
+  let rows = c.register.risks.filter(r =>
+    (!layer || r.layer === layer) && (!status || r.status === status));
+  if (!rows.length) {
+    return `<div class="std-note">No rows match this filter.${c.register.unowned ? ` ${c.register.unowned} row(s) in the register have no owner — that is reported here rather than filled in.` : ''}</div>`;
+  }
+  const head = `<tr><th>Risk</th><th>Layer</th><th>Scope</th><th style="text-align:right;">Severity</th><th>Status</th><th>Owner</th><th>Controls</th><th>From</th></tr>`;
+  const body = rows.map(r => {
+    const cov = r.control_coverage || {};
+    const opts = r.control_options || [];
+    const covTxt = cov.covered === undefined
+      ? (opts.length ? `options: ${opts.join(', ')}` : '—')
+      : `${cov.covered || 0}% covered (${(cov.evidenced || []).length} evidenced, ${(cov.declared_only || []).length} declared)`;
+    const tone = r.severity >= 70 ? 'bad' : r.severity >= 40 ? 'warn' : null;
+    return `<tr>
+      <td><b>${escHtml(r.risk_id)}</b><div style="color:var(--text2);">${escHtml(r.title || '')}</div></td>
+      <td>${secPfBadge(r.layer, r.layer === 'privacy' ? 'warn' : null)}</td>
+      <td>${secPfBadge(r.scope || 'own', r.scope === 'cascade' ? 'bad' : null)}</td>
+      <td style="text-align:right;">${r.severity === null ? 'unknown' : r.severity}</td>
+      <td>${secPfBadge(r.status, r.status === 'accepted' ? 'warn' : (r.status === 'closed' ? 'good' : null))}${r.status === 'accepted' ? `<div style="font-size:10px;color:var(--text3);">by ${escHtml(r.accepted_by || '?')}</div>` : ''}</td>
+      <td>${r.owner ? escHtml(r.owner) : '<span style="color:var(--text3);font-style:italic;">unowned</span>'}</td>
+      <td>${covTxt}</td>
+      <td style="font-size:10.5px;color:var(--text3);">${escHtml(r.source_catalog || '')} ${escHtml(r.source_ref || '')}</td>
+    </tr>`;
+  }).join('');
+  const warnings = [];
+  if (c.register.unowned) warnings.push(`${c.register.unowned} row(s) have no owner`);
+  if (c.register.accepted_without_note) warnings.push(`${c.register.accepted_without_note} acceptance(s) recorded with no note`);
+  return (warnings.length ? `<div class="std-note" style="margin-bottom:8px;"><i class="fas fa-circle-exclamation"></i> ${warnings.join(' · ')}</div>` : '')
+    + `<div style="overflow-x:auto;"><table class="sec-table">${head}${body}</table></div>`;
+}
+
+function secPfLeakageHtml() {
+  const c = secPfCache;
+  if (!c.leakage.total) {
+    return `<div class="std-note">No situation profile has been recorded yet, so no pathway could be derived. That is not a clean bill of health — record where the model actually runs (channel, data, blast radius) and this fills in.</div>`;
+  }
+  const byId = {};
+  c.leakage.pathways.forEach(p => { (byId[p.source_ref] = byId[p.source_ref] || []).push(p); });
+  const sections = Object.keys(byId).sort().map(id => {
+    const rows = byId[id];
+    const p0 = rows[0];
+    const body = rows.map(r => {
+      const cov = r.control_coverage || {};
+      return `<tr>
+        <td>${escHtml(r.product_name || r.assessment_id)}</td>
+        <td style="text-align:right;">${r.severity}</td>
+        <td>${(cov.evidenced || []).length ? secPfBadge(`${cov.evidenced.length} evidenced`, 'good') : secPfBadge('none evidenced', 'bad')}</td>
+        <td style="font-size:10.5px;color:var(--text3);">${(cov.declared_only || []).join(', ') || '—'}</td>
+        <td style="font-size:10.5px;">${escHtml(r.why || '')}</td>
+      </tr>`;
+    }).join('');
+    return `<div style="margin-bottom:12px;"><div style="display:flex;gap:8px;align-items:center;margin-bottom:4px;flex-wrap:wrap;">
+        <b style="font-size:12px;">${escHtml(p0.title || id)}</b>
+        ${secPfBadge(id)}
+        ${secPfBadge(`likelihood ${p0.likelihood}`, p0.likelihood >= 0.7 ? 'bad' : null)}
+      </div>
+      <div style="overflow-x:auto;"><table class="sec-table">
+        <tr><th>Product</th><th style="text-align:right;">Severity</th><th>Evidenced controls</th><th>Declared only</th><th>Why derived</th></tr>${body}</table></div></div>`;
+  }).join('');
+  const pb = (c.leakage.playbooks || []).map(p => `<div style="margin-bottom:6px;"><b>${escHtml(p.id)} — ${escHtml(p.name || '')}</b><div style="color:var(--text2);font-size:11.5px;">matched: ${escHtml((p.matched_tags || []).join(', '))} · covers ${(p.forced || []).join(', ')}</div>${(p.checks && p.checks[0]) ? `<div style="font-size:11.5px;">${escHtml(p.checks[0])}</div>` : ''}</div>`).join('');
+  return `<div class="std-note" style="margin-bottom:10px;">Catalog ${escHtml(c.leakage.catalog_version)} · <span style="font-family:var(--mono,monospace);font-size:10.5px;">${escHtml(c.leakage.catalog_fingerprint)}</span>. Only pathways the declared situation actually exposes are listed; an absent pathway was not derived, which is not the same as closed.</div>`
+    + sections
+    + (pb ? `<div style="margin-top:14px;"><b style="font-size:12px;">Playbooks for these situations</b>${pb}</div>` : '');
+}
+
+function secPfCascadeHtml() {
+  const c = secPfCache;
+  if (!c.cascade.total) {
+    return `<div class="std-note">No cascade edges derived. An edge appears when two initiatives share a model or a mechanism. With one initiative there is nothing to cascade into — that is a property of the portfolio, not a clean result.</div>`;
+  }
+  const body = c.cascade.edges.map(e => `<tr>
+    <td>${escHtml(e.from)}</td>
+    <td style="color:var(--text3);">${escHtml(e.mechanism)}</td>
+    <td>${escHtml(e.to || '—')}</td>
+    <td>${secPfBadge(e.basis, e.basis === 'transitive' ? 'bad' : null)}</td>
+    <td style="font-size:10.5px;color:var(--text2);">${escHtml(e.why || '')}${(e.basis === 'transitive' && e.via) ? `<div style="color:var(--text3);">via ${escHtml(e.via.join(' → '))}</div>` : ''}</td>
+  </tr>`).join('');
+  return `<div class="std-note" style="margin-bottom:8px;">${c.cascade.transitive} transitive edge(s) — a risk reaching an initiative that does not own it. ${escHtml(c.cascade.note)}</div>`
+    + `<div style="overflow-x:auto;"><table class="sec-table">
+        <tr><th>From</th><th>Mechanism</th><th>To</th><th>Basis</th><th>Why</th></tr>${body}</table></div>`;
+}
+
+function secPfAdviceHtml() {
+  const c = secPfCache;
+  if (!c.advice) return '<div class="std-err">Advice not loaded.</div>';
+  const a = c.advice;
+  if (!a.advice.length) return '<div class="std-note">No open rows to advise on.</div>';
+  const cards = a.advice.map(x => {
+    const ctl = x.controls.map(c2 => `<li><b>${escHtml(c2.control_id)}</b> ${escHtml(c2.title || '')}<div style="color:var(--text2);font-size:11px;">${escHtml(c2.why || '')}</div>${c2.inventory_delta ? `<div style="font-size:10.5px;color:var(--text3);">${escHtml(c2.inventory_delta)}</div>` : ''}${c2.residual_limitation ? `<div style="font-size:10.5px;color:var(--yellow,#d29922);">${escHtml(c2.residual_limitation)}</div>` : ''}</li>`).join('');
+    const un = (x.controls_unavailable || []).map(c2 => `<li style="color:var(--text3);"><b>${escHtml(c2.control_id)}</b> ${escHtml(c2.title || '')}<div style="font-size:10.5px;">${escHtml(c2.reason_dropped || '')}</div></li>`).join('');
+    return `<div style="border:1px solid var(--border);border-radius:8px;padding:10px;margin-bottom:8px;">
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:4px;">
+        <b>${escHtml(x.risk_id)}</b>${secPfBadge(x.layer)}${x.quick_win ? secPfBadge('quick win', 'good') : ''}
+      </div>
+      ${x.title ? `<div style="font-size:11.5px;margin-bottom:4px;">${escHtml(x.title)}</div>` : ''}
+      <div style="color:var(--text2);font-size:11.5px;margin-bottom:6px;">${escHtml(x.why || '')}</div>
+      ${ctl ? `<ul style="margin:0;padding-left:18px;font-size:11.5px;">${ctl}</ul>` : '<div class="std-note">No available control for this situation. Advice that cannot be given is reported as absent.</div>'}
+      ${un ? `<div style="margin-top:6px;font-size:11px;color:var(--text3);"><b>Withheld:</b><ul style="margin:0;padding-left:18px;">${un}</ul></div>` : ''}
+    </div>`;
+  }).join('');
+  return `<div class="std-note" style="margin-bottom:10px;">${escHtml(a.method)} v${escHtml(a.version)} · ${a.advice.length} item(s). Deterministic: the same situation yields the same list. <b>${escHtml(a.limitations[0] || '')}</b></div>` + cards;
+}
+
+function secPfIntelHtml() {
+  const c = secPfCache;
+  const i = c.intel;
+  const block = (title, items, tone) => (!items || !items.length) ? '' :
+    `<div style="margin-bottom:8px;"><b style="font-size:12px;">${escHtml(title)} ${secPfBadge(String(items.length), tone)}</b>
+      <ul style="font-size:11.5px;margin:4px 0 0;padding-left:18px;">${items.map(x => `<li>${escHtml(typeof x === 'string' ? x : JSON.stringify(x))}</li>`).join('')}</ul></div>`;
+  const body = [
+    block('New known issues', i.new_known_issues, 'bad'),
+    block('Artifacts flagged drift', i.drifted_artifacts, 'warn'),
+    block('Stale assessments', i.stale_assessments, 'warn'),
+    block('Catalog drift', i.catalog_drift, 'bad'),
+  ].join('');
+  return `<div class="std-note" style="margin-bottom:10px;">${i.quiet ? secPfBadge('quiet', 'good') : secPfBadge('has triggers', 'warn')} ${escHtml(i.note)}</div>`
+    + (body || '<div class="std-note">Nothing changed in this window.</div>');
+}

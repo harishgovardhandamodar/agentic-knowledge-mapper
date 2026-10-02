@@ -498,6 +498,233 @@ def model_invariants() -> list[dict[str, Any]]:
     return out
 
 
+def portfolio_cases() -> list[dict[str, Any]]:
+    """Pinned portfolio arithmetic. Rebaseline deliberately, not accidentally.
+
+    Only pure functions are pinned here -- situation normalisation, the
+    multiplier, pathway derivation, control mapping and cascade -- because the
+    evalkit runs with no database and no network. Anything needing stored rows
+    (the register, advice packs, intel) is covered by ``tests/test_portfolio.py``
+    instead.
+    """
+    internal_chat = {
+        "data": {"classification": "internal"}, "channel": "chat_ui",
+        "actors": ["analyst"], "controls": {}, "blast_radius": {},
+        "external": False, "obligations": [],
+    }
+    restricted_chat = {
+        "data": {"classification": "restricted", "pii_likelihood": True},
+        "channel": "chat_ui", "actors": ["analyst"],
+        "controls": {"dlp": "evidenced", "logging": "declared"},
+        "blast_radius": {"tickets": True}, "external": True,
+        "obligations": ["GDPR Art.28"],
+    }
+    extraction = {"layer": "model", "source_ref": "MA-01",
+                  "attack_class": "extraction", "scope": "own"}
+    return [
+        {"name": "pf-declared-equals-unknown",
+         "kind": "pf-multiplier",
+         "situation": {**internal_chat,
+                       "controls": {"dlp": "declared"}},
+         "expect": {"multiplier": 1.0},
+         "note": "a declared control is recorded, never counted"},
+        {"name": "pf-evidenced-reduces",
+         "kind": "pf-multiplier",
+         "situation": {**internal_chat,
+                       "controls": {"dlp": "evidenced"}},
+         "expect": {"multiplier": 0.9},
+         "note": "only evidenced standing moves the number"},
+        {"name": "pf-restricted-chat",
+         "kind": "pf-multiplier",
+         "situation": restricted_chat,
+         "expect": {"multiplier": 1.55},
+         "note": "restricted PII on a customer chat with one evidenced control"},
+        {"name": "pf-lp01-severity-and-coverage",
+         "kind": "pf-leakage",
+         "situation": restricted_chat,
+         "meta": {"weights_source": "open_weights"},
+         "expect": {"pathways": {
+             "LP01": {"severity": 74.4, "evidenced": ["C03"],
+                      "declared_only": []},
+             "LP03": {"severity": 65.1, "evidenced": [],
+                      "declared_only": ["C08"]},
+             "LP04": {"severity": 77.5, "evidenced": [],
+                      "declared_only": []}}},
+         "note": "severity shows its parts; declared logging is not coverage"},
+        {"name": "pf-extraction-maps-mm",
+         "kind": "pf-map",
+         "risk": extraction,
+         "situation": restricted_chat,
+         "meta": {"weights_source": "open_weights"},
+         "expect": {"live": ["MM01", "MM02", "MM03", "MM05",
+                              "MM08", "MM09", "MM12", "MM13"],
+                     "dropped": []},
+         "note": "open weights can take weight-level advice"},
+        {"name": "pf-api-only-withholds-training",
+         "kind": "pf-map",
+         "risk": extraction,
+         "situation": restricted_chat,
+         "meta": {"weights_source": "api_only"},
+         "expect": {"live": ["MM02", "MM08", "MM09", "MM12", "MM13"],
+                     "dropped": ["MM01", "MM03", "MM05"]},
+         "note": "withheld controls are named, not quietly dropped"},
+        {"name": "pf-shared-model-cascades-transitively",
+         "kind": "pf-cascade",
+         "initiatives": [
+             {"title": "Churn scoring", "models": ["acme-v2"],
+              "business_use_case": "fine-tuned model on PII"},
+             {"title": "Support assistant", "models": ["acme-v2"],
+              "business_use_case": "agent with tool access to CRM"}],
+         "expect": {"transitive": True},
+         "note": "the composed path reaches the team that does not own it"},
+        {"name": "pf-catalog-fingerprints",
+         "kind": "pf-fingerprints",
+         "expect": {"leakage": "be5648831fa9",
+                     "playbooks": "e0aa39ab7db2"},
+         "note": "a catalog edit must show up here before it moves a number"},
+    ]
+
+
+def _run_portfolio_case(case: dict[str, Any]) -> dict[str, Any]:
+    from . import leakage as _lk
+    from . import portfolio as _pf
+    kind = case["kind"]
+    exp = case.get("expect", {})
+    failures = []
+    result: dict[str, Any] = {}
+    if kind == "pf-multiplier":
+        sit = _pf.normalize_situation(case["situation"])
+        mult = _pf.situation_multiplier(sit)
+        result = {"multiplier": mult["multiplier"]}
+        if abs(mult["multiplier"] - exp["multiplier"]) > TOLERANCE:
+            failures.append({"field": "multiplier",
+                              "expected": exp["multiplier"],
+                              "actual": mult["multiplier"]})
+    elif kind == "pf-leakage":
+        sit = _pf.normalize_situation(case["situation"])
+        rows = {r["source_ref"]: r
+                for r in _pf.leakage_rows(sit, case.get("meta") or {})}
+        result = {k: {"severity": v["severity"],
+                      "evidenced": v["control_coverage"]["evidenced"],
+                      "declared_only":
+                          v["control_coverage"]["declared_only"]}
+                  for k, v in rows.items()}
+        for pid, want in exp.get("pathways", {}).items():
+            got = result.get(pid)
+            if got is None:
+                failures.append({"field": f"pathway {pid}",
+                                  "expected": "derived", "actual": "absent"})
+                continue
+            if abs(got["severity"] - want["severity"]) > TOLERANCE:
+                failures.append({"field": f"{pid} severity",
+                                  "expected": want["severity"],
+                                  "actual": got["severity"]})
+            for field in ("evidenced", "declared_only"):
+                if got[field] != want[field]:
+                    failures.append({"field": f"{pid} {field}",
+                                      "expected": want[field],
+                                      "actual": got[field]})
+    elif kind == "pf-map":
+        sit = _pf.normalize_situation(case["situation"])
+        mapped = _pf.map_controls(case["risk"], sit, case.get("meta") or {})
+        live = [m["control_id"] for m in mapped if not m["dropped"]]
+        dropped = [m["control_id"] for m in mapped if m["dropped"]]
+        result = {"live": live, "dropped": dropped}
+        if live != exp.get("live"):
+            failures.append({"field": "live", "expected": exp.get("live"),
+                              "actual": live})
+        if dropped != exp.get("dropped"):
+            failures.append({"field": "dropped",
+                              "expected": exp.get("dropped"),
+                              "actual": dropped})
+    elif kind == "pf-cascade":
+        from . import portfolio as _pf2
+        edges = _pf2.portfolio_cascade({}, case.get("initiatives") or [])
+        transitive = [e for e in edges if e["basis"] == "transitive"]
+        result = {"edges": len(edges), "transitive": len(transitive)}
+        if exp.get("transitive") and not transitive:
+            failures.append({"field": "transitive edge",
+                              "expected": True, "actual": []})
+    elif kind == "pf-fingerprints":
+        result = {"leakage": _lk.leakage_fingerprint(),
+                  "playbooks": _lk.playbook_fingerprint()}
+        for field in ("leakage", "playbooks"):
+            if result[field] != exp[field]:
+                failures.append({"field": f"{field} fingerprint",
+                                  "expected": exp[field],
+                                  "actual": result[field]})
+    else:
+        failures.append({"field": "kind", "expected": "known pf kind",
+                          "actual": kind})
+    return {"name": case["name"], "note": case.get("note", ""),
+            "ok": not failures, "failures": failures, "result": result}
+
+
+def portfolio_invariants() -> list[dict[str, Any]]:
+    """Properties the portfolio layer must hold whatever the catalog says."""
+    from . import portfolio as _pf
+    out = []
+    base = {"data": {"classification": "internal"}, "channel": "chat_ui",
+            "actors": ["analyst"], "blast_radius": {}, "external": False}
+    un = _pf.situation_multiplier(
+        _pf.normalize_situation({**base, "controls": {}}))["multiplier"]
+    ok_declared = True
+    ok_evidenced = True
+    detail: dict[str, Any] = {}
+    for control in _pf.SITUATION_CONTROLS:
+        dec = _pf.situation_multiplier(_pf.normalize_situation(
+            {**base, "controls": {control: "declared"}}))["multiplier"]
+        ev = _pf.situation_multiplier(_pf.normalize_situation(
+            {**base, "controls": {control: "evidenced"}}))["multiplier"]
+        if abs(dec - un) > TOLERANCE:
+            ok_declared = False
+            detail[control] = {"declared": dec, "baseline": un}
+        if ev > un + TOLERANCE:
+            ok_evidenced = False
+            detail[control] = {"evidenced": ev, "baseline": un}
+    out.append({"name": "declared-never-reduces-risk",
+                "ok": ok_declared, "detail": detail})
+    out.append({"name": "evidenced-never-increases-risk",
+                "ok": ok_evidenced, "detail": detail})
+    # severity stays on its own scale across a sweep of situations
+    sweep = [
+        {"data": {"classification": c}, "channel": ch,
+         "actors": ["analyst"], "controls": ctrl, "blast_radius": blast,
+         "external": ext}
+        for c in ("public", "internal", "restricted", "secrets")
+        for ch in ("chat_ui", "api", "batch", "tool_calling_agent")
+        for ctrl in ({}, {"dlp": "evidenced"},
+                     {"dlp": "evidenced", "logging": "evidenced"})
+        for blast in ({}, {"tickets": True, "customer_channels": True})
+        for ext in (False, True)
+    ]
+    worst = None
+    in_scale = True
+    for raw in sweep:
+        sit = _pf.normalize_situation(raw)
+        for r in _pf.leakage_rows(sit, {"weights_source": "open_weights"}):
+            if not (0.0 <= r["severity"] <= 100.0):
+                in_scale = False
+                worst = {"situation": raw, "pathway": r["source_ref"],
+                         "severity": r["severity"]}
+                break
+        if not in_scale:
+            break
+    out.append({"name": "severity-stays-on-its-scale",
+                "ok": in_scale,
+                "detail": {"situations_swept": len(sweep),
+                           "violation": worst}})
+    # an empty situation normalises to unknown everywhere, not to defaults
+    empty = _pf.normalize_situation({})
+    out.append({
+        "name": "empty-situation-stays-unknown",
+        "ok": (empty["channel"] is None and empty["actors"] == []
+               and all(v == "unknown" for v in empty["controls"].values())),
+        "detail": {"unknown_fields": len(empty["unknown_fields"])},
+    })
+    return out
+
+
 def run_eval() -> dict[str, Any]:
     """Run every case and invariant. ``ok`` is the gate."""
     results = [_run_case(c) for c in cases()]
@@ -508,9 +735,13 @@ def run_eval() -> dict[str, Any]:
     failed_inv = [i for i in invs if not i["ok"]]
     failed_model = [r for r in model_results if not r["ok"]]
     failed_model_inv = [i for i in model_invs if not i["ok"]]
+    pf_results = [_run_portfolio_case(c) for c in portfolio_cases()]
+    pf_invs = portfolio_invariants()
+    failed_pf = [r for r in pf_results if not r["ok"]]
+    failed_pf_inv = [i for i in pf_invs if not i["ok"]]
     return {
         "ok": not failed and not failed_inv and not failed_model
-        and not failed_model_inv,
+        and not failed_model_inv and not failed_pf and not failed_pf_inv,
         "pack": tp.pack_manifest(),
         "cases_run": len(results),
         "cases_failed": len(failed),
@@ -524,13 +755,23 @@ def run_eval() -> dict[str, Any]:
         "model_invariants_failed": len(failed_model_inv),
         "model_cases": model_results,
         "model_invariants": model_invs,
+        "portfolio_cases_run": len(pf_results),
+        "portfolio_cases_failed": len(failed_pf),
+        "portfolio_invariants_run": len(pf_invs),
+        "portfolio_invariants_failed": len(failed_pf_inv),
+        "portfolio_cases": pf_results,
+        "portfolio_invariants": pf_invs,
         "failures": [{"case": r["name"], "why": r["failures"]} for r in failed]
                    + [{"invariant": i["name"], "detail": i["detail"]}
                       for i in failed_inv]
                    + [{"model_case": r["name"], "why": r["failures"]}
                       for r in failed_model]
                    + [{"model_invariant": i["name"], "detail": i["detail"]}
-                      for i in failed_model_inv],
+                      for i in failed_model_inv]
+                   + [{"portfolio_case": r["name"], "why": r["failures"]}
+                      for r in failed_pf]
+                   + [{"portfolio_invariant": i["name"], "detail": i["detail"]}
+                      for i in failed_pf_inv],
     }
 
 
@@ -580,10 +821,22 @@ def render(report: dict[str, Any]) -> str:
     for i in report.get("model_invariants", []):
         mark = "ok  " if i["ok"] else "FAIL"
         lines.append(f"  [{mark}] model invariant: {i['name']}")
+    for r in report.get("portfolio_cases", []):
+        mark = "ok  " if r["ok"] else "FAIL"
+        lines.append(f"  [{mark}] portfolio: {r['name']}")
+        for f in r["failures"]:
+            lines.append(f"         {f['field']}: expected {f['expected']}, "
+                         f"got {f['actual']}")
+    for i in report.get("portfolio_invariants", []):
+        mark = "ok  " if i["ok"] else "FAIL"
+        lines.append(f"  [{mark}] portfolio invariant: {i['name']}")
     lines.append(f"{'PASS' if report['ok'] else 'FAIL'}: "
                  f"{report['cases_run']} cases, {report['invariants_run']} "
                  f"invariants, {report.get('model_cases_run', 0)} model cases, "
-                 f"{report.get('model_invariants_run', 0)} model invariants")
+                 f"{report.get('model_invariants_run', 0)} model invariants, "
+                 f"{report.get('portfolio_cases_run', 0)} portfolio cases, "
+                 f"{report.get('portfolio_invariants_run', 0)} "
+                 f"portfolio invariants")
     return "\n".join(lines)
 
 

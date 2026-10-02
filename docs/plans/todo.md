@@ -128,6 +128,40 @@ Legend: `[ ]` todo · `[x]` done. Inherits every §0 non-negotiable above.
 - [x] Evalkit: 5 KB partition cases (15/15 green)
 - [x] Full suite green with the known A2A hang deselected
 
+# TODO — portfolio risk register addendum
+
+Branch: `portfolio-risk-register`.
+Legend: `[ ]` todo · `[x]` done. Same non-negotiables: additive schema, stored rows only, unknown stays unknown, advice never claims secured.
+
+## PF-1 — Initiative + situation schema
+- [x] `Initiative` object with business use case, owner, data classes, systems, obligations, control inventory, lifecycle
+- [x] `SecurityAssessment.situation_json` + `initiative_id` + `requested_by` (additive migrations)
+- [x] Versioned situation snapshots; readers unwrap the stated profile, not the audit envelope
+
+## PF-2 — Leakage catalog + playbooks
+- [x] Versioned `LP01`–`LP08` pathways with sinks, likelihood, exposure, controls, process patterns
+- [x] Situation-keyed playbooks `PB01`–`PB04` with fingerprints
+- [x] Declared-only controls contribute no coverage
+
+## PF-3 — Unified register
+- [x] Product/model/privacy/supply-chain rows with stable keys and catalog stamps
+- [x] Human overlay (`status`, `owner`, `review_by`, mitigation IDs, acceptance) survives re-derivation
+- [x] Every row names catalog-level control options; no empty-controls ambiguity
+- [x] Acceptance requires `accepted_by` + note and rejects self-acceptance when the requester is known
+
+## PF-4 — Cascade + advisor
+- [x] Explicit and transitive cascade edges with `via` paths
+- [x] Deterministic advisor with constraint filtering, inventory deltas, residual limitations
+- [x] Initiative-scoped advice uses the initiative’s inventory and linked assessments only
+- [x] `mitigation-advisor` A2A role (`advise_portfolio_risks`): card, bus handler, pipeline hop after KB sync, same deterministic pack as the tab
+
+## PF-5 — Intel, metrics, surfaces
+- [x] Intel feed, metrics without composite scores, initiative aggregates
+- [x] Portfolio API endpoints, dossier situation snapshot, Portfolio tab views
+- [x] API tests for initiatives, situation, register state, advisor, intel/metrics/cascade
+- [x] Portfolio evalkit: 8 pinned cases + 4 invariants (multiplier honesty, coverage, mapping, cascade, fingerprints)
+- [x] Live image rebuild + live verification (all 5 endpoints 200, card served, advisor POST returns deterministic pack; intel correctly flags 3 stale pack stamps)
+
 ## Follow-ups (not blocking)
 - [ ] Verify inherited versioning baselines still deliberate for pack/model fingerprints
 - [ ] `SecurityAssessRequest.allow_partial` semantics confirmed against the KB path

@@ -86,6 +86,13 @@ _MIGRATIONS = [
     ("security_assessments", "hypothesis_json", "TEXT"),
     ("security_assessments", "kb_json", "TEXT"),
     ("security_assessments", "kb_fingerprint", "VARCHAR(20)"),
+    # Portfolio layer: the situation profile an assessment was written under,
+    # and the initiative it informs. Both nullable -- an older row has no
+    # honest situation to report, and defaulting one would assert a control
+    # environment nobody declared.
+    ("security_assessments", "situation_json", "TEXT"),
+    ("security_assessments", "initiative_id", "INTEGER"),
+    ("security_assessments", "requested_by", "VARCHAR(120)"),
     ("security_assessments", "controls_json", "TEXT"),
     ("security_assessments", "scoring_json", "TEXT"),
     ("security_assessments", "workflow_text", "TEXT"),

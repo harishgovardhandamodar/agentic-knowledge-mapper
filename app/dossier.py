@@ -995,6 +995,48 @@ def _kb_snapshot(db, rec) -> dict[str, Any]:
     }
 
 
+def _portfolio_snapshot(db, rec) -> dict[str, Any]:
+    """This row's portfolio contribution: the situation it was assessed under.
+
+    Reads the stored profile verbatim and reports what it normalized to, so a
+    reader sees both what the operator said and what the scoring layer made of
+    it. Unstated fields stay unknown here too; the dossier does not fill them in.
+    """
+    raw = _load(getattr(rec, "situation_json", None), None)
+    if not raw:
+        return {}
+    try:
+        from . import portfolio as _pf
+        snapshot = raw if isinstance(raw, dict) and "situation" in raw else None
+        stated = _pf.stated_situation(raw)
+        sit = _pf.normalize_situation(stated)
+        mult = _pf.situation_multiplier(sit)
+    except Exception:
+        return {"recorded": bool(raw)}
+    return {
+        "recorded": True,
+        "versioned": bool(snapshot),
+        "recorded_at": (snapshot or {}).get("recorded_at"),
+        "actor": (snapshot or {}).get("actor"),
+        "rationale": (snapshot or {}).get("rationale"),
+        "supersedes_previous": bool((snapshot or {}).get("supersedes")),
+        "initiative_id": getattr(rec, "initiative_id", None),
+        "channel": sit["channel"],
+        "channel_valid": sit["channel_valid"],
+        "actors": sit["actors"],
+        "data": sit["data"],
+        "tags": sit["tags"],
+        "controls": sit["controls"],
+        "unverified_controls": mult["unverified_controls"],
+        "unknown_fields": sit["unknown_fields"],
+        "material_unknown": sit["material_unknown"],
+        "multiplier": mult["multiplier"],
+        "multiplier_factors": mult["factors"],
+        "note": "A starting point, not a sign-off. Fields nobody filled in are "
+                "reported as unknown rather than assumed.",
+    }
+
+
 def _score_audit(db, inv_id: int) -> dict[str, Any]:
     """Per-assessment score audit: inputs, arithmetic, and what moved the
     number. ``latest`` marks the row that currently stands for each path."""
@@ -1077,6 +1119,9 @@ def _score_audit(db, inv_id: int) -> dict[str, Any]:
         if path in ("model", "model_adversarial", "model_hypothesis",
                     "model_engineering"):
             detail["kb"] = _kb_snapshot(db, rec)
+        _sit = _portfolio_snapshot(db, rec)
+        if _sit:
+            detail["situation"] = _sit
         _raw_score = scoring.get("overall_pct", rec.overall_pct)
         rows_out.append({
             "id": rec.id,

@@ -229,7 +229,8 @@ class SecurityAssessment(Base):
     investigation_id = Column(Integer, ForeignKey("investigations.id", ondelete="CASCADE"),
                               nullable=False, index=True)
     run_id = Column(Integer, ForeignKey("agent_runs.id", ondelete="SET NULL"),
-                    nullable=True, index=True)
+                      nullable=True, index=True)
+    requested_by = Column(String(120), nullable=True)  # who asked for this assessment
     product_name = Column(String(500), nullable=False)
     product_url = Column(String(1000), nullable=True)
     exposure = Column(String(100), nullable=False, default="confidential_data")
@@ -270,7 +271,111 @@ class SecurityAssessment(Base):
     # this row saw; kb_fingerprint makes drift visible.
     kb_json = Column(Text, nullable=True)
     kb_fingerprint = Column(String(20), nullable=True)
+    # Situation profile: the structured "our use of this" that a single exposure
+    # tier cannot express (see app/portfolio.py). Nullable, because a product
+    # assessment assessed before this existed has no honest answer to give --
+    # stamping a default would claim a control environment nobody declared.
+    situation_json = Column(Text, nullable=True)
+    # Which business initiative this assessment informs, when there is one.
+    initiative_id = Column(Integer, ForeignKey("initiatives.id", ondelete="SET NULL"),
+                           nullable=True, index=True)
     created_at = Column(DateTime, default=_now)
+
+
+class Initiative(Base):
+    """A business initiative that adopts one or more AI products or models.
+
+    An investigation asks "what is true about this model". An initiative asks
+    "what is true about *our use of it*": who owns it, what data classes touch
+    it, who can reach it, and when it goes live. Those answers change the risk
+    and the advice, and none of them live on an assessment row, so they get
+    their own object that many assessments can point at.
+
+    ``control_inventory_json`` holds what the organisation already has
+    (C*/MM*/internal control names with ``deployed|partial|absent|unknown``).
+    The mitigation advisor prefers elevating a control that already exists over
+    proposing greenfield work, because advice that ignores the estate produces
+    a programme nobody can run.
+
+    ``investigation_id`` is nullable: an initiative may be org-wide and outlive
+    any single collection run.
+    """
+    __tablename__ = "initiatives"
+
+    id = Column(Integer, primary_key=True, index=True)
+    investigation_id = Column(Integer, ForeignKey("investigations.id", ondelete="CASCADE"),
+                              nullable=True, index=True)
+    title = Column(String(300), nullable=False)
+    business_use_case = Column(Text, nullable=True)
+    owner = Column(String(200), nullable=True)
+    data_classes_json = Column(Text, nullable=True)  # JSON: [classification, …]
+    target_users_json = Column(Text, nullable=True)  # JSON: who is exposed
+    systems_json = Column(Text, nullable=True)  # JSON: products/models in scope
+    obligations_json = Column(Text, nullable=True)  # JSON: GDPR/AI Act/contractual
+    control_inventory_json = Column(Text, nullable=True)  # JSON: existing controls
+    status = Column(String(20), nullable=False, default="active")  # active|paused|retired
+    go_live_at = Column(DateTime, nullable=True)
+    review_cadence_days = Column(Integer, nullable=True, default=90)
+    last_reviewed_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=_now)
+    updated_at = Column(DateTime, default=_now, onupdate=_now)
+
+    risks = relationship("RiskEntry", back_populates="initiative",
+                         cascade="all, delete-orphan")
+
+
+class RiskEntry(Base):
+    """One row of the unified register: product, model, privacy or supply chain.
+
+    Product threats (T*/C*), model attacks (W1 MA*), leakage pathways and CVEs
+    used to live in four places with four shapes, so no single table could be
+    triaged. They land here with a stable id and one vocabulary.
+
+    The row is an *overlay*: ``status``, ``owner``, ``review_by``,
+    ``residual_note`` and the acceptance fields are human state. They live in
+    the database rather than inside a re-derived JSON snapshot because a
+    re-derivation must never quietly discard a decision somebody made. Derived
+    fields (title, severity, evidence, catalog stamps) are refreshed on every
+    read; ``stable_key`` is what makes the two sides meet.
+    """
+    __tablename__ = "risk_entries"
+
+    id = Column(Integer, primary_key=True, index=True)
+    investigation_id = Column(Integer, ForeignKey("investigations.id", ondelete="CASCADE"),
+                              nullable=True, index=True)
+    initiative_id = Column(Integer, ForeignKey("initiatives.id", ondelete="CASCADE"),
+                           nullable=True, index=True)
+    # Deterministic identity: "<layer>:<source_ref>:<scope>". Re-deriving the
+    # register updates this row instead of creating a near-duplicate.
+    stable_key = Column(String(300), nullable=False, index=True)
+    risk_id = Column(String(120), nullable=False, index=True)  # human-facing R-…
+    layer = Column(String(20), nullable=False, default="model")  # product|model|privacy|supply_chain
+    title = Column(String(500), nullable=False, default="")
+    source_catalog = Column(String(50), nullable=True)  # product_threat_pack|model_adversarial|leakage_pathways|cve
+    source_ref = Column(String(120), nullable=True)  # T07 / MA-01 / LP03 / CVE-…
+    scope = Column(String(20), nullable=False, default="own")  # own|inherited|cascade
+    situation_tags_json = Column(Text, nullable=True)  # JSON: [tag, …]
+    exposure = Column(String(100), nullable=True)
+    severity = Column(Float, nullable=True)
+    confidence = Column(Float, nullable=True)
+    confidence_band = Column(String(20), nullable=True)
+    evidence_ids_json = Column(Text, nullable=True)  # JSON: [artifact_id, …]
+    assessment_ids_json = Column(Text, nullable=True)  # JSON: [assessment_id, …]
+    catalog_version = Column(String(20), nullable=True)
+    catalog_fingerprint = Column(String(20), nullable=True)
+    # --- human state, never re-derived ---
+    status = Column(String(20), nullable=False, default="open")  # open|mitigating|accepted|transferred|closed
+    owner = Column(String(200), nullable=True)
+    review_by = Column(DateTime, nullable=True)
+    residual_note = Column(Text, nullable=True)
+    mitigation_ids_json = Column(Text, nullable=True)  # JSON: mapped [C*/MM*/PR*]
+    accepted_by = Column(String(200), nullable=True)
+    accepted_at = Column(DateTime, nullable=True)
+    acceptance_note = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=_now)
+    updated_at = Column(DateTime, default=_now, onupdate=_now)
+
+    initiative = relationship("Initiative", back_populates="risks")
 
 
 class ManagerRun(Base):

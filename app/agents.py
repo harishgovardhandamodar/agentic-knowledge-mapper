@@ -90,6 +90,19 @@ AGENT_CARDS: list[dict[str, Any]] = [
         "endpoint": "/api/agents/invoke",
     },
     {
+        "name": "mitigation-advisor",
+        "protocol": PROTOCOL,
+        "description": (
+            "Maps the open rows of the unified portfolio register to controls, "
+            "deterministically, from stored rows and versioned catalogs. No "
+            "model call: the same situation always yields the same list, "
+            "withheld controls are reported rather than dropped, and no risk "
+            "is ever marked secured."
+        ),
+        "skills": ["advise_portfolio_risks"],
+        "endpoint": "/api/agents/invoke",
+    },
+    {
         "name": "model-profiler",
         "protocol": PROTOCOL,
         "description": (
@@ -467,6 +480,58 @@ def control_analyst_handle(env: dict[str, Any]) -> dict[str, Any]:
         },
         note=(f"{len(declared)} declared control(s), "
               f"{len(proposed_extra)} proposed, confidence {confidence:.2f} ({source})"),
+    )
+
+
+# ----------------------------------------------- mitigation-advisor agent ---
+
+def mitigation_advisor_handle(env: dict[str, Any]) -> dict[str, Any]:
+    """Intent ``advise_portfolio_risks``: the deterministic advice pack.
+
+    The mapping itself lives in :mod:`app.portfolio` and makes no model call,
+    so this role is the one agent in the system that cannot hallucinate a
+    control: the same stored register and situation always yield the same
+    list. It opens its own session because the bus only passes ``db`` to the
+    research-collector; everything it reads is a stored row, and everything
+    it returns is the same pack the Portfolio tab shows, so the pipeline, a
+    peer agent and the UI cannot disagree about what was advised.
+    """
+    from . import portfolio as _pf
+    from .database import SessionLocal
+
+    payload = env.get("payload", {}) or {}
+    try:
+        inv_id = int(payload.get("investigation_id"))
+    except (TypeError, ValueError):
+        raise ValueError("advise_portfolio_risks needs an investigation_id")
+    db = SessionLocal()
+    try:
+        try:
+            pack = _pf.advise(
+                db, inv_id,
+                initiative_id=payload.get("initiative_id"),
+                controls_present=payload.get("controls_present"),
+                max_burden=payload.get("max_burden"))
+        except LookupError as exc:
+            raise ValueError(str(exc))
+    finally:
+        db.close()
+    return reply_envelope(
+        env, "mitigation-advisor", "portfolio_advice",
+        {
+            "investigation_id": pack["investigation_id"],
+            "initiative_id": pack["initiative_id"],
+            "method": pack["method"],
+            "version": pack["version"],
+            "advice": pack["advice"],
+            "playbooks": [{"id": p["id"], "title": p["name"]}
+                          for p in pack["playbooks"]],
+            "limitations": pack["limitations"],
+            "catalogs": pack["catalogs"],
+        },
+        note=(f"{len(pack['advice'])} advice item(s), "
+              f"{sum(1 for a in pack['advice'] if a['quick_win'])} quick win(s) "
+              f"({pack['method']} v{pack['version']}, deterministic)"),
     )
 
 
@@ -1132,6 +1197,7 @@ _HANDLERS = {
     "research-collector": {"collect_research": research_collector_handle},
     "threat-intel": {"map_attacks": threat_intel_handle},
     "report-writer": {"write_section": report_writer_handle},
+    "mitigation-advisor": {"advise_portfolio_risks": mitigation_advisor_handle},
 }
 
 

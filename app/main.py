@@ -13,7 +13,8 @@ from sqlalchemy.orm import Session
 
 from .database import init_db, get_db
 from .models import (Investigation, Artifact, Relationship, AgentRun, AgentEvent,
-                     Explanation, SecurityAssessment, CveFinding)
+                     Explanation, SecurityAssessment, CveFinding,
+                     Initiative, RiskEntry)
 from . import llm, scheduler
 from . import ledger_api
 from . import drift as drift_mod
@@ -214,6 +215,14 @@ class SecurityAssessRequest(BaseModel):
     # Hypothesis synthesis reads the target + adversarial rows: refuse to
     # launch on partial priors unless the caller explicitly allows it.
     allow_partial: bool = True
+    # Where this model actually runs: data handled, channel, actors, which
+    # controls are evidenced rather than merely declared, and how far a leak
+    # travels. The same model scores differently in a research notebook than in
+    # a customer-facing chat, so this is the input the portfolio layer reads.
+    # Every field is optional; absent ones stay unknown and are reported as
+    # unknown rather than filled in with a default.
+    situation: Optional[dict] = None
+    initiative_id: Optional[int] = None
     # Model-engineering assessments target a model, not a product workflow.
     # Ignored unless assessment_mode == "model_engineering".
     model_name: Optional[str] = ""
@@ -1740,6 +1749,7 @@ def rescore_security_assessment(assessment_id: int, data: SecurityRescoreRequest
         new_rec = SecurityAssessment(
             investigation_id=rec.investigation_id,
             run_id=rec.run_id,
+            requested_by=getattr(rec, "requested_by", None),
             product_name=rec.product_name,
             product_url=rec.product_url,
             exposure=rec.exposure,
@@ -1897,6 +1907,8 @@ def start_security_assessment(inv_id: int, data: SecurityAssessRequest,
         "require_approval": bool(data.require_approval),
         "assessment_mode": _mode,
         "model_meta": model_meta,
+        "situation": data.situation,
+        "initiative_id": data.initiative_id,
     }, requested_by=ledger_api.request_actor(request))
     return {"status": "started", "run_id": run_id,
             "assessment_mode": _mode, "assessment_path": _path}
@@ -2768,3 +2780,413 @@ def get_clusters(inv_id: int, mode: str = Query("category", pattern="^(category|
                          "centroid_tags": ctags, "member_ids": sorted(mids),
                          "size": len(mids)})
     return {"mode": mode, "threshold": threshold, "clusters": clusters}
+
+
+# ---------------------------------------------------------------------------
+# portfolio: initiatives, situation, unified register, leakage, advice
+# ---------------------------------------------------------------------------
+
+class InitiativeRequest(BaseModel):
+    title: str
+    business_use_case: str = ""
+    owner: str = ""
+    data_classes: list[str] = []
+    target_users: list[str] = []
+    systems: list[str] = []
+    obligations: list[str] = []
+    control_inventory: list[dict] = []
+    status: str = "active"
+    review_cadence_days: int = 90
+    go_live_at: Optional[str] = None
+
+
+class SituationRequest(BaseModel):
+    investigation_id: int
+    assessment_id: int
+    situation: dict
+    actor: str = ""
+    rationale: str = ""
+
+
+class RiskStateRequest(BaseModel):
+    entry_id: int
+    status: Optional[str] = None
+    owner: Optional[str] = None
+    review_by: Optional[str] = None
+    residual_note: Optional[str] = None
+    mitigation_ids: Optional[list[str]] = None
+    accept: bool = False
+    accepted_by: Optional[str] = None
+    acceptance_note: Optional[str] = None
+    rationale: str = ""
+
+
+class AdvisorRequest(BaseModel):
+    investigation_id: int
+    initiative_id: Optional[int] = None
+    controls_present: Optional[list[str]] = None
+    max_burden: Optional[str] = None
+    narrative: bool = False
+
+
+def _load(raw, default=None):
+    """Tolerant JSON read: a column holding a half-written or absent value
+    reads as the default rather than raising in the middle of a response."""
+    if not raw:
+        return default
+    if isinstance(raw, (dict, list)):
+        return raw
+    try:
+        return json.loads(raw)
+    except Exception:
+        return default
+
+
+@app.get("/api/portfolio/initiatives")
+def get_initiatives(investigation_id: int, db: Session = Depends(get_db)):
+    """Every initiative in the portfolio, with how far each one is described.
+
+    A field nobody filled in is reported as unknown. An initiative with no
+    business use case and no owner is not a plan, and the count of those is
+    returned so the gap is visible instead of implied.
+    """
+    from . import portfolio as _pf
+    from .models import Initiative as _Initiative
+    inv_id = _landscape_inv(investigation_id, db)
+    rows = db.query(_Initiative).filter(
+        _Initiative.investigation_id == inv_id).order_by(_Initiative.id).all()
+    aggregates = {s["id"]: s for s in _pf.initiative_summaries(db, inv_id)}
+    out = []
+    for i in rows:
+        d = {
+            "id": i.id, "title": i.title, "business_use_case": i.business_use_case,
+            "owner": i.owner, "data_classes": _load(i.data_classes_json, []),
+            "target_users": _load(i.target_users_json, []),
+            "systems": _load(i.systems_json, []),
+            "obligations": _load(i.obligations_json, []),
+            "control_inventory": _pf.normalize_inventory(i.control_inventory_json),
+            "status": i.status, "review_cadence_days": i.review_cadence_days,
+            "go_live_at": i.go_live_at, "last_reviewed_at": i.last_reviewed_at,
+            "aggregate": aggregates.get(i.id, {
+                "id": i.id, "assessments": 0,
+                "assessments_with_situation": 0, "risks": 0,
+                "open_risks": 0, "unowned_risks": 0,
+                "risks_with_review_date": 0, "by_layer": {},
+                "by_status": {}, "max_severity": None}),
+        }
+        missing = [f for f in ("business_use_case", "owner") if not d[f]]
+        if not d["data_classes"]:
+            missing.append("data_classes")
+        if not d["obligations"]:
+            missing.append("obligations")
+        d["missing_fields"] = missing
+        d["described"] = not missing
+        out.append(d)
+    return {"investigation_id": inv_id, "initiatives": out,
+            "total": len(out),
+            "undescribed": sum(1 for d in out if not d["described"]),
+            "note": "An initiative nobody has described yet cannot be assessed "
+                    "in context. It is listed, not scored."}
+
+
+@app.post("/api/portfolio/initiatives")
+def post_initiative(investigation_id: int, data: InitiativeRequest,
+                    request: Request, db: Session = Depends(get_db)):
+    """Create an initiative. Ledgered: an initiative is a scope decision."""
+    from . import portfolio as _pf
+    from .models import Initiative as _Initiative
+    inv_id = _landscape_inv(investigation_id, db)
+    if not data.title.strip():
+        raise HTTPException(400, "An initiative needs a title to be findable")
+    if data.status not in ("active", "paused", "retired"):
+        raise HTTPException(400, f"Unknown initiative status: {data.status}")
+    rec = _Initiative(
+        investigation_id=inv_id, title=data.title.strip(),
+        business_use_case=data.business_use_case, owner=data.owner,
+        data_classes_json=json.dumps(data.data_classes),
+        target_users_json=json.dumps(data.target_users),
+        systems_json=json.dumps(data.systems),
+        obligations_json=json.dumps(data.obligations),
+        control_inventory_json=json.dumps(
+            _pf.normalize_inventory(data.control_inventory)),
+        status=data.status, review_cadence_days=data.review_cadence_days,
+        go_live_at=data.go_live_at)
+    db.add(rec)
+    db.commit()
+    db.refresh(rec)
+    ledger_api.human_action(
+        request, "portfolio.initiative_created",
+        {"target_type": "initiative", "target_id": rec.id,
+         "investigation_id": inv_id, "title": rec.title,
+         "status": rec.status, "owner": rec.owner,
+         "data_classes": data.data_classes,
+         "described": bool(rec.business_use_case and rec.owner)})
+    return {"id": rec.id, "status": rec.status, "title": rec.title,
+            "missing_fields": [f for f in ("business_use_case", "owner")
+                               if not getattr(rec, f)]}
+
+
+@app.post("/api/portfolio/situation")
+def post_situation(data: SituationRequest, request: Request,
+                   db: Session = Depends(get_db)):
+    """Attach a situation profile to a stored assessment.
+
+    Recorded as a versioned snapshot and written to the ledger, because
+    "we handle restricted PII in a customer-facing chat" is a decision with a
+    date on it. The profile is normalized for reading but stored verbatim: what
+    the operator actually said is what gets audited.
+    """
+    from . import portfolio as _pf
+    from .models import SecurityAssessment as _Rec
+    rec = db.get(_Rec, data.assessment_id)
+    if not rec:
+        raise HTTPException(404, "Assessment not found")
+    sit = _pf.normalize_situation(data.situation)
+    mult = _pf.situation_multiplier(sit)
+    prev = _load(rec.situation_json, None)
+    snapshot = {
+        "situation": data.situation, "normalized": sit,
+        "recorded_at": datetime.utcnow().isoformat(), "actor": data.actor,
+        "rationale": data.rationale, "supersedes": bool(prev),
+    }
+    rec.situation_json = json.dumps(snapshot)
+    if data.investigation_id:
+        rec.investigation_id = data.investigation_id
+    db.commit()
+    ledger_api.human_action(
+        request, "portfolio.situation_recorded",
+        {"target_type": "assessment", "target_id": rec.id,
+         "assessment_id": rec.id, "investigation_id": rec.investigation_id,
+         "channel": sit["channel"], "channel_valid": sit["channel_valid"],
+         "tags": sit["tags"], "material_unknown": sit["material_unknown"],
+         "unverified_controls": mult["unverified_controls"],
+         "multiplier": mult["multiplier"],
+         "actor": data.actor, "rationale": data.rationale,
+         "supersedes_previous": bool(prev)})
+    return {"assessment_id": rec.id, "situation": sit,
+            "multiplier": mult,
+            "note": "Recorded as a starting point, not a sign-off. Unstated "
+                    "fields stay unknown and are listed in unknown_fields."}
+
+
+@app.get("/api/portfolio/register")
+def get_register(investigation_id: int, layer: str = "", status: str = "",
+                db: Session = Depends(get_db)):
+    """The unified register: product, model, privacy and supply-chain rows.
+
+    Every row names the stored assessment it came from and the catalog version
+    that produced it, so a row can be traced to the evidence behind it. Rows
+    with no owner say so; nothing is silently assigned.
+    """
+    from . import portfolio as _pf
+    inv_id = _landscape_inv(investigation_id, db)
+    rows = _pf.derive_register(db, inv_id)
+    if layer:
+        rows = [r for r in rows if r["layer"] == layer]
+    if status:
+        rows = [r for r in rows if r["status"] == status]
+    counts: dict[str, int] = {}
+    for r in rows:
+        counts[r["layer"]] = counts.get(r["layer"], 0) + 1
+    return {"investigation_id": inv_id, "risks": rows, "total": len(rows),
+            "by_layer": counts,
+            "unowned": sum(1 for r in rows if r["owner_missing"]),
+            "accepted_without_note": sum(
+                1 for r in rows
+                if r["status"] == "accepted" and not r["acceptance_note"]),
+            "note": "Severity is comparable within a layer only; the four "
+                    "layers are ranked by evidence and exposure, not by a "
+                    "single combined number."}
+
+
+@app.post("/api/portfolio/register/state")
+def post_register_state(data: RiskStateRequest, request: Request,
+                        db: Session = Depends(get_db)):
+    """Move one register row's human state: owner, status, acceptance.
+
+    Acceptance is separated from a plain status change because accepting a risk
+    is a decision someone has to be named for. Policy (and this endpoint)
+    requires the accepting person to differ from whoever requested the
+    assessment; a gate the requester can pass alone is not a control.
+    """
+    from . import approvals as _approvals
+    from . import portfolio as _pf
+    entry = db.get(RiskEntry, data.entry_id)
+    if not entry:
+        raise HTTPException(404, "Risk entry not found")
+    if data.accept and data.status not in (None, "accepted"):
+        raise HTTPException(
+            400, "accept=true sets status to accepted; do not send both")
+    requesters: set[str] = set()
+    if data.accept:
+        if not data.accepted_by or not data.acceptance_note:
+            raise HTTPException(
+                400, "Accepting a risk needs accepted_by and acceptance_note: "
+                     "who decided, and what they accepted")
+        for aid in _load(entry.assessment_ids_json, []) or []:
+            try:
+                linked = db.get(SecurityAssessment, int(aid))
+            except (TypeError, ValueError):
+                continue
+            requester = getattr(linked, "requested_by", None) if linked else None
+            if requester:
+                requesters.add(requester)
+        for requester in sorted(requesters):
+            try:
+                _approvals.check_approver(approver=data.accepted_by,
+                                          requester=requester)
+            except _approvals.ApprovalError as e:
+                raise HTTPException(e.status, e.reason)
+    row = _pf.set_risk_state(
+        db, data.entry_id, status=data.status, owner=data.owner,
+        review_by=data.review_by, residual_note=data.residual_note,
+        mitigation_ids=data.mitigation_ids, accept=data.accept,
+        accepted_by=data.accepted_by,
+        acceptance_note=data.acceptance_note)
+    ledger_api.human_action(
+        request, "portfolio.risk_state_changed",
+        {"target_type": "risk_entry", "target_id": data.entry_id,
+         "entry_id": data.entry_id, "stable_key": entry.stable_key,
+         "from_status": entry.status, "to_status": row["status"],
+         "owner": data.owner, "accepted_by": data.accepted_by,
+         "acceptance_note": data.acceptance_note,
+         "requesters": sorted(requesters),
+         "requester_unknown": data.accept and not requesters,
+         "rationale": data.rationale,
+         "mitigation_ids": data.mitigation_ids})
+    return row
+
+
+@app.get("/api/portfolio/leakage")
+def get_leakage(investigation_id: int, db: Session = Depends(get_db)):
+    """Which leakage pathways the declared situations actually expose.
+
+    Derived from the situation profiles on stored assessments. Each pathway
+    reports its own control coverage, split into evidenced and declared-only,
+    because a control nobody can show evidence for is a claim.
+    """
+    from . import leakage as _lk
+    from . import portfolio as _pf
+    from .models import SecurityAssessment as _Rec
+    inv_id = _landscape_inv(investigation_id, db)
+    recs = db.query(_Rec).filter(_Rec.investigation_id == inv_id).all()
+    out, tags = [], []
+    for rec in recs:
+        raw = _pf.stated_situation(rec.situation_json)
+        if not raw:
+            continue
+        sit = _pf.normalize_situation(raw)
+        tags.extend(sit["tags"])
+        meta = _pf._model_meta(_load(rec.model_json, None))
+        rows = _pf.leakage_rows(sit, meta, rec.id, rec.product_name)
+        for r in rows:
+            r["assessment_id"] = rec.id
+            r["product_name"] = rec.product_name
+        out.extend(rows)
+    counts: dict[str, int] = {}
+    for r in out:
+        counts[r["source_ref"]] = counts.get(r["source_ref"], 0) + 1
+    return {"investigation_id": inv_id, "pathways": out, "total": len(out),
+            "by_pathway": counts,
+            "catalog_version": _lk.LEAKAGE_VERSION,
+            "catalog_fingerprint": _lk.leakage_fingerprint(),
+            "playbooks": _lk.select_playbooks(sorted(set(tags))),
+            "assessments_with_situation": len({
+                r["assessment_id"] for r in out}),
+            "note": "Only pathways the situation actually exposes are listed. "
+                    "An absent pathway means it was not derived, not that it "
+                    "is closed."}
+
+
+@app.get("/api/portfolio/cascade")
+def get_cascade(investigation_id: int, db: Session = Depends(get_db)):
+    """Cascade edges between initiatives, including transitive ones.
+
+    An explicit edge is a stated dependency; a transitive edge is one that
+    reaches an initiative through a shared model or mechanism. Transitive edges
+    carry the path, because a risk you cannot trace is not actionable.
+    """
+    from . import model_kb as _kb
+    from . import portfolio as _pf
+    from .models import Initiative as _Initiative
+    inv_id = _landscape_inv(investigation_id, db)
+    inits = []
+    for i in db.query(_Initiative).filter(
+            _Initiative.investigation_id == inv_id).all():
+        d = {"title": i.title, "business_use_case": i.business_use_case,
+             "systems": _load(i.systems_json, []),
+             "models": [m.get("model_key") for m in
+                        (_kb.landscape(db, inv_id).get("inventory") or [])
+                        if i.title and i.title.lower() in
+                        (m.get("initiatives") or [""])[0].lower()]}
+        inits.append(d)
+    land = _kb.landscape(db, inv_id)
+    for d in inits:
+        d["models"] = [m.get("model_key") for m in (land.get("inventory") or [])
+                       if m.get("model_key") and any(
+                           d["title"].lower() in (k or "").lower()
+                           for k in (m.get("initiative_keys") or []))]
+    edges = _pf.portfolio_cascade(land, inits)
+    return {"investigation_id": inv_id, "edges": edges, "total": len(edges),
+            "initiatives": len(inits),
+            "transitive": sum(1 for e in edges if e["basis"] == "transitive"),
+            "note": "Cascade edges are inferred from declared systems, models "
+                    "and use cases. An edge marked inferred was derived by "
+                    "keyword and is not a stated dependency."}
+
+
+@app.post("/api/portfolio/advisor")
+def post_advisor(data: AdvisorRequest, request: Request,
+                 db: Session = Depends(get_db)):
+    """Mitigation advice for the open rows of one investigation.
+
+    The mapping from risk to control is deterministic and reproducible: the
+    same situation yields the same list, with the same reasons for withholding
+    anything. No risk is marked secured by having a control attached to it.
+    """
+    from . import portfolio as _pf
+    inv_id = _landscape_inv(data.investigation_id, db)
+    try:
+        pack = _pf.advise(db, inv_id, controls_present=data.controls_present,
+                          max_burden=data.max_burden,
+                          initiative_id=data.initiative_id)
+    except LookupError as e:
+        raise HTTPException(404, str(e))
+    ledger_api.human_action(
+        request, "portfolio.advice_generated",
+        {"target_type": "investigation", "target_id": inv_id,
+         "investigation_id": inv_id,
+         "advice_count": len(pack["advice"]),
+         "quick_wins": sum(1 for a in pack["advice"] if a["quick_win"]),
+         "situation_tags": pack["situation"]["tags"],
+         "controls_present": data.controls_present})
+    return pack
+
+
+@app.get("/api/portfolio/intel")
+def get_intel(investigation_id: int, since_days: int = 30, stale_days: int = 90,
+              db: Session = Depends(get_db)):
+    """What changed since the last review, and what is going stale.
+
+    Every trigger is derived from stored rows, so the feed cannot report a
+    change that did not happen. A quiet feed says what it means.
+    """
+    from . import portfolio as _pf
+    inv_id = _landscape_inv(investigation_id, db)
+    return _pf.intel_feed(db, inv_id, since_days=since_days,
+                          stale_days=stale_days)
+
+
+@app.get("/api/portfolio/metrics")
+def get_metrics(investigation_id: int, db: Session = Depends(get_db)):
+    """Governance counters. No composite score and no letter grade.
+
+    Unknowns are reported as unknown (null), not as zero: "no owner" and "we
+    do not know the owner" are different facts, and only one of them is a
+    finding.
+    """
+    from . import model_kb as _kb
+    from . import portfolio as _pf
+    inv_id = _landscape_inv(investigation_id, db)
+    reg = _pf.derive_register(db, inv_id, persist=False)
+    return _pf.metrics(reg, _kb.landscape(db, inv_id))
