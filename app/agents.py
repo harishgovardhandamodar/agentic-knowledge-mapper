@@ -67,9 +67,10 @@ AGENT_CARDS: list[dict[str, Any]] = [
         "protocol": PROTOCOL,
         "description": (
             "Agentic search within this app: multi-query search over the "
-            "investigation knowledge graph, ranked evidence out."
+            "investigation knowledge graph, ranked evidence out. Query pack "
+            "rlhf_memorization for preference memorization when focus matches."
         ),
-        "skills": ["agentic_search", "rank_evidence"],
+        "skills": ["agentic_search", "rank_evidence", "query_rlhf_memorization"],
         "endpoint": "/api/agents/invoke",
     },
     {
@@ -85,8 +86,8 @@ AGENT_CARDS: list[dict[str, Any]] = [
     {
         "name": "report-writer",
         "protocol": PROTOCOL,
-        "description": "Drafts the Known Exploits section + executive bullets/paragraph.",
-        "skills": ["write_exploits_section", "write_exec_bullets"],
+        "description": "Drafts the Known Exploits section + executive bullets/paragraph. Includes RLHF / preference memorization section when relevant.",
+        "skills": ["write_exploits_section", "write_exec_bullets", "write_rlhf_memorization_section"],
         "endpoint": "/api/agents/invoke",
     },
     {
@@ -97,9 +98,9 @@ AGENT_CARDS: list[dict[str, Any]] = [
             "deterministically, from stored rows and versioned catalogs. No "
             "model call: the same situation always yields the same list, "
             "withheld controls are reported rather than dropped, and no risk "
-            "is ever marked secured."
+            "is ever marked secured. Org playbook includes RLHF memorization: consumer ban, feedback ban, ZDR, DLP."
         ),
-        "skills": ["advise_portfolio_risks"],
+        "skills": ["advise_portfolio_risks", "advise_rlhf_memorization"],
         "endpoint": "/api/agents/invoke",
     },
     {
@@ -145,9 +146,10 @@ AGENT_CARDS: list[dict[str, Any]] = [
         "description": (
             "Maps published attacks onto a model or family from collected "
             "evidence, with class, scope, confidence and prerequisites. "
-            "Evidence-keyed rules when the model is unreachable."
+            "Evidence-keyed rules when the model is unreachable. Also maps "
+            "RLHF / preference memorization attacks RM01–RM04 from literature."
         ),
-        "skills": ["map_model_attacks"],
+        "skills": ["map_model_attacks", "map_rlhf_memorization"],
         "endpoint": "/api/agents/invoke",
     },
     {
@@ -155,7 +157,8 @@ AGENT_CARDS: list[dict[str, Any]] = [
         "protocol": PROTOCOL,
         "description": (
             "Rates engineering adoption dimensions from primary sources; "
-            "missing evidence rates unknown, never safe."
+            "missing evidence rates unknown, never safe. Rates memorization "
+            "with explicit notes on preference/feedback pathways."
         ),
         "skills": ["rate_adoption"],
         "endpoint": "/api/agents/invoke",
@@ -163,8 +166,8 @@ AGENT_CARDS: list[dict[str, Any]] = [
     {
         "name": "model-eval-reporter",
         "protocol": PROTOCOL,
-        "description": "Drafts the dual-section model evaluation report.",
-        "skills": ["write_model_eval_report"],
+        "description": "Drafts the dual-section model evaluation report. Includes RLHF / preference memorization section with scope table and retention link.",
+        "skills": ["write_model_eval_report", "write_rlhf_memorization_section"],
         "endpoint": "/api/agents/invoke",
     },
     {
@@ -173,7 +176,7 @@ AGENT_CARDS: list[dict[str, Any]] = [
         "description": (
             "Plans ranked experiments that settle open questions: unknown "
             "dimensions, confident attacks, open falsifiers, MM validations. "
-            "Plan only — nothing here executes anything."
+            "Includes RLHF/preference experiment templates (canary, MI, extraction probes)."
         ),
         "skills": ["plan_experiments"],
         "endpoint": "/api/agents/invoke",
@@ -2705,6 +2708,33 @@ def _hypothesis_fallback(target_rows: list[dict[str, Any]],
             supporting=[r["id"] for r in a_by_dim["capability_abuse"]],
             counter=[],
             impact=4, testability=5))
+    # RLHF memorization hypotheses (Spec §3.3) — preference/feedback pathways
+    has_mem_attack = any(
+        str(r.get("attack_class") or "").lower() in ("memorization", "alignment_data_leakage", "extraction", "membership_inference")
+        and any(k in str(r.get("title", "")).lower() for k in ("preference", "rlhf", "reward", "sft"))
+        for r in adv_rows
+    ) or any(
+        str(r.get("attack_subtype") or "").lower() in ("preference_memorization", "sft_memorization", "preference_mi", "rlhf_preference_extraction")
+        for r in adv_rows
+    )
+    if has_mem_attack:
+        out.append(_hypothesis(
+            "H-RM01",
+            "Family exhibits extractable memorization of preference-style data in published studies",
+            "adversarial literature maps preference_memorization to this family",
+            "preference pairs survive SFT and reward modeling and are recoverable via membership inference",
+            "training data derived from preference pairs leaks through extraction",
+            "negative replication / vendor eval shows no extraction on holdout",
+            supporting=[r.get("attack_id") for r in adv_rows if str(r.get("attack_class")).lower() in ("memorization", "alignment_data_leakage")][:3],
+            counter=[], impact=4, testability=4))
+        out.append(_hypothesis(
+            "H-RM05",
+            "If org disables feedback and uses API no-train tier only, org content is excluded from future preference corpora",
+            "situation profile shows API no-train + feedback disabled",
+            "feedback channel closed and ZDR holds, so tenant transcripts never enter preference pipeline",
+            "org transcripts excluded from future preference corpora",
+            "policy exception X states feedback still sampled for safety even on no-train tier",
+            supporting=[], counter=[], impact=5, testability=5))
     if not out and profile.get("is_model_query"):
         # Never return an empty set for a model: an empty hypothesis list reads
         # as "nothing to test" when it actually means "the two flows produced
@@ -3150,9 +3180,11 @@ def _model_w2_terms(meta: dict[str, Any]) -> list[str]:
 
 
 _W1_FALLBACK_MATCH: list[tuple[str, tuple[str, ...]]] = [
-    ("membership_inference", ("membership inference", "member inference")),
+    ("membership_inference", ("membership inference", "member inference", "preference_mi", "reward model membership")),
     ("extraction", ("training data extraction", "data extraction",
-                    "memorization", "memorized", "extract training")),
+                    "memorization", "memorized", "extract training", "rlhf preference extraction")),
+    ("memorization", ("sft memorization", "preference memorization", "rlhf memorization", "sft_memorization", "preference_memorization")),
+    ("alignment_data_leakage", ("alignment data leakage", "preference leakage", "cross-user leakage", "alignment leakage")),
     ("inversion", ("model inversion", "invert", "attribute inference")),
     ("evasion", ("adversarial example", "evasion", "perturbation")),
     ("poisoning", ("poison", "backdoor", "trojan")),
@@ -3194,26 +3226,44 @@ def _w1_fallback_findings(meta: dict[str, Any],
         for e in evidence or []:
             text = f"{e.get('title') or ''} {e.get('snippet') or ''}".lower()
             if any(k in text for k in keys):
-                scope = ("model_specific" if name and name in text
-                         else "family")
+                # For RLHF technique-general literature, weight < family
+                if any(k in text for k in ("rlhf", "preference memorization", "sft memorization")) and cls in ("memorization", "alignment_data_leakage") and name and name not in text and "family" not in text:
+                    scope = "method_general"
+                else:
+                    scope = ("model_specific" if name and name in text
+                             else "family")
                 hits.append((e.get("artifact_id"), scope))
         if not hits:
             continue
         aids = [h[0] for h in hits if h[0] is not None]
-        scope = "model_specific" if any(h[1] == "model_specific"
-                                        for h in hits) else "family"
+        # Prefer model_specific > family > method_general
+        scope_order = {"model_specific": 3, "family": 2, "method_general": 1}
+        best_scope = max((h[1] for h in hits), key=lambda s: scope_order.get(s, 0))
+        # Map to subtype when applicable
+        subtype = None
+        sample_text = " ".join(f"{e.get('title') or ''} {e.get('snippet') or ''}".lower() for e in evidence or [])
+        if cls == "membership_inference" and "preference" in sample_text:
+            subtype = "preference_mi"
+        elif cls == "extraction" and "preference" in sample_text:
+            subtype = "rlhf_preference_extraction"
+        elif cls == "memorization":
+            if "sft memorization" in sample_text or "sft_memorization" in sample_text:
+                subtype = "sft_memorization"
+            elif "preference" in sample_text:
+                subtype = "preference_memorization"
         out.append({
             "attack_id": f"MA-{len(out) + 1:02d}",
-            "title": f"{cls.replace('_', ' ')} ({scope})",
+            "title": f"{cls.replace('_', ' ')} ({best_scope})",
             "attack_class": cls,
-            "applies_to": scope,
-            "confidence": 0.7 if scope == "model_specific" else 0.45,
+            "attack_subtype": subtype,
+            "applies_to": best_scope,
+            "confidence": 0.7 if best_scope == "model_specific" else 0.45 if best_scope == "family" else 0.3,
             "prerequisites": prereq,
             "evidence_artifact_ids": aids,
             "mitigations": _W1_FALLBACK_MITIGATIONS.get(cls, []),
             "residual_notes": ("family-level literature only; no "
                                 "model-specific evidence collected"
-                                if scope == "family" else ""),
+                                if best_scope == "family" else "method-general RLHF technique; not model-specific" if best_scope == "method_general" else ""),
         })
     return out
 
@@ -3246,13 +3296,13 @@ def model_adv_intel_handle(env: dict[str, Any],
         sys_p = (
             "You map published attacks onto a machine-learning model. "
             "Reply with STRICT JSON only: {\"findings\": [{\"attack_class\": one of "
-            f"{classes}, \"title\": str, \"applies_to\": "
-            "model_specific|family|modality, \"confidence\": 0..1, "
+            f"{classes}, \"attack_subtype\": str or null, \"title\": str, \"applies_to\": "
+            "model_specific|family|modality|method_general, \"confidence\": 0..1, "
             "\"prerequisites\": [str], \"evidence_artifact_ids\": [int], "
             "\"mitigations\": [str], \"residual_notes\": str}]}. "
             "Rules: use model_specific ONLY for evidence naming this model; "
-            "otherwise family or modality. Prefer primary literature and model "
-            "cards over blogs. Separate capability (attacks published) from "
+            "family for family-named evidence; method_general for RLHF-as-technique evidence (weight 0.25) that is not model- or family-specific; otherwise modality. Prefer primary literature and model "
+            "cards over blogs. Subtypes: preference_mi for RLHF preference MI, rlhf_preference_extraction for feedback extraction, sft_memorization/preference_memorization for SFT/preference stages. Separate capability (attacks published) from "
             "exploitability in this deployment "
             f"(weights: {meta.get('weights_source') or 'unknown'}). "
             "Never claim this checkpoint does something unsourced; never claim "
@@ -3275,16 +3325,17 @@ def model_adv_intel_handle(env: dict[str, Any],
             if cls not in _me.ATTACK_CLASSES:
                 cls = "other"
             scope = str(f.get("applies_to") or "family")
-            if scope not in ("model_specific", "family", "modality"):
+            if scope not in ("model_specific", "family", "modality", "method_general"):
                 scope = "family"
             try:
                 conf = max(0.0, min(1.0, float(f.get("confidence", 0.5))))
             except (TypeError, ValueError):
                 conf = 0.5
+            subtype = _me.valid_subtype(cls, f.get("attack_subtype"))
             llm_findings.append({
                 "attack_id": str(f.get("attack_id") or f"MA-{i:02d}"),
                 "title": str(f.get("title") or cls)[:160],
-                "attack_class": cls, "applies_to": scope, "confidence": conf,
+                "attack_class": cls, "attack_subtype": subtype, "applies_to": scope, "confidence": conf,
                 "prerequisites": [str(p)[:120] for p in
                                   (f.get("prerequisites") or [])][:6],
                 "evidence_artifact_ids": [
@@ -3461,6 +3512,35 @@ def model_eval_reporter_handle(env: dict[str, Any],
         A("No adversarial evidence found in the collected corpus as of this "
           "run. That is a statement about the evidence, not about the model: "
           "absence of literature is not evidence of safety.")
+        A("")
+    # RLHF / preference memorization — hybrid model+privacy risks RM01-06
+    has_rm = any(
+        str(f.get("attack_class") or "") in ("memorization", "alignment_data_leakage")
+        or str(f.get("attack_subtype") or "").lower() in ("preference_memorization", "sft_memorization", "preference_mi", "rlhf_preference_extraction")
+        for f in findings
+    )
+    if has_rm:
+        from . import memorization as _rm
+        A("## RLHF / preference memorization (RM01–RM06)")
+        A("")
+        A("Hybrid model + privacy risks from SFT / preference / RL stages. Link to retention: long feedback retention raises exposure window for RM03/RM06; feedback overriding opt-out raises RM05 for consumer tiers; API no-train lowers RM05 but not RM01–02 for the public model. Black-box API cannot prove absence.")
+        A("")
+        A("| Risk | Data class | Stage | Layer |")
+        A("|---|---|---|---|")
+        for rm in _rm.RM_RISKS:
+            A(f"| **{rm['id']}** {rm['title']} | {rm['data_class']} | {rm['pipeline_stage']} | {rm['layer']} |")
+        A("")
+        # Scope table for preference memorization findings
+        pref_findings = [f for f in findings if str(f.get("attack_class")) in ("memorization", "alignment_data_leakage") or str(f.get("attack_subtype") or "").lower() in ("preference_memorization", "sft_memorization", "preference_mi", "rlhf_preference_extraction")]
+        if pref_findings:
+            A("**Scope — preference memorization findings in this assessment:**")
+            A("")
+            A("| Finding | Class | Subtype | Applies to | Confidence |")
+            A("|---|---|---|---|---|")
+            for f in pref_findings:
+                A(f"| {f.get('attack_id')} | {f.get('attack_class')} | {f.get('attack_subtype') or '—'} | {f.get('applies_to')} | {float(f.get('confidence', 0)):.0%} |")
+            A("")
+        A(f"Mitigations: canaries in preference sets, DP on preference training, feedback disable / no-transcript feedback, data minimization on review queues. Validation via preference-set canary insertion and black-box MI on synthetic preference-style prompts. Honest limits: no attested extraction attempt without authorized testing.")
         A("")
     A("## W2 — Adoption risk evaluation")
     A("")

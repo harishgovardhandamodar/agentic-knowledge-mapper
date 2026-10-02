@@ -509,6 +509,10 @@ def _control_options(risk: dict[str, Any]) -> list[str]:
     risk is never shown with an empty "controls" column simply because its
     deployment cannot use them.
     """
+    if risk.get("source_catalog") == "akm-rlhf-memorization":
+        # RM risks carry their mitigations directly; standing (preference exposure)
+        # unknown raises uncertainty, not fake precision
+        return list(dict.fromkeys(risk.get("mitigations") or risk.get("controls") or []))
     layer = risk.get("layer")
     if layer == "privacy":
         opts = list((risk.get("controls") or []) + (risk.get("process") or []))
@@ -718,11 +722,76 @@ def derive_register(db, inv_id: int, landscape: dict[str, Any] | None = None,
     return _overlay_state(list(merged.values()), existing)
 
 
+def _rm_rows(db, inv_id: int, land: dict[str, Any]) -> list[dict[str, Any]]:
+    """RLHF memorization risks RM01-06 as register rows."""
+    from . import memorization as _rm
+    from .models import SecurityAssessment
+    rows: list[dict[str, Any]] = []
+    for rec in (db.query(SecurityAssessment)
+                .filter(SecurityAssessment.investigation_id == inv_id).all()):
+        model_json = _load(getattr(rec, "model_json", None), {}) or {}
+        meta = model_json.get("meta") or {}
+        # Derive RM01-04, RM06 from W1 findings with subtypes
+        for rm in _rm.rm_rows_for_model(rec, meta):
+            # Enrich with assessment linkage
+            rm["assessment_ids"] = [rec.id]
+            rm["product_name"] = rec.product_name
+            rm["exposure"] = rec.exposure
+            rm["situation_tags"] = ["rlhf_memorization"]
+            # stable key includes RM id and scope
+            rm["stable_key"] = f"privacy:{rec.id}:{rm['rm_id']}:{rm.get('scope') or 'own'}"
+            rm["risk_id"] = f"R-{_product_key(rec.product_name)}-{rm['rm_id']}"
+            rows.append(rm)
+        # RM05 provider join: situational rating from RLHF findings
+        payload = _load(getattr(rec, "pdp_json", None), None)
+        if isinstance(payload, dict) and payload.get("rlhf"):
+            # find situation for this assessment
+            sit_raw = _load(getattr(rec, "situation_json", None), None)
+            sit = normalize_situation(stated_situation(sit_raw) if sit_raw else {})
+            rating = _rm.rm05_situational(payload.get("rlhf"), sit, meta)
+            if rating["rating"] != "unknown":
+                rm05 = _rm.RM_BY_ID["RM05"]
+                sev = rm05["severity"] if rating["rating"] == "elevated" else 40
+                rows.append({
+                    "risk_id": f"R-{_product_key(rec.product_name)}-RM05",
+                    "stable_key": f"privacy:{rec.id}:RM05:{rating['rating']}",
+                    "rm_id": "RM05",
+                    "title": rm05["title"],
+                    "description": rm05["description"] + f" [{rating['rating']}: {', '.join(rating['reasons'])}]",
+                    "attack_class": rm05["attack_class"],
+                    "attack_subtype": rm05["attack_subtype"],
+                    "severity": sev,
+                    "scope": "own",
+                    "evidence_scope": "model_specific" if rating["rating"] == "elevated" else "family",
+                    "scope_weight": 1.0 if rating["rating"] == "elevated" else 0.6,
+                    "confidence": 0.7 if rating["rating"] == "elevated" else 0.5,
+                    "confidence_band": rating["rating"],
+                    "data_class": rm05["data_class"],
+                    "pipeline_stage": rm05["pipeline_stage"],
+                    "layer": rm05["layer"],
+                    "source_catalog": _rm.RM_ID,
+                    "source_ref": "RM05",
+                    "catalog_version": _rm.RM_VERSION,
+                    "catalog_fingerprint": _rm.rm_fingerprint(),
+                    "mitigations": rm05["mitigations"],
+                    "org_controllability": rm05["org_controllability"],
+                    "subject": rec.product_name,
+                    "model_key": _product_key(rec.product_name),
+                    "evidence_ids": [],
+                    "assessment_ids": [rec.id],
+                    "retention_context": "; ".join(rating["reasons"]),
+                    "extractability_confidence": 0.7 if rating["rating"] == "elevated" else 0.4,
+                    "situation_tags": ["rlhf_memorization", "provider_posture"],
+                    "status": "open",
+                })
+    return rows
+
+
 def _derived_rows(db, inv_id: int,
                  land: dict[str, Any]) -> dict[str, dict[str, Any]]:
     """Every derived register row, keyed by stable key. No state, no writes."""
     rows = (_product_rows(db, inv_id) + _model_rows(land)
-            + _cve_rows(db, inv_id) + _pdp_rows(db, inv_id))
+            + _cve_rows(db, inv_id) + _pdp_rows(db, inv_id) + _rm_rows(db, inv_id, land))
     # situation-scoped leakage rows, one set per assessment that declared one
     from .models import SecurityAssessment
     for rec in (db.query(SecurityAssessment)
@@ -1032,6 +1101,16 @@ def map_controls(risk: dict[str, Any], sit: dict[str, Any],
         })
 
     src = risk.get("source_ref") or ""
+    # RLHF memorization rows (RM catalog) carry their mitigations directly;
+    # they are not leakage pathways and must not be treated as "no pathway"
+    if risk.get("source_catalog") == "akm-rlhf-memorization":
+        for cid in (risk.get("mitigations") or risk.get("controls") or []):
+            _add(cid, f"mitigates {src} ({risk.get('title') or src})", "model")
+        # RM also maps via attack class for completeness
+        cls = str(risk.get("attack_class") or "").lower()
+        for m in _me.MITIGATION_CATALOG:
+            if cls and cls in {str(x).lower() for x in (m.get("mitigates_attack_classes") or [])}:
+                _add(m["id"], f"mitigates {cls}", "model")
     if risk.get("layer") == "privacy":
         p = _lk.PATHWAY_BY_ID.get(src)
         if p:

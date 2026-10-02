@@ -16,6 +16,11 @@ MODEL_FAMILIES = ("tabular_fm", "diffusion", "llm", "embedding",
                   "time_series_fm", "multimodal", "other")
 MODALITIES = ("tabular", "image", "text", "audio", "multimodal", "other")
 WEIGHTS_SOURCES = ("open_weights", "api_only", "hybrid", "unknown")
+#: Preference-data exposure sub-signal: whether preference, feedback or
+#: review data is known to reach training. Recorded on the meta, never
+#: scored -- an "unknown" here must raise uncertainty elsewhere, not move a
+#: number here.
+PREFERENCE_EXPOSURE = ("unknown", "low", "high")
 TRAINING_POSTURES = ("public_web", "licensed", "proprietary", "synthetic",
                      "mixed", "unknown")
 DEPLOYMENTS = ("on_prem", "vpc", "saas_api", "edge", "unknown")
@@ -43,13 +48,44 @@ ATTACK_CLASSES: dict[str, dict[str, Any]] = {
               "label": "Weight stealing / distillation / side-channel"},
     "cascade": {"severity": 65,
                 "label": "Cascade failures downstream"},
+    "memorization": {"severity": 80,
+                     "label": "Memorization (SFT / preference persistence)"},
+    "alignment_data_leakage": {
+        "severity": 75,
+        "label": "Alignment / preference data leakage across users"},
     "other": {"severity": 50,
               "label": "Other attack class"},
 }
 
+#: Attack subtypes: a finding's ``attack_subtype`` refines its class without
+#: changing the arithmetic -- severity and weight stay at the class level, so
+#: a subtype can never inflate a score. Subtypes exist so preference-data
+#: risks (RM01-RM06) are addressable by name in registers, experiments and
+#: mitigations. Unknown subtypes are ignored, never rejected: evidence with
+#: a typo still counts at its class.
+ATTACK_SUBTYPES: dict[str, tuple[str, ...]] = {
+    "membership_inference": ("preference_mi",),
+    "extraction": ("rlhf_preference_extraction",),
+    "memorization": ("sft_memorization", "preference_memorization"),
+    "alignment_data_leakage": (),
+}
+
 #: Scope weights: model-specific evidence counts fully, family evidence less,
-#: modality-only least. A finding never counts more than what it evidences.
-_SCOPE_WEIGHTS = {"model_specific": 1.0, "family": 0.6, "modality": 0.4}
+#: modality-only least, technique-general (method_general) least of all. A
+#: finding never counts more than what it evidences.
+_SCOPE_WEIGHTS = {"model_specific": 1.0, "family": 0.6, "modality": 0.4,
+                  "method_general": 0.25}
+
+
+def valid_subtype(attack_class: Any, subtype: Any) -> str | None:
+    """The subtype when it belongs to the class, else None.
+
+    Never raises and never invents: an unlisted subtype reads as absent, so
+    a typo degrades to the class rather than failing the assessment.
+    """
+    subs = ATTACK_SUBTYPES.get(str(attack_class or ""), ())
+    sub = str(subtype or "").strip().lower()
+    return sub if sub in subs else None
 
 ADOPTION_DIMENSIONS: list[tuple[str, str, float]] = [
     ("family_nature", "Nature & family", 0.10),
@@ -86,7 +122,8 @@ MITIGATION_CATALOG: list[dict[str, Any]] = [
     {"id": "MM01", "title": "Differential privacy in training (DP-SGD)",
      "description": "Train with per-example clipping and noise so no single "
                     "row measurably shapes the weights.",
-     "mitigates_attack_classes": ["extraction", "membership_inference"],
+     "mitigates_attack_classes": ["extraction", "membership_inference",
+                                   "memorization", "alignment_data_leakage"],
      "mitigates_adoption_dimensions": ["memorization", "data_processing"],
      "applies_to_families": ["*"],
      "requires": "training_access", "efficacy_hint": 0.7, "cost_burden": "high",
@@ -96,7 +133,8 @@ MITIGATION_CATALOG: list[dict[str, Any]] = [
     {"id": "MM02", "title": "Differential privacy at inference",
      "description": "Aggregate or noise answers to repeated queries so query "
                     "campaigns cannot reconstruct training rows.",
-     "mitigates_attack_classes": ["extraction", "membership_inference"],
+     "mitigates_attack_classes": ["extraction", "membership_inference",
+                                   "memorization", "alignment_data_leakage"],
      "mitigates_adoption_dimensions": ["memorization"],
      "applies_to_families": ["*"],
      "requires": "serving_control", "efficacy_hint": 0.5,
@@ -107,7 +145,8 @@ MITIGATION_CATALOG: list[dict[str, Any]] = [
     {"id": "MM03", "title": "Machine unlearning / deletion pipelines",
      "description": "Remove wrongful or stale rows and their influence: "
                     "retrain, fine-tune-away, or gated filters with proof.",
-     "mitigates_attack_classes": ["extraction"],
+     "mitigates_attack_classes": ["extraction", "memorization",
+                                   "alignment_data_leakage"],
      "mitigates_adoption_dimensions": ["memorization", "governance_documentation"],
      "applies_to_families": ["*"],
      "requires": "training_access", "efficacy_hint": 0.5,
@@ -129,7 +168,8 @@ MITIGATION_CATALOG: list[dict[str, Any]] = [
     {"id": "MM05", "title": "Training-data watermarking / canaries",
      "description": "Planted canary rows whose reappearance proves extraction "
                     "or leakage.",
-     "mitigates_attack_classes": ["extraction", "membership_inference"],
+     "mitigates_attack_classes": ["extraction", "membership_inference",
+                                   "memorization", "alignment_data_leakage"],
      "mitigates_adoption_dimensions": ["memorization", "ops_monitoring"],
      "applies_to_families": ["*"],
      "requires": "training_access", "efficacy_hint": 0.6,
@@ -161,7 +201,8 @@ MITIGATION_CATALOG: list[dict[str, Any]] = [
     {"id": "MM08", "title": "Output filtering / DLP / policy heads",
      "description": "Screen generations for sensitive echoes, PII and policy "
                     "violations before delivery.",
-     "mitigates_attack_classes": ["extraction", "inversion", "injection"],
+     "mitigates_attack_classes": ["extraction", "inversion", "injection",
+                                   "memorization", "alignment_data_leakage"],
      "mitigates_adoption_dimensions": ["data_processing", "cascade"],
      "applies_to_families": ["*"],
      "requires": "serving_control", "efficacy_hint": 0.6,
@@ -206,6 +247,7 @@ MITIGATION_CATALOG: list[dict[str, Any]] = [
      "description": "Block releases that regress on extraction, membership and "
                     "robustness benchmarks.",
      "mitigates_attack_classes": ["extraction", "membership_inference",
+                                   "memorization", "alignment_data_leakage",
                                    "evasion"],
      "mitigates_adoption_dimensions": ["ops_monitoring",
                                         "governance_documentation"],
@@ -242,10 +284,25 @@ MITIGATION_CATALOG: list[dict[str, Any]] = [
      "mitigates_adoption_dimensions": ["governance_documentation",
                                         "known_issues"],
      "applies_to_families": ["*"],
-     "requires": "governance", "efficacy_hint": 0.3, "cost_burden": "low",
+     "requires": "governance", "efficacy_hint": 0.3,
+     "cost_burden": "low",
      "residual_limitations": "Reduces unknown-unknowns; mitigates nothing "
                              "by itself.",
      "references": ["Mitchell et al., Model Cards (2019)"]},
+    {"id": "MM16", "title": "Feedback-channel minimization",
+     "description": "Disable or scope product feedback, thumbs and transcript "
+                    "attachments on approved tools, and minimize what review "
+                    "queues retain: preference data that is never collected "
+                    "cannot be memorized.",
+     "mitigates_attack_classes": ["memorization",
+                                   "alignment_data_leakage"],
+     "mitigates_adoption_dimensions": ["memorization", "data_processing"],
+     "applies_to_families": ["*"],
+     "requires": "serving_control", "efficacy_hint": 0.5,
+     "cost_burden": "low",
+     "residual_limitations": "Stops future collection only; says nothing "
+                             "about preference data already trained on.",
+     "references": []},
 ]
 
 
@@ -444,7 +501,7 @@ def score_mitigation_residual(attacks: list[dict], dimensions: list[dict],
 
 
 EXPERIMENT_ID = "akm-experiment-plan"
-EXPERIMENT_VERSION = "1.0.0"
+EXPERIMENT_VERSION = "1.1.0"
 EXPERIMENT_METHOD = "experiment_plan_v1"
 
 EXPERIMENT_METHOD_TYPES = (
@@ -477,6 +534,9 @@ _CLASS_EXPERIMENTS: dict[str, list[str]] = {
     "injection": ["robustness_grid"],
     "theft": ["watermark_detect"],
     "cascade": ["robustness_grid"],
+    "memorization": ["canary", "extraction_probe", "privacy_accounting"],
+    "alignment_data_leakage": ["extraction_probe", "privacy_accounting",
+                               "canary"],
     "other": ["doc_audit"],
 }
 _MITIGATION_EXPERIMENTS: dict[str, str] = {
@@ -487,7 +547,7 @@ _MITIGATION_EXPERIMENTS: dict[str, str] = {
     "MM09": "extraction_probe", "MM10": "watermark_detect",
     "MM11": "robustness_grid", "MM12": "robustness_grid",
     "MM13": "canary", "MM14": "extraction_probe",
-    "MM15": "doc_audit",
+    "MM15": "doc_audit", "MM16": "doc_audit",
 }
 _FALSIFIER_METHODS: tuple[tuple[str, str], ...] = (
     ("retention", "unlearning_check"),
@@ -671,12 +731,12 @@ def posture_for(score: float | None) -> str:
     return "LOW RISK — routine controls sufficient"
 
 MODEL_ADV_ID = "akm-model-adversarial"
-MODEL_ADV_VERSION = "1.0.0"
+MODEL_ADV_VERSION = "2.0.0"
 ADOPTION_ID = "akm-adoption-risk"
 ADOPTION_VERSION = "1.0.0"
 
 MITIGATION_ID = "akm-model-mitigations"
-MITIGATION_VERSION = "1.0.0"
+MITIGATION_VERSION = "2.0.0"
 
 #: Change policy per catalog, enforced by tests/test_versioning.py. Same
 #: rule as the product pack: fingerprint moves without a version bump, or
@@ -765,6 +825,8 @@ def normalize_model_meta(raw: dict | None) -> dict[str, Any]:
                                 "unknown"),
         "training_data_posture": _enum(raw.get("training_data_posture"),
                                        TRAINING_POSTURES, "unknown"),
+        "preference_data_exposure": _enum(raw.get("preference_data_exposure"),
+                                          PREFERENCE_EXPOSURE, "unknown"),
         "deployment_pattern": _enum(raw.get("deployment_pattern"),
                                     DEPLOYMENTS, "unknown"),
         "focus_terms": [str(t).strip() for t in

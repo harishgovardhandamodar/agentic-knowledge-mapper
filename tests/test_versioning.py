@@ -26,10 +26,10 @@ class TestPinnedFingerprints(unittest.TestCase):
         self.assertEqual(tp.pack_fingerprint(), "19a11481e69d")
 
     def test_model_catalog_fingerprints_pinned(self):
-        self.assertEqual(me.model_adv_fingerprint(), "34d1e949c36c")
+        self.assertEqual(me.model_adv_fingerprint(), "2426c8c494d6")
         self.assertEqual(me.adoption_fingerprint(), "429c1576c12e")
-        self.assertEqual(me.mitigation_fingerprint(), "478f15fc184f")
-        self.assertEqual(me.experiment_fingerprint(), "081a735a41da")
+        self.assertEqual(me.mitigation_fingerprint(), "394dbf5a8e8e")
+        self.assertEqual(me.experiment_fingerprint(), "d8988b1f2799")
 
     def test_manifest_version_matches_constant(self):
         self.assertEqual(tp.pack_manifest()["version"], tp.PACK_VERSION)

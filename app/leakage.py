@@ -31,7 +31,7 @@ from typing import Any
 LEAKAGE_ID = "akm-leakage-pathways"
 LEAKAGE_VERSION = "1.0.0"
 PLAYBOOK_ID = "akm-situation-playbooks"
-PLAYBOOK_VERSION = "1.0.0"
+PLAYBOOK_VERSION = "1.1.0"
 
 #: Semver rule for this catalog, same policy as the threat pack: a patch moves
 #: no number, a minor adds or removes a pathway, a major changes what a
@@ -329,6 +329,20 @@ PLAYBOOKS: list[dict[str, Any]] = [
             "On frontier tiers, decide the safety-retention question "
             "explicitly: accept the window, hold data customer-side, or "
             "choose another tier.",
+        ],
+    },
+    {
+        "id": "PB07",
+        "name": "RLHF / preference memorization validation",
+        "select_when": ["external_llm", "open_weights", "personal_data"],
+        "match": "any",
+        "forced": ["LP07", "LP08"],
+        "checks": [
+            "Prohibit consumer AI for confidential data; preference data that is never collected cannot be memorized.",
+            "Disable in-product feedback where possible; canaries in preference sets when training access exists.",
+            "Enterprise/API + ZDR where negotiable; DLP / classification before prompt; vendor questionnaire on preference retention.",
+            "Prefer methods with published lower memorization of preference data — cite evidence, don't market.",
+            "Canary insertion + extraction probe on preference-like holdout before release.",
         ],
     },
 ]

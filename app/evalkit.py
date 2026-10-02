@@ -201,7 +201,7 @@ def model_cases() -> list[dict[str, Any]]:
               "confidence": 0.8},
              {"attack_class": "membership_inference", "applies_to": "family",
               "confidence": 0.6}],
-         "expect": {"overall_pct": 46.6, "coverage_pct": 25.0},
+         "expect": {"overall_pct": 46.6, "coverage_pct": 20.0},
          "note": "model-specific extraction dominates; family evidence counts less"},
         {"name": "w1-api-only-model-no-public-attacks",
          "kind": "w1",
@@ -580,7 +580,7 @@ def portfolio_cases() -> list[dict[str, Any]]:
         {"name": "pf-catalog-fingerprints",
          "kind": "pf-fingerprints",
          "expect": {"leakage": "be5648831fa9",
-                     "playbooks": "7f2d1285e2ea"},
+                     "playbooks": "47d25eb7fff3"},
          "note": "a catalog edit must show up here before it moves a number"},
     ]
 

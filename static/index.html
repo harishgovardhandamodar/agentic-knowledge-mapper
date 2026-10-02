@@ -1271,6 +1271,12 @@ body.pane-sec-top-collapsed .sec-topbar-sub { display: none; }
               <option value="transferred">Transferred</option>
               <option value="closed">Closed</option>
             </select>
+            <select id="secPfTag" aria-label="Filter by tag" onchange="secPfRender()">
+              <option value="">All tags</option>
+              <option value="rlhf_memorization">Preference / RLHF memorization</option>
+              <option value="provider_posture">Provider posture</option>
+              <option value="preference_feedback">Preference feedback</option>
+            </select>
             <div class="std-viewbtn" style="cursor:default;" id="secPfMetrics"></div>
           </div>
           <div class="std-filters">
@@ -8657,8 +8663,10 @@ function secPfRegisterHtml() {
   const c = secPfCache;
   const layer = (document.getElementById('secPfLayer') || {}).value || '';
   const status = (document.getElementById('secPfStatus') || {}).value || '';
+  const tag = (document.getElementById('secPfTag') || {}).value || '';
   let rows = c.register.risks.filter(r =>
-    (!layer || r.layer === layer) && (!status || r.status === status));
+    (!layer || r.layer === layer) && (!status || r.status === status)
+    && (!tag || (r.situation_tags || []).includes(tag)));
   if (!rows.length) {
     return `<div class="std-note">No rows match this filter.${c.register.unowned ? ` ${c.register.unowned} row(s) in the register have no owner — that is reported here rather than filled in.` : ''}</div>`;
   }

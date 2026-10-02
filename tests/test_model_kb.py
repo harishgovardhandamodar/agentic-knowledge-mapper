@@ -32,7 +32,7 @@ _db.init_db()
 def _scoring(w1_pct=46.6, **over):
     base = {
         "assessment_path": "model_engineering",
-        "w1": {"overall_pct": w1_pct, "coverage_pct": 25.0,
+        "w1": {"overall_pct": w1_pct, "coverage_pct": 20.0,
                "model_adv_version": me.MODEL_ADV_VERSION,
                "model_adv_fingerprint": me.model_adv_fingerprint()},
         "w2": {"overall_pct": 60.0, "uncertainty_pct": 50.0,

@@ -161,6 +161,17 @@ def _ensure_model_queries(inv: Investigation, clean: list[dict],
         clean.append({"text": f"differential privacy unlearning "
                               f"watermarking {subject}"[:120],
                       "sources": srcs})
+    # RLHF / preference memorization pack (Spec §8) — when focus mentions
+    # rlhf/preference/reward model or memorization, or provider posture already asks it,
+    # include the RLHF memorization family alongside general queries.
+    focus_blob = " ".join((inv.keywords or "").split(",")) + " " + brief
+    if re.search(r"rlhf|preference|reward model|thumbs|feedback memorization|alignment data", focus_blob, re.I):
+        if len(clean) < 6 and "rlhf memorization" not in blob:
+            clean.append({"text": f"RLHF memorization preference data {subject}"[:120], "sources": srcs})
+        if len(clean) < 6 and "reward model membership" not in blob:
+            clean.append({"text": f"reward model membership inference {subject}"[:120], "sources": srcs})
+        if len(clean) < 6 and "canary preference" not in blob:
+            clean.append({"text": f"canary preference dataset RLHF {subject}"[:120], "sources": srcs})
 
 
 def _vendor_terms(inv: Investigation) -> list[str]:

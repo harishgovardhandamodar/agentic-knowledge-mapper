@@ -68,11 +68,11 @@ class TestW1Scoring(unittest.TestCase):
             {"attack_class": "membership_inference", "applies_to": "family",
              "confidence": 0.6}])
         self.assertAlmostEqual(r["overall_pct"], 46.6, places=1)
-        self.assertAlmostEqual(r["coverage_pct"], 25.0, places=1)
+        self.assertAlmostEqual(r["coverage_pct"], 20.0, places=1)
 
     def test_fingerprint_is_stable(self):
-        self.assertEqual(me.model_adv_fingerprint(), "34d1e949c36c")
-        self.assertEqual(me.MODEL_ADV_VERSION, "1.0.0")
+        self.assertEqual(me.model_adv_fingerprint(), "2426c8c494d6")
+        self.assertEqual(me.MODEL_ADV_VERSION, "2.0.0")
 
 
 class TestW2Scoring(unittest.TestCase):
@@ -106,9 +106,9 @@ class TestW2Scoring(unittest.TestCase):
 
 class TestMitigationCatalog(unittest.TestCase):
     def test_catalog_shape(self):
-        self.assertEqual(len(me.MITIGATION_CATALOG), 15)
+        self.assertEqual(len(me.MITIGATION_CATALOG), 16)
         ids = [c["id"] for c in me.MITIGATION_CATALOG]
-        self.assertEqual(ids, [f"MM{i:02d}" for i in range(1, 16)])
+        self.assertEqual(ids, [f"MM{i:02d}" for i in range(1, 17)])
         for c in me.MITIGATION_CATALOG:
             for key in ("title", "description",
                         "mitigates_attack_classes",
@@ -117,8 +117,8 @@ class TestMitigationCatalog(unittest.TestCase):
                         "residual_limitations"):
                 self.assertIn(key, c, c["id"])
             self.assertIn(c["cost_burden"], ("low", "medium", "high"))
-        self.assertEqual(me.mitigation_fingerprint(), "478f15fc184f")
-        self.assertEqual(me.MITIGATION_VERSION, "1.0.0")
+        self.assertEqual(me.mitigation_fingerprint(), "394dbf5a8e8e")
+        self.assertEqual(me.MITIGATION_VERSION, "2.0.0")
 
     def test_tabular_open_defers_watermarking(self):
         app, deferred = me.prefilter_mitigations(
@@ -398,7 +398,7 @@ class TestModelDossierW3(unittest.TestCase):
         try:
             md = dossier_markdown(db, inv_id)
             for s in ("**W3 — Mitigation plan", "MM05", "MM04 deferred",
-                      "mitigation-residual 1.0.0",
+                      "mitigation-residual 2.0.0",
                       "Top recommended controls:",
                       "Still uncovered", "Top residual risks after plan:"):
                 self.assertIn(s, md)
@@ -464,7 +464,7 @@ class TestModelDossierRow(unittest.TestCase):
             md = dossier_markdown(db, inv.id, dossier=d)
             for s in ("**Model identity.**", "TabPFN", "tabular_fm",
                       "W1 — Adversarial research", "W2 — Adoption risk",
-                      "model-adversarial 1.0.0", "adoption-risk 1.0.0",
+                      "model-adversarial 2.0.0", "adoption-risk 1.0.0",
                       "— (no evidence)", "Unknown dimensions"):
                 self.assertIn(s, md)
             head = md[:md.index("## 1. The request")]

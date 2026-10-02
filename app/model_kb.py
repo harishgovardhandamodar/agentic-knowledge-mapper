@@ -482,6 +482,8 @@ def _risk_register(rec, meta: dict, w1: dict, w2: dict, catalogs: dict,
             "risk_id": f"{mk or 'model'}:{cls}:{scope}",
             "model_key": mk,
             "attack_class": cls,
+            "attack_subtype": _me.valid_subtype(
+                cls, f.get("attack_subtype")),
             "attack_label": _me.ATTACK_CLASSES.get(
                 cls, _me.ATTACK_CLASSES["other"])["label"],
             "scope": scope,

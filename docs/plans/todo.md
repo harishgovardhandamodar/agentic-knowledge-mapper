@@ -268,6 +268,36 @@ Legend: `[ ]` todo · `[x]` done. Same non-negotiables: additive schema, stored 
 - [x] Portfolio evalkit: 8 pinned cases + 4 invariants (multiplier honesty, coverage, mapping, cascade, fingerprints)
 - [x] Live image rebuild + live verification (all 5 endpoints 200, card served, advisor POST returns deterministic pack; intel correctly flags 3 stale pack stamps)
 
+# TODO — RLHF memorization risks (RM01–06)
+
+Branch: `rlhf-memorization`.
+Rule: model memorization science (W1) vs tenant eligibility (RLHF retention + situation) — no single privacy score; unknown stays unknown.
+
+## RM-1 — Taxonomy + catalog
+- [x] Add `memorization` (80) + `alignment_data_leakage` (75) to ATTACK_CLASSES; subtypes `preference_memorization`, `sft_memorization`, `preference_mi`, `rlhf_preference_extraction` with `valid_subtype` helper
+- [x] `method_general` scope weight 0.25 (RLHF-as-technique, less than family); `scope_of_finding` passes subtype through
+- [x] RM01–06 catalog `akm-rlhf-memorization` v1.0.0 with data_class, pipeline_stage, mitigations; fingerprint
+
+## RM-2 — Register + KB + scoring
+- [x] KB `_risk_register` subtype passthrough; portfolio `_rm_rows` (model + provider-joined RM05/06) with null severity → no band
+- [x] W1 fallback keys for preference/SFT/RLHF memorization; LLM prompt subtypes + `method_general` allowed
+- [x] W3 mitigation catalog extended (MM01/02/03/05/08/12 now cover new classes) + MM16 feedback minimization; W4 `_CLASS_EXPERIMENTS` for new classes
+- [x] `preference_data_exposure` meta signal (unknown|low|high)
+
+## RM-3 — Collection, hypothesis, advice
+- [x] Agent cards: `model-adv-intel` map_rlhf_memorization, `experiment-planner` RLHF templates, `research-collector` rlhf_memorization pack
+- [x] Query pack: RLHF memorization families injected when focus matches rlhf|preference|reward model
+- [x] Hypothesis fallback H-RM01 (family preference memorization) + H-RM05 (org feedback exclusion)
+- [x] Report section `RLHF / preference memorization (RM01–06)` after W1; leakage playbook PB07
+
+## RM-4 — Graph, dossier, surfaces, guard
+- [x] Unified register columns `retention_context`, `extractability_confidence`, `org_controllability` on RM rows; tags `rlhf_memorization`
+- [x] Landscape/Portfolio tag filter `rlhf_memorization`
+- [x] Dashboard distribution by provider covers RM rows (no new composite)
+- [x] Write-guard phrases for memorization + reward-model claims (tier-gated)
+- [x] 15 RM tests (taxonomy, scope, catalog, rows, join, query pack, hypotheses, KB, guard, evalkit); full suite green
+- [x] Live image rebuild + live verification
+
 ## Follow-ups (not blocking)
 - [ ] Verify inherited versioning baselines still deliberate for pack/model fingerprints
 - [ ] `SecurityAssessRequest.allow_partial` semantics confirmed against the KB path

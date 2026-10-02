@@ -588,6 +588,9 @@ DEFINITE_TRAIN_PATTERNS = (
     "definitely train", "certainly train", "all api data is used",
     "everything you send is used for training",
     "your api data trains",
+    "rlhf is safe from memorization", "safe from memorization",
+    "no memorization risk", "your api data is in the reward model",
+    "is in the reward model",
 )
 TIER_EVIDENCE_TERMS = (
     "consumer", "enterprise", "api tier", "opt-out", "opt out",
