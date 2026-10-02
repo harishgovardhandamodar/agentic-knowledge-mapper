@@ -299,6 +299,31 @@ def availability(db, inv_id: int, scope: dict[str, Any] | None = None,
     pdp_coverage = _pct(len(providers_seen) - len(uncovered_providers),
                         len(providers_seen))
 
+    # Safety source coverage: assessed providers with an accepted safety
+    # source in-window. This is source coverage under availability -- it says
+    # nothing about the org's robustness, and must never be read that way.
+    from . import provider_posture as _pp
+    safety_providers = sorted({
+        r.product_name for r in recs if r.product_name} or set())
+    with_safety = set()
+    for a in _artifacts(db, inv_id):
+        if a.review != "accepted" or not (a.created_at or a.date_published):
+            continue
+        ts = a.created_at or a.date_published
+        if ts < cutoff:
+            continue
+        d = {"title": a.title, "tags": a.tags,
+             "artifact_type": a.artifact_type}
+        if not _pp.is_safety_typed(d):
+            continue
+        blob = f"{a.title or ''}".lower()
+        for name in safety_providers:
+            if name and name.lower() in blob:
+                with_safety.add(name)
+    uncovered_safety = sorted(set(safety_providers) - with_safety)
+    safety_coverage = _pct(len(safety_providers) - len(uncovered_safety),
+                           len(safety_providers))
+
     lights = [
         _light("initiative coverage", initiative_coverage["pct"],
                f"{initiative_coverage['n']} of {initiative_coverage['of']} "
@@ -326,6 +351,10 @@ def availability(db, inv_id: int, scope: dict[str, Any] | None = None,
         _light("provider posture", pdp_coverage["pct"],
                f"{pdp_coverage['n']} of {pdp_coverage['of']} assessed "
                "providers with fresh PDP findings"),
+        _light("safety sources", safety_coverage["pct"],
+               f"{safety_coverage['n']} of {safety_coverage['of']} assessed "
+               "providers with an accepted safety source in-window. Source "
+               "coverage only -- not org robustness."),
     ]
     return {
         "method": EXECUTIVE_METHOD, "version": EXECUTIVE_VERSION,
@@ -346,6 +375,8 @@ def availability(db, inv_id: int, scope: dict[str, Any] | None = None,
         "kb_sync_health": kb_health,
         "pdp_coverage": pdp_coverage,
         "uncovered_providers": uncovered_providers,
+        "safety_coverage": safety_coverage,
+        "uncovered_safety_providers": uncovered_safety,
         "note": ("Availability is a set of lights plus the tables behind "
                  "them, not one number. An empty denominator reads as "
                  "unknown, never as covered."),

@@ -475,7 +475,7 @@ def run_security_assessment(run_id: int, params: dict):
                     for a in db.query(_Art).filter(
                         _Art.investigation_id == inv.id,
                         _Art.review == "accepted").all()]
-                _pdp = _pp.assess_pdp(_accepted)
+                _pdp = _pp.assess_posture(_accepted)
                 rec.pdp_json = json.dumps(_pdp)
                 db.commit()
                 _stands: dict[str, int] = {}

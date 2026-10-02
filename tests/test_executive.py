@@ -273,6 +273,20 @@ class TestAvailability(ExecCase):
         self.assertEqual(avail["pdp_coverage"]["pct"], 100.0)
         self.assertEqual(avail["uncovered_providers"], [])
 
+    def test_safety_coverage_counts_accepted_safety_sources(self):
+        self._model_assessment(name="Acme Lab")
+        avail = ex.availability(self.db, self.inv.id)
+        self.assertEqual(avail["safety_coverage"]["of"], 1)
+        self.assertEqual(avail["safety_coverage"]["pct"], 0.0)
+        self._artifact(title="Acme Lab system card red team evals",
+                       review="accepted",
+                       artifact_type="paper")
+        avail = ex.availability(self.db, self.inv.id)
+        self.assertEqual(avail["safety_coverage"]["pct"], 100.0)
+        self.assertEqual(avail["uncovered_safety_providers"], [])
+        self.assertTrue(any(L["area"] == "safety sources"
+                            for L in avail["lights"]))
+
 
 class TestDistribution(ExecCase):
     def test_layers_scopes_and_statuses_stay_separate(self):

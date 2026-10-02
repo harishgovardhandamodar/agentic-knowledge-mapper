@@ -301,6 +301,11 @@ PLAYBOOKS: list[dict[str, Any]] = [
             "questionnaire, not trust.",
             "Public terms can change; re-read them on a schedule, so this "
             "advice expires with the terms it was read from.",
+            "Treat external eval or red-team participation as a data-sharing "
+            "decision: scope what leaves before signing up.",
+            "Prefer tiers whose deployment and safety policies are written "
+            "down -- but check the data terms (PDP), never the paper count: "
+            "more safety publications is not a privacy control.",
         ],
     },
 ]

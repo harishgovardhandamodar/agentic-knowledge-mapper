@@ -128,6 +128,33 @@ Legend: `[ ]` todo · `[x]` done. Inherits every §0 non-negotiable above.
 - [x] Evalkit: 5 KB partition cases (15/15 green)
 - [x] Full suite green with the known A2A hang deselected
 
+# TODO — provider safety research context (addendum to PDP)
+
+Branch: `provider-safety-research`.
+Rule: safety literature contextualizes governance/eval practice; it never moves a PDP standing and never scores data safety.
+
+## SAF-1 — Catalog + firewall
+- [x] `provider_safety_context_v1` SAF01–SAF06 with claim classes, own fingerprint
+- [x] Firewall: safety-typed sources reach PDP only with data terms in the same document
+- [x] Human override the sole path to supported (both catalogs)
+
+## SAF-2 — Collection, graph, synthesis
+- [x] Safety planner families (RSP, system card, eval/red-team, RLHF) within the six-query cap
+- [x] Safety-feedback contribution paths gated on evidenced PDP06
+- [x] Synthesis safety subsection: framework coverage, dual transparency matrix, residual unknowns
+
+## SAF-3 — Advice, intel, surfaces
+- [x] PB05 safety checks (eval participation, tier clarity, no paper-count privacy)
+- [x] Intel `new_posture_sources` (terms + safety publications as re-review triggers)
+- [x] Dashboard safety source coverage under availability (never robustness)
+- [x] 8 safety tests, 6 evalkit cases + 3 invariants
+- [x] Summary renderer: `####`–`######` headers, mermaid fences via the shared render queue (was raw code), verified against live run #18 synthesis
+- [x] AKM Executive-summary overlay: workflow `exec_paragraph` through the mini renderer (was escaped raw `**`), verified against live inv-4 payload
+- [x] Dossier preview "reports, as written": report markdown rendered (was raw `<pre>`), verified against live assessment #95; fenced diagrams drawn live via the existing queue hook
+- [x] AKM summary carries the manager synthesis: `manager_synthesis` in the summary payload + rendered section in the overlay (was one click away), verified against live run #18 / inv 71
+- [x] Full suite green with the known A2A case deselected
+- [x] Live image rebuild + live verification
+
 # TODO — provider AGI data posture (`provider_data_posture`)
 
 Branch: `provider-data-posture`.

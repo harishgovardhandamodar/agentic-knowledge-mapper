@@ -1149,6 +1149,28 @@ class TestStatsCompleteness(unittest.TestCase):
         finally:
             inv.close()
 
+    def test_summary_carries_the_manager_synthesis_when_present(self):
+        from app.explainer import investigation_summary
+        inv = _Inv()
+        try:
+            plain = investigation_summary(inv.db, inv.id)
+            self.assertIsNone(plain["manager_synthesis"])
+            art = Artifact(
+                investigation_id=inv.id,
+                title="Manager synthesis (run #1)",
+                artifact_type="research", source="agentic-manager",
+                content="## Provider data posture compare\n\n| A | B |\n",
+                tags="manager-synthesis")
+            inv.db.add(art)
+            inv.db.commit()
+            full = investigation_summary(inv.db, inv.id)
+            synth = full["manager_synthesis"]
+            self.assertEqual(synth["artifact_id"], art.id)
+            self.assertIn("Provider data posture compare",
+                          synth["markdown"])
+        finally:
+            inv.close()
+
 
 if __name__ == "__main__":
     unittest.main()

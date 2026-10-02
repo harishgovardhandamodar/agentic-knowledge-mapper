@@ -1359,6 +1359,19 @@ def intel_feed(db, inv_id: int, since_days: int = 30,
     drifted = (db.query(Artifact)
                .filter(Artifact.investigation_id == inv_id,
                        Artifact.drift == 1).all())
+    from . import provider_posture as _pp
+    new_posture = [{
+        "id": a.id, "title": a.title,
+        "safety": _pp.is_safety_typed({"id": a.id, "title": a.title,
+                                       "tags": a.tags,
+                                       "artifact_type": a.artifact_type}),
+        "review": a.review} for a in (db.query(Artifact).filter(
+            Artifact.investigation_id == inv_id,
+            Artifact.review == "accepted",
+            Artifact.created_at >= since).all())
+        if _pp.is_posture_evidence({"id": a.id, "title": a.title,
+                                     "tags": a.tags,
+                                     "artifact_type": a.artifact_type})]
     recs = (db.query(SecurityAssessment)
             .filter(SecurityAssessment.investigation_id == inv_id).all())
     stale = [{"assessment_id": r.id, "product_name": r.product_name,
@@ -1377,7 +1390,9 @@ def intel_feed(db, inv_id: int, since_days: int = 30,
                               for a in drifted],
         "stale_assessments": stale,
         "catalog_drift": _catalog_drift(recs),
-        "quiet": not (new_cves or drifted or stale or _catalog_drift(recs)),
+        "new_posture_sources": new_posture,
+        "quiet": not (new_cves or drifted or stale or _catalog_drift(recs)
+                      or new_posture),
         "note": "Derived from stored rows and today's catalogs. A quiet feed "
                 "means nothing changed that this system can see, not that the "
                 "landscape is unchanged.",

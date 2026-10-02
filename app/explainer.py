@@ -1946,10 +1946,28 @@ def investigation_summary(db, inv_id: int) -> dict:
                           "goal": goal[:200]})
     run_health = {"failed_runs": len(failed_runs),
                   "open_gaps": open_gaps}
+    # Manager synthesis: when this investigation is a manager run's summary,
+    # the compiled synthesis is the actual deliverable -- surfacing only its
+    # two-sentence brief would hide the compare tables, datapoint answers and
+    # diagrams the run was launched to produce. Content travels with the
+    # payload so every consumer (overlay, export) shows the same text.
+    manager_synthesis = None
+    try:
+        synth = db.query(Artifact).filter(
+            Artifact.investigation_id == inv_id,
+            Artifact.tags.like("%manager-synthesis%")).order_by(
+            Artifact.id.desc()).first()
+        if synth is not None and (synth.content or "").strip():
+            manager_synthesis = {"artifact_id": synth.id,
+                                 "title": synth.title,
+                                 "markdown": synth.content}
+    except Exception:
+        manager_synthesis = None
     return {"investigation": {"id": inv.id, "title": inv.title,
                               "status": inv.status},
             "generated": datetime.now(timezone.utc).isoformat(),
             "executive_summary": synthesis, "synthesis": source,
+            "manager_synthesis": manager_synthesis,
             "run_health": run_health,
             "query": {"title": inv.title, "keywords": inv.keywords,
                       "description": inv.description, "sources": inv.sources},

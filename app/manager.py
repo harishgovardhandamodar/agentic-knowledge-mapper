@@ -654,27 +654,33 @@ def _provider_section(db, plan: dict[str, Any],
         return ""
     children = row.get("children") or []
     per_provider: list[tuple[str, list[dict[str, Any]]]] = []
+    per_safety: dict[str, list[dict[str, Any]]] = {}
     for t, c in zip(topics, children):
         if not isinstance(t, dict) or not isinstance(c, dict):
             continue
         inv_id = (c.get("investigation_id")
                   or (t.get("investigation_id") if isinstance(t, dict) else None))
         findings: list[dict[str, Any]] = []
+        safety: list[dict[str, Any]] = []
         if inv_id:
             rec = (db.query(SecurityAssessment)
                    .filter(SecurityAssessment.investigation_id == inv_id)
                    .order_by(SecurityAssessment.id.desc()).first())
             if rec is not None:
                 try:
-                    findings = json.loads(getattr(rec, "pdp_json", None)
-                                          or "[]")
+                    payload = json.loads(getattr(rec, "pdp_json", None)
+                                         or "{}")
                 except Exception:
-                    findings = []
-                if isinstance(findings, dict):
-                    findings = findings.get("findings") or []
+                    payload = {}
+                if isinstance(payload, dict):
+                    findings = payload.get("findings") or []
+                    safety = payload.get("safety") or []
+                elif isinstance(payload, list):
+                    findings = payload
         provider = str(t.get("subject") or t.get("title") or "?")
         per_provider.append((provider, findings if isinstance(findings, list)
                              else []))
+        per_safety[provider] = safety if isinstance(safety, list) else []
     if not per_provider:
         return ""
     L = ["\n## Provider data posture compare", "",
@@ -712,6 +718,55 @@ def _provider_section(db, plan: dict[str, Any],
              "activate only from stated situations or findings. The public "
              "web is common to all labs.")
     L.append("")
+    L.append("## AI safety research context")
+    L.append("")
+    L.append("Safety literature contextualizes governance and eval practice. "
+             "It does not answer corpus membership, and no row below moves a "
+             "PDP standing.")
+    L.append("")
+    L.append("### Per-lab framework coverage")
+    L.append("")
+    L.append("| Lab | SAF01 framework | SAF02 eval disclosure | "
+             "SAF06 safety-vs-data check |")
+    L.append("|---|---|---|---|")
+    for provider, _ in per_provider:
+        s = {f.get("id"): f for f in per_safety.get(provider, [])}
+        L.append(
+            f"| {provider} | "
+            f"{(s.get('SAF01') or {}).get('standing', 'unknown')} | "
+            f"{(s.get('SAF02') or {}).get('standing', 'unknown')} | "
+            f"{(s.get('SAF06') or {}).get('standing', 'unknown')} |")
+    L.append("")
+    L.append("### Safety transparency vs customer-data transparency")
+    L.append("")
+    L.append("| Lab | Safety transparency | Customer-data transparency |")
+    L.append("|---|---|---|")
+    for provider, findings in per_provider:
+        f = {x.get("id"): x.get("standing", "unknown") for x in findings}
+        s = {x.get("id"): x.get("standing", "unknown")
+             for x in per_safety.get(provider, [])}
+        safety = ("documented" if s.get("SAF01") != "unknown"
+                  or s.get("SAF02") != "unknown" else "thin")
+        data = ("stated" if f.get("PDP01") != "unknown"
+                and f.get("PDP02") != "unknown" else "unstated")
+        L.append(f"| {provider} | {safety} | {data} |")
+    L.append("")
+    L.append("The two columns often diverge: published safety frameworks do "
+             "not imply stated data terms. Only stated research directions "
+             "and deployment policies count as AGI-goal evidence; internal "
+             "roadmaps are not inferred.")
+    L.append("")
+    unknown_saf = sorted({
+        d["id"] for d in _pp.SAF_DIMENSIONS
+        if all(x.get("standing") == "unknown"
+               for prov, _ in per_provider
+               for x in per_safety.get(prov, [])
+               if x.get("id") == d["id"])})
+    if unknown_saf:
+        L.append(f"Residual safety unknowns: {', '.join(unknown_saf)} -- "
+                 f"unpublished eval data and non-public review pipelines stay "
+                 f"labelled unknown.")
+        L.append("")
     return "\n".join(L)
 
 

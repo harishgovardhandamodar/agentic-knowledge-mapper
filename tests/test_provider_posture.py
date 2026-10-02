@@ -249,7 +249,150 @@ class TestRegisterRows(PdpCase):
             self.assertEqual(len(r.json()["risks"]), 10)
 
 
-class TestContributionMap(unittest.TestCase):
+class TestSafetyContext(PdpCase):
+    def _safety_dicts(self):
+        return [{"id": a.id, "title": a.title, "tags": a.tags,
+                 "artifact_type": a.artifact_type, "review": a.review}
+                for a in self.db.query(Artifact).filter(
+                    Artifact.investigation_id == self.inv.id,
+                    Artifact.review == "accepted").all()]
+
+    def test_system_card_fills_saf_leaves_pdp_training_unknown(self):
+        self._artifact("OpenAI system card: red team evals and preparedness",
+                       tags="ai_safety,model_card")
+        pdp = pp.assess_pdp(self._safety_dicts())
+        saf = pp.assess_safety(self._safety_dicts())
+        by_pdp = {f["id"]: f["standing"] for f in pdp["findings"]}
+        by_saf = {f["id"]: f["standing"] for f in saf["findings"]}
+        # the card says nothing about customer data terms: PDP01 stays put
+        self.assertEqual(by_pdp["PDP01"], "unknown")
+        # but the safety literature is documented, with its claim class
+        self.assertEqual(by_saf["SAF01"], "partial")
+        self.assertEqual(by_saf["SAF02"], "partial")
+        saf01 = next(f for f in saf["findings"] if f["id"] == "SAF01")
+        self.assertEqual(saf01["claim_class"], "safety_governance")
+
+    def test_safety_source_with_data_terms_reaches_both(self):
+        self._artifact("OpenAI data usage and retention terms with "
+                       "enterprise opt-out", tags="policy")
+        pdp = pp.assess_pdp(self._safety_dicts())
+        by_pdp = {f["id"]: f["standing"] for f in pdp["findings"]}
+        self.assertEqual(by_pdp["PDP01"], "partial")
+
+    def test_supported_is_never_derived_for_safety_either(self):
+        self._artifact("Anthropic responsible scaling policy RSP",
+                       tags="ai_safety,rsp")
+        saf = pp.assess_safety(self._safety_dicts())
+        self.assertNotIn("supported", {f["standing"] for f in saf["findings"]})
+        updated = pp.set_safety_finding(
+            saf["findings"], "SAF01", standing="supported",
+            summary="RSP v2.1 dated 2025-01.", actor="lead")
+        self.assertEqual(updated["standing"], "supported")
+        with self.assertRaises(ValueError):
+            pp.set_safety_finding(saf["findings"], "SAF99",
+                                  standing="supported")
+
+    def test_posture_envelope_carries_both_catalogs(self):
+        self._artifact("OpenAI privacy policy training retention terms")
+        env = pp.assess_posture(self._safety_dicts())
+        self.assertEqual(len(env["findings"]), 10)
+        self.assertEqual(len(env["safety"]), 6)
+        self.assertEqual(env["safety_catalog"], pp.SAFETY_ID)
+        self.assertEqual(env["safety_fingerprint"], pp.safety_fingerprint())
+
+    def test_safety_feedback_paths_gate_on_eval_evidence(self):
+        cmap = pp.contribution_map(
+            [{"source_ref": "PDP06", "confidence_band": "unknown"}])
+        by_id = {e["id"]: e for e in cmap["direct"] + cmap["indirect"]}
+        self.assertEqual(by_id["direct-safety-feedback"]["status"],
+                         "possible")
+        cmap = pp.contribution_map(
+            [{"source_ref": "PDP06", "confidence_band": "partial"}])
+        by_id = {e["id"]: e for e in cmap["direct"] + cmap["indirect"]}
+        self.assertEqual(by_id["direct-safety-feedback"]["status"],
+                         "active")
+        self.assertEqual(by_id["indirect-safety-feedback"]["status"],
+                         "active")
+
+    def test_safety_planner_families_fill_remaining_slots(self):
+        from app import agent as _agent
+        inv = Investigation(
+            title="Anthropic data posture: training, retention, collection",
+            keywords="Anthropic, provider_data_posture, privacy policy",
+            description="provider posture template run",
+            sources="web,rss")
+        clean: list = []
+        _agent._ensure_provider_posture_queries(inv, clean, {"web", "rss"})
+        blob = " ".join(q["text"] for q in clean).lower()
+        self.assertIn("responsible scaling", blob)
+        self.assertIn("system card", blob)
+        # privacy families fill first, safety fills remaining slots: six
+        # total, so the third safety family yields to the cap by design
+        self.assertEqual(len(clean), 6)
+
+    def test_synthesis_safety_subsection_separates_columns(self):
+        from app.models import ManagerRun
+        plan = mgr.parse_command(
+            "Data exposure investigation: OpenAI -- training use, retention, "
+            "are we datapoints?")
+        with mock.patch.object(mgr, "launch_run"), \
+                mock.patch.object(mgr, "launch_security_assessment"):
+            row = mgr.run_plan(self.db, plan, {"research": False,
+                                               "assessment": True},
+                               "provider command")
+        stored = json.loads(self.db.query(ManagerRun).filter(
+            ManagerRun.id == row["id"]).first().plan_json)
+        t = stored["topics"][0]
+        inv = self.db.query(Investigation).filter(
+            Investigation.id == t["investigation_id"]).first()
+        inv.status = "ready"
+        rec = SecurityAssessment(
+            investigation_id=inv.id, product_name="OpenAI",
+            exposure="confidential_data", use_case="org AI use",
+            overall_pct=50.0, markdown="# posture report",
+            scoring_json=json.dumps({}),
+            hypothesis_json=json.dumps({"claims": []}))
+        self.db.add(rec)
+        self.db.commit()
+        self.db.refresh(rec)
+        art = Artifact(
+            investigation_id=inv.id,
+            title="OpenAI system card: red team evals preparedness",
+            artifact_type="paper", review="accepted",
+            tags="ai_safety,model_card")
+        self.db.add(art)
+        self.db.commit()
+        env = pp.assess_posture(
+            [{"id": art.id, "title": art.title, "tags": art.tags,
+              "artifact_type": art.artifact_type, "review": "accepted"}])
+        rec.pdp_json = json.dumps(env)
+        self.db.commit()
+        with mock.patch.object(mgr.llm, "chat", return_value="# synthesis"):
+            out = mgr.compile_run(self.db, row["id"])
+        md = out["markdown"]
+        self.assertIn("## AI safety research context", md)
+        self.assertIn("Safety transparency vs customer-data transparency",
+                      md)
+        # thin safety docs, unstated data terms: columns must diverge
+        self.assertIn("documented", md)
+        self.assertIn("unstated", md)
+
+
+class TestIntelSafety(PdpCase):
+    def test_new_terms_and_safety_sources_trigger_rereview(self):
+        import datetime as dt
+        from app import portfolio as pf
+        self._artifact("OpenAI updated privacy policy retention terms",
+                       review="accepted", tags="policy")
+        feed = pf.intel_feed(self.db, self.inv.id)
+        kinds = {x["title"]: x for x in feed["new_posture_sources"]}
+        self.assertTrue(kinds)
+        self.assertFalse(feed["quiet"])
+        self._artifact("OpenAI system card frontier evals", review="accepted",
+                       tags="ai_safety,model_card")
+        feed = pf.intel_feed(self.db, self.inv.id)
+        safety = [x for x in feed["new_posture_sources"] if x["safety"]]
+        self.assertTrue(safety)
     def test_active_paths_need_register_evidence(self):
         cmap = pp.contribution_map([])
         self.assertEqual(cmap["active_count"], 0)

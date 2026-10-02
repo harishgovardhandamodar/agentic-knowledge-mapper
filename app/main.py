@@ -2849,7 +2849,8 @@ def post_assessment_pdp_sync(assessment_id: int, request: Request,
 
     Idempotent: findings come from accepted artifacts only, so re-running
     changes nothing unless the evidence did. Deterministic derivation yields
-    ``partial`` at best; ``supported`` needs a human override below.
+    ``partial`` at best; ``supported`` needs a human override below. Safety
+    context derives alongside posture under its own catalog.
     """
     from . import provider_posture as _pp
     from .models import Artifact as _Art
@@ -2863,7 +2864,7 @@ def post_assessment_pdp_sync(assessment_id: int, request: Request,
         for a in db.query(_Art).filter(
             _Art.investigation_id == rec.investigation_id,
             _Art.review == "accepted").all()]
-    result = _pp.assess_pdp(accepted)
+    result = _pp.assess_posture(accepted)
     rec.pdp_json = json.dumps(result)
     db.commit()
     ledger_api.human_action(

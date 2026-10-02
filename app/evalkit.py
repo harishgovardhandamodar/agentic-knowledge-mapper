@@ -580,7 +580,7 @@ def portfolio_cases() -> list[dict[str, Any]]:
         {"name": "pf-catalog-fingerprints",
          "kind": "pf-fingerprints",
          "expect": {"leakage": "be5648831fa9",
-                     "playbooks": "19a8032e8954"},
+                     "playbooks": "acfeb082ac43"},
          "note": "a catalog edit must show up here before it moves a number"},
     ]
 

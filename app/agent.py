@@ -219,6 +219,12 @@ def _ensure_provider_posture_queries(inv: Investigation, clean: list[dict],
         f"{subject} enterprise zero retention DPA subprocessors",
         f"{subject} trust center SOC 2 security whitepaper",
         f"{subject} training data practices incident regulatory",
+        # Safety research sits alongside policy sources, never instead of
+        # them: frameworks and eval practice contextualize the lab without
+        # answering corpus membership.
+        f"{subject} responsible scaling deployment policy",
+        f"{subject} system card safety evaluation red team",
+        f"{subject} RLHF preference data human feedback",
     ]
     have = " ".join(q.get("text") or "" for q in clean).lower()
     srcs = ["web"] if "web" in enabled else sorted(enabled)

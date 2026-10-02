@@ -1872,6 +1872,16 @@ function renderInvSummary(d) {
   header.innerHTML = `<div><div style="font-size:11px;color:var(--text2);">Executive summary · ${d.synthesis === 'llm' ? 'model-written' : 'deterministic brief'}</div>` +
     `<h2 style="font-size:16px;font-weight:600;line-height:1.3;">${escHtml(inv.title || 'Investigation')}</h2></div>`;
   let html = `<div class="overlay-section"><p style="font-size:13px;line-height:1.55;">${escHtml(d.executive_summary || '')}</p></div>`;
+  const mgrSynth = d.manager_synthesis;
+  if (mgrSynth && (mgrSynth.markdown || '').trim()) {
+    // A manager run's summary investigation exists to carry the compiled
+    // synthesis: compare tables, datapoint answers, diagrams. Showing only
+    // the two-sentence brief would hide the deliverable the run was launched
+    // to produce, so the full text renders here through the same safe
+    // renderer as the manager view -- identical content in both places.
+    html += `<div class="overlay-section"><h4><i class="fas fa-layer-group"></i> Manager synthesis — ${escHtml(mgrSynth.title || 'compiled')}</h4>` +
+      renderMiniMarkdown(mgrSynth.markdown) + '</div>';
+  }
   html += secModelSynthesisHtml(d.model_synthesis, 'overlay-section');
   html += `<div class="overlay-section"><h4><i class="fas fa-chart-simple"></i> Coverage</h4>` +
     `<p style="font-size:12px;color:var(--text2);">${c.artifacts || 0} artifacts (${c.papers || 0} papers) · ${c.threats || 0} threats scored · ${c.explanations || 0} explanations · ${c.cves || 0} known issues</p></div>`;
@@ -2375,7 +2385,11 @@ function secDossierRender() {
       `<p style="color:var(--text2);font-size:12px">Each current report exactly as its assessment produced it. A diagram fenced inside a report is also drawn live in section 6.</p>`;
     repCur.forEach(r => {
       h += `<h5>${escHtml(r.label)} — assessment #${r.id} (current)</h5>` +
-        `<pre style="white-space:pre-wrap;word-break:break-word;font-size:11px;background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:8px;max-height:320px;overflow:auto;">${escHtml(r.report_markdown)}</pre>`;
+        // Rendered, not raw: the stored text is untouched (history stays
+        // byte-identical), only the presentation formats it -- the same
+        // markdown the PDF export already renders. Fenced diagrams become
+        // live drawings via secEnsureMermaid after inject.
+        `<div style="background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:8px;max-height:480px;overflow:auto;">${renderMiniMarkdown(r.report_markdown)}</div>`;
     });
     if (repOld.length) {
       const curByPath = {};
@@ -2814,6 +2828,7 @@ async function openDetailOverlay(id) {
         <button class="btn btn-ghost btn-sm" onclick="setReview(${detail.id},'rejected');closeOverlay();"><i class="fas fa-times"></i> Reject</button>
       </div></div>`;
     body.innerHTML = html;
+    secEnsureMermaid(body);
   } catch (e) {
     body.innerHTML = `<div class="empty-state"><i class="fas fa-exclamation-triangle"></i><br/>Failed to load details</div>`;
   }
@@ -6361,7 +6376,7 @@ function secModelSynthesisHtml(ms, cls) {
     html += `<div style="margin:10px 0 4px;font-size:12.5px;"><strong>${escHtml(f.label)}</strong> ` +
       `<span style="font-size:12px;">· ${escHtml(headlineT(f))} ${escHtml(f.score_meaning || '')}</span> ` +
       `<span style="font-size:11px;color:var(--text2);">· ${f.item_count || 0} items · run #${f.assessment_id || '—'}</span></div>`;
-    if (f.exec_paragraph) html += `<p style="font-size:12.5px;">${escHtml(f.exec_paragraph)}</p>`;
+    if (f.exec_paragraph) html += renderMiniMarkdown(f.exec_paragraph);
     (f.top_items || []).forEach(t => {
       html += `<div class="sum-item"><strong>${escHtml(t.id || '?')}</strong>` +
         `<span class="sum-title">${escHtml(t.title || '')}</span> ` +
@@ -8353,14 +8368,25 @@ function renderMiniMarkdown(src) {
     const t = lines[i].trim();
     if (!t) { flushList(); i++; continue; }
     if (t.startsWith('```')) {
+      const lang = t.slice(3).trim().toLowerCase();
       const buf = [];
       i++;
       while (i < lines.length && !lines[i].trim().startsWith('```')) { buf.push(lines[i]); i++; }
       i++;
       flushList();
-      html += `<pre>${esc(buf.join('\n'))}</pre>`;
+      if (lang === 'mermaid') {
+        // diagrams render through the shared mermaid queue (secEnsureMermaid
+        // at each injection point); the escaped source stays as the fallback
+        // text so a failed render degrades to readable code, not a blank.
+        html += `<div class="mermaid" data-src="${esc(buf.join('\n'))}">${esc(buf.join('\n'))}</div>`;
+      } else {
+        html += `<pre>${esc(buf.join('\n'))}</pre>`;
+      }
       continue;
     }
+    if (t.startsWith('###### ')) { flushList(); html += `<h6>${inline(t.slice(7))}</h6>`; i++; continue; }
+    if (t.startsWith('##### ')) { flushList(); html += `<h5>${inline(t.slice(6))}</h5>`; i++; continue; }
+    if (t.startsWith('#### ')) { flushList(); html += `<h4>${inline(t.slice(5))}</h4>`; i++; continue; }
     if (t.startsWith('### ')) { flushList(); html += `<h4>${inline(t.slice(4))}</h4>`; i++; continue; }
     if (t.startsWith('## ')) { flushList(); html += `<h3>${inline(t.slice(3))}</h3>`; i++; continue; }
     if (t.startsWith('# ')) { flushList(); html += `<h3>${inline(t.slice(2))}</h3>`; i++; continue; }
@@ -8411,6 +8437,7 @@ async function mgrShowSummary(runId, artifactId) {
   panel.hidden = false;
   if (mgrSummaryCache[artifactId]) {
     panel.innerHTML = renderMiniMarkdown(mgrSummaryCache[artifactId]);
+    secEnsureMermaid(panel);
     return;
   }
   panel.innerHTML = '<p style="color:var(--text2);font-size:12px;">Loading summary…</p>';
@@ -8420,7 +8447,7 @@ async function mgrShowSummary(runId, artifactId) {
     const d = await r.json();
     mgrSummaryCache[artifactId] = d.content || '';
     const live = document.getElementById('mgrSummary-' + runId);
-    if (live) live.innerHTML = renderMiniMarkdown(mgrSummaryCache[artifactId]);
+    if (live) { live.innerHTML = renderMiniMarkdown(mgrSummaryCache[artifactId]); secEnsureMermaid(live); }
   } catch (e) {
     panel.innerHTML = `<p style="color:var(--text2);font-size:12px;">Could not load summary: ${escHtml(e.message)}</p>`;
   }
@@ -8742,6 +8769,8 @@ function secPfIntelHtml() {
   const body = [
     block('New known issues', i.new_known_issues, 'bad'),
     block('Artifacts flagged drift', i.drifted_artifacts, 'warn'),
+    block('New posture sources', (i.new_posture_sources || []).map(x =>
+      `${x.title} (${x.safety ? 'safety' : 'terms'})`), 'warn'),
     block('Stale assessments', i.stale_assessments, 'warn'),
     block('Catalog drift', i.catalog_drift, 'bad'),
   ].join('');

@@ -315,7 +315,7 @@ def is_provider_investigation(title: str = "", keywords: str = "",
 def blank_findings() -> list[dict[str, Any]]:
     """One unknown finding per dimension. The starting point, not a result."""
     return [{"id": d["id"], "dimension": d["name"],
-             "standing": "unknown",
+             "claim_class": "data_handling", "standing": "unknown",
              "summary": "No accepted evidence assessed yet.",
              "evidence_ids": [], "tier_notes": {}}
             for d in PDP_DIMENSIONS]
@@ -329,13 +329,19 @@ def assess_pdp(accepted_artifacts: list[dict[str, Any]]) -> dict[str, Any]:
     ``supported`` and ``contradicted`` are never derived -- they need a human
     who read the tier-specific term and said which tier it binds. Pending or
     rejected artifacts are not evidence under any setting.
+
+    The safety firewall: a safety-typed source (system card, RSP, eval
+    literature) informs a PDP dimension only when the same document also
+    states data-handling terms. A card that discusses training in the abstract
+    must not move training-use-of-customer-content off unknown.
     """
     textual = []
     for a in accepted_artifacts or []:
         if not isinstance(a, dict) or a.get("review") != "accepted":
             continue
-        blob = f"{a.get('title') or ''} {a.get('tags') or ''} " \
-               f"{a.get('artifact_type') or ''}".lower()
+        blob = _artifact_blob(a)
+        if is_safety_typed(a) and not _has_data_terms(blob):
+            continue
         textual.append({"id": a.get("id"), "blob": blob,
                         "title": a.get("title") or ""})
     findings = []
@@ -346,6 +352,7 @@ def assess_pdp(accepted_artifacts: list[dict[str, Any]]) -> dict[str, Any]:
         if hits:
             findings.append({
                 "id": d["id"], "dimension": d["name"],
+                "claim_class": "data_handling",
                 "standing": "partial",
                 "summary": f"{len(hits)} accepted source(s) touch this "
                            f"dimension; tier-specific terms not verified.",
@@ -354,6 +361,7 @@ def assess_pdp(accepted_artifacts: list[dict[str, Any]]) -> dict[str, Any]:
         else:
             findings.append({
                 "id": d["id"], "dimension": d["name"],
+                "claim_class": "data_handling",
                 "standing": "unknown",
                 "summary": "No accepted evidence assessed yet.",
                 "evidence_ids": [], "tier_notes": {}})
@@ -387,6 +395,29 @@ def set_pdp_finding(findings: list[dict[str, Any]], dim_id: str, *,
                 f["reviewed_by"] = actor
             return f
     raise ValueError(f"unknown PDP dimension: {dim_id}")
+
+
+def assess_posture(accepted_artifacts: list[dict[str, Any]]) -> dict[str, Any]:
+    """The full posture envelope: PDP findings plus safety context.
+
+    Both halves derive from the same accepted sources, each under its own
+    catalog and fingerprint, and the safety half can never move a PDP
+    standing -- the firewall sits inside ``assess_pdp``, so every caller
+    inherits it. Stored on the assessment as ``pdp_json``.
+    """
+    pdp = assess_pdp(accepted_artifacts)
+    safety = assess_safety(accepted_artifacts)
+    return {
+        "method": "provider_posture_v1", "version": PDP_VERSION,
+        "catalog": PDP_ID, "fingerprint": pdp_fingerprint(),
+        "findings": pdp["findings"],
+        "safety": safety["findings"],
+        "safety_catalog": SAFETY_ID, "safety_version": SAFETY_VERSION,
+        "safety_fingerprint": safety["fingerprint"],
+        "note": ("Partial means a source exists, not that the practice is "
+                 "confirmed. Safety findings contextualize governance and "
+                 "eval practice; posture findings alone answer data use."),
+    }
 
 
 def pdp_table(findings: list[dict[str, Any]]) -> str:
@@ -441,6 +472,12 @@ CONTRIBUTION_PATHS: list[dict[str, Any]] = [
     {"id": "indirect-benchmarks", "direct": False, "name": "Shared benchmarks with published data",
      "controllability": "low", "pathways": [],
      "guidance": "Published benchmark data is training data in practice."},
+    {"id": "direct-safety-feedback", "direct": True, "name": "Org eval, red-team or bounty submissions",
+     "controllability": "high", "pathways": ["PDP06"], "safety": True,
+     "guidance": "Treat external eval and red-team participation as a data-sharing decision: scope what leaves."},
+    {"id": "indirect-safety-feedback", "direct": False, "name": "Public adversarial examples and bounty writeups",
+     "controllability": "low", "pathways": [], "safety": True,
+     "guidance": "Public red-team outputs train someone's model; assume published findings are ingested."},
 ]
 
 PATH_BY_ID = {p["id"]: p for p in CONTRIBUTION_PATHS}
@@ -460,12 +497,21 @@ def contribution_map(register_rows: list[dict[str, Any]],
     for s in situations or []:
         tags |= set((s or {}).get("tags") or [])
     refs = set()
+    bands: dict[str, str] = {}
     for r in register_rows or []:
         if r.get("source_ref"):
             refs.add(str(r["source_ref"]))
+            bands[str(r["source_ref"])] = str(
+                r.get("confidence_band") or "unknown")
     active, possible = [], []
     for p in CONTRIBUTION_PATHS:
-        hit = bool(set(p["pathways"]) & refs)
+        if p.get("safety"):
+            # Safety-feedback paths activate only on an evidenced eval-data
+            # finding: a public red-team writeup alone does not put the org
+            # in the loop.
+            hit = bands.get("PDP06") in ("partial", "supported")
+        else:
+            hit = bool(set(p["pathways"]) & refs)
         entry = {"id": p["id"], "name": p["name"],
                  "direct": p["direct"],
                  "controllability": p["controllability"],
@@ -566,3 +612,194 @@ def guard_provider_claims(text: str) -> dict[str, Any]:
     return {"text": " ".join(kept).strip(),
             "removed": removed,
             "removed_count": len(removed)}
+
+
+# --------------------------------------------------------------------------
+# AI safety research context (adjacent catalog, not posture evidence)
+# --------------------------------------------------------------------------
+
+#: Safety research informs capability, misuse, governance and evaluation
+#: practice. It is supporting context, never a substitute for privacy policy
+#: or data-processing evidence -- which is why it lives in its own catalog
+#: with its own fingerprint, and why SAF findings can never move a PDP
+#: standing (see the firewall in ``assess_pdp``).
+SAFETY_ID = "akm-provider-safety-context"
+SAFETY_VERSION = "1.0.0"
+
+#: Claim classes every safety-sourced claim carries. ``data_handling`` is the
+#: only class that may touch a PDP dimension, and only when the same document
+#: states data use -- the class tag is what makes the firewall checkable.
+CLAIM_CLASSES = ("safety_governance", "safety_eval_data", "capability",
+                 "deployment_policy", "data_handling")
+
+SAF_DIMENSIONS: list[dict[str, Any]] = [
+    {"id": "SAF01", "name": "Published safety framework / RSP",
+     "question": "Is there a versioned, dated safety framework?",
+     "claim_class": "safety_governance",
+     "evidence_terms": ["responsible scaling", "rsp", "safety framework",
+                        "frontier safety", "preparedness", "safety policy"]},
+    {"id": "SAF02", "name": "Safety eval / red-team disclosure",
+     "question": "What eval and red-team practice is published vs opaque?",
+     "claim_class": "safety_eval_data",
+     "evidence_terms": ["system card", "model card", "red team", "red-team",
+                        "safety evaluation", " evals", "eval ", "catastrophic"]},
+    {"id": "SAF03", "name": "Safety-eval data handling",
+     "question": "Does the safety process imply retention or human review?",
+     "claim_class": "safety_eval_data",
+     "evidence_terms": ["human review", "evaluation data", "review",
+                        "logging", "retention", "eval data"]},
+    {"id": "SAF04", "name": "Deployment policy vs public API",
+     "question": "Is access staged, and do usage policies differ by tier?",
+     "claim_class": "deployment_policy",
+     "evidence_terms": ["deployment", "staged", "usage policy", "api access",
+                        "structured access", "tiers"]},
+    {"id": "SAF05", "name": "Incident and risk reporting posture",
+     "question": "Are safety updates published as process, not PR?",
+     "claim_class": "safety_governance",
+     "evidence_terms": ["incident", "reporting", "transparency",
+                        "safety update", "blog"]},
+    {"id": "SAF06", "name": "Safety claims vs customer-data claims",
+     "question": "Does any one source speak to both safety and data terms?",
+     "claim_class": "data_handling",
+     "evidence_terms": ["data usage", "customer data", "privacy", "training",
+                        "retention"],
+     "requires_data_terms": True},
+]
+
+SAF_BY_ID = {d["id"]: d for d in SAF_DIMENSIONS}
+
+
+def safety_fingerprint() -> str:
+    """The safety catalog fingerprint cited on stored findings."""
+    return _fingerprint({"id": SAFETY_ID, "version": SAFETY_VERSION,
+                         "dimensions": SAF_DIMENSIONS})
+
+
+#: Tags and title terms that mark an artifact as safety-typed. A safety-typed
+#: source informs SAF dimensions; it reaches a PDP dimension only with data
+#: terms present (the firewall).
+SAFETY_TAGS = ("ai_safety", "rsp", "model_card", "eval", "red_team", "rlhf",
+               "data_practice", "deployment_policy")
+SAFETY_TITLE_TERMS = ("system card", "model card", "responsible scaling",
+                      "frontier safety", "red team", "red-team", "safety eval",
+                      "constitutional ai", "rlhf", "preference data",
+                      "preparedness")
+
+#: Data-handling markers a safety-typed source must also carry before it may
+#: inform a PDP dimension. Same document, both halves stated -- otherwise the
+#: safety literature would quietly upgrade posture it says nothing about.
+DATA_HANDLING_MARKERS = ("data usage", "customer data", "retention",
+                         "opt-out", "opt out", "privacy", "training data",
+                         "delete", "deletion", "human review")
+
+
+def _artifact_blob(a: dict[str, Any]) -> str:
+    return f"{a.get('title') or ''} {a.get('tags') or ''} " \
+           f"{a.get('artifact_type') or ''}".lower()
+
+
+def is_safety_typed(a: dict[str, Any]) -> bool:
+    """Whether a source reads as AI safety literature rather than terms."""
+    blob = _artifact_blob(a)
+    tags = f" {(a.get('tags') or '').lower()} "
+    if any(f" {t} " in tags for t in SAFETY_TAGS):
+        return True
+    return any(t in blob for t in SAFETY_TITLE_TERMS)
+
+
+def _has_data_terms(blob: str) -> bool:
+    return any(m in blob for m in DATA_HANDLING_MARKERS)
+
+
+#: Title terms that mark a source as policy/terms evidence (privacy policy,
+#: data-processing terms, DPA, subprocessor lists). Together with safety
+#: typing, this is what the intel feed watches for re-review triggers.
+POLICY_TITLE_TERMS = ("privacy policy", "data usage", "terms of service",
+                      "dpa", "data processing", "subprocessor",
+                      "zero retention", "opt-out", "opt out")
+
+
+def is_posture_evidence(a: dict[str, Any]) -> bool:
+    """Whether a source can move posture or safety findings.
+
+    Safety literature and policy/terms sources both qualify; a CVE advisory
+    or a capability essay does not. The intel feed uses this to surface new
+    terms and safety publications as re-review triggers.
+    """
+    if (a.get("artifact_type") or "") == "cve_advisory":
+        return False
+    if is_safety_typed(a):
+        return True
+    return any(t in _artifact_blob(a) for t in POLICY_TITLE_TERMS)
+
+
+def blank_safety() -> list[dict[str, Any]]:
+    """One unknown SAF finding per dimension. The starting point."""
+    return [{"id": d["id"], "dimension": d["name"],
+             "claim_class": d["claim_class"], "standing": "unknown",
+             "summary": "No accepted safety source assessed yet.",
+             "evidence_ids": []}
+            for d in SAF_DIMENSIONS]
+
+
+def assess_safety(accepted_artifacts: list[dict[str, Any]]) -> dict[str, Any]:
+    """Derive SAF standings from accepted safety sources only.
+
+    Same discipline as PDP: a dimension with a matching accepted source reads
+    ``partial``; everything else stays ``unknown``. ``supported`` is never
+    derived -- it needs a human who read the version, date or scope and said
+    what it binds.
+    """
+    textual = []
+    for a in accepted_artifacts or []:
+        if not isinstance(a, dict) or a.get("review") != "accepted":
+            continue
+        textual.append({"id": a.get("id"), "blob": _artifact_blob(a),
+                        "title": a.get("title") or ""})
+    findings = []
+    for d in SAF_DIMENSIONS:
+        hits = [t for t in textual
+                if any(term.strip().lower() in t["blob"]
+                       for term in d["evidence_terms"] if term.strip())]
+        if d.get("requires_data_terms"):
+            hits = [t for t in hits if _has_data_terms(t["blob"])]
+        if hits:
+            findings.append({
+                "id": d["id"], "dimension": d["name"],
+                "claim_class": d["claim_class"], "standing": "partial",
+                "summary": f"{len(hits)} accepted source(s) touch this "
+                           f"dimension; version, date and scope unverified.",
+                "evidence_ids": [t["id"] for t in hits if t["id"]]})
+        else:
+            findings.append({
+                "id": d["id"], "dimension": d["name"],
+                "claim_class": d["claim_class"], "standing": "unknown",
+                "summary": "No accepted safety source assessed yet.",
+                "evidence_ids": []})
+    return {"method": "provider_safety_context_v1",
+            "version": SAFETY_VERSION, "catalog": SAFETY_ID,
+            "fingerprint": safety_fingerprint(), "findings": findings,
+            "note": ("Partial means a source exists, not that the practice "
+                     "is confirmed. Safety literature evidences governance "
+                     "and eval practice, never secret corpus membership.")}
+
+
+def set_safety_finding(findings: list[dict[str, Any]], dim_id: str, *,
+                       standing: str, summary: str = "",
+                       evidence_ids: list[int] | None = None,
+                       actor: str = "") -> dict[str, Any]:
+    """Human override of one SAF dimension. The only path to supported."""
+    if standing not in STANDINGS:
+        raise ValueError(f"unknown standing: {standing}")
+    for f in findings or []:
+        if f.get("id") == dim_id:
+            f["standing"] = standing
+            if summary:
+                f["summary"] = summary
+            if evidence_ids is not None:
+                f["evidence_ids"] = list(evidence_ids)
+            if actor:
+                f["reviewed_by"] = actor
+            return f
+    raise ValueError(f"unknown SAF dimension: {dim_id}")
+
