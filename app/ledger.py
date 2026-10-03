@@ -527,6 +527,7 @@ def session_tasks(session_id: str, db=None) -> list:
                         "task_genesis": data.get("task_genesis"),
                         "genesis_ok": (task.genesis_hash or GENESIS) == (data.get("task_genesis") or GENESIS),
                         "status": task.status, "events": _counts(db, task.id)["total"],
+                        "hops": _counts(db, task.id).get("agent.hop", 0),
                         "created_at": str(task.created_at)})
         return out
     finally:

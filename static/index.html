@@ -343,6 +343,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .audit-run.active { background: var(--bg3); box-shadow: inset 3px 0 0 var(--accent); }
 .audit-run .rid { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
 .audit-run .rlab { color: var(--text2); font-size: 11px; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.audit-run .rbadge { margin-top: 4px; }
 .audit-banner { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; border: 1px solid var(--border); border-left: 3px solid var(--text2); border-radius: 6px; padding: 9px 13px; margin-bottom: 12px; font-size: 12px; background: var(--bg2); }
 .audit-banner.ok { border-left-color: var(--green); }
 .audit-banner.bad { border-left-color: var(--red); }
@@ -366,6 +367,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .audit-chip.ok { color: var(--green); border-color: var(--green); }
 .audit-chip.warn { color: var(--orange); border-color: var(--orange); }
 .audit-chip.bad { color: var(--red); border-color: var(--red); }
+.audit-chip.swarm { color: var(--teal); border-color: var(--teal); }
 .audit-chip.link { cursor: pointer; }
 .audit-chip.link:hover { background: var(--bg3); }
 .audit-sub { font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text2); margin: 14px 0 6px; }
@@ -5144,6 +5146,7 @@ function designZoomStep(d) {
 let auditRunId = null;
 let auditFlowOpen = false;
 let auditFlowCache = null;
+let auditSwarmOnly = false;
 let auditEvents = [];
 let auditFilter = '';
 let auditExpanded = new Set();
@@ -5161,6 +5164,13 @@ async function auditFetch(path, opts) {
     throw new Error(detail);
   }
   return res.status === 204 ? null : res.json();
+}
+
+function toggleAuditSwarmOnly() {
+  auditSwarmOnly = !auditSwarmOnly;
+  const btn = document.querySelector('[data-audit-swarmbtn]');
+  if (btn) btn.classList.toggle('on', auditSwarmOnly);
+  loadAuditRuns();
 }
 
 function auditShort(hash) { return hash ? String(hash).slice(0, 12) : '—'; }
@@ -5182,11 +5192,13 @@ async function loadAuditRuns(selectId) {
   const sess = sessions.sessions || [];
   auditSessions = sess;
   if (selectId) auditRunId = selectId;
+  const swarmCount = runs.filter(r => r.hops > 0).length;
 
   // Group by session, newest sitting first. A run with no session (an external
   // auditor opened one by hand) still gets a home under "unattributed".
+  const visible = auditSwarmOnly ? runs.filter(r => r.hops > 0) : runs;
   const bySession = new Map();
-  runs.forEach(r => {
+  visible.forEach(r => {
     const key = r.session_id || '';
     if (!bySession.has(key)) bySession.set(key, []);
     bySession.get(key).push(r);
@@ -5201,6 +5213,7 @@ async function loadAuditRuns(selectId) {
     <div class="audit-side-head">
       <span class="ash-title"><i class="fas fa-clock-rotate-left"></i> Sessions</span>
       <span style="display:flex;gap:4px">
+        <button class="btn btn-sm${auditSwarmOnly ? ' on' : ''}" data-audit-swarmbtn onclick="toggleAuditSwarmOnly()" title="Only runs with swarm control flow (A2A agent↔orchestrator handoffs)">Swarm${swarmCount ? ` · ${swarmCount}` : ''}</button>
         <button class="btn btn-sm" onclick="openLedgerTimeline()" title="One chronological stream across every run">
           <i class="fas fa-stream"></i> Timeline
         </button>
@@ -5215,7 +5228,7 @@ async function loadAuditRuns(selectId) {
     document.getElementById('auditBadge').textContent = '';
     return;
   }
-  if (!runs.some(r => r.run_id === auditRunId)) auditRunId = runs[0].run_id;
+  if (!visible.some(r => r.run_id === auditRunId)) auditRunId = visible.length ? visible[0].run_id : null;
 
   const groups = ordered.map(([sid, meta]) => {
     const label = meta ? (meta.label || sid) : (sid ? sid : 'unattributed');
@@ -5224,6 +5237,7 @@ async function loadAuditRuns(selectId) {
       <button class="audit-run ${r.run_id === auditRunId ? 'active' : ''}" data-rid="${escHtml(r.run_id)}" onclick="selectAuditRun('${escHtml(r.run_id)}')">
         <div class="rid">${escHtml(r.run_id)}</div>
         <div class="rlab">${escHtml(r.label || 'unlabelled')} · ${r.events} ev · ${escHtml(r.status)}</div>
+        ${r.hops ? `<div class="rbadge"><span class="audit-chip swarm" title="${r.hops} agent↔orchestrator handoffs">swarm flow · ${r.hops} hop${r.hops === 1 ? '' : 's'}</span></div>` : ''}
       </button>`).join('');
     return `
       <div class="audit-group">
@@ -5369,7 +5383,7 @@ async function openAuditSession(sessionId) {
     return `<tr>
       <td><a href="#" onclick="selectAuditRun('${escHtml(t.run_id)}');return false">${escHtml(t.run_id)}</a></td>
       <td>${escHtml(t.label || '—')}</td>
-      <td>${escHtml(t.kind || 'task')}</td>
+      <td>${escHtml(t.kind || 'task')}${t.hops ? ` <span class="audit-chip swarm" title="${t.hops} agent↔orchestrator handoffs">swarm flow</span>` : ''}</td>
       <td class="num">${t.anchor_seq ?? '—'}</td>
       <td class="num">${t.events}</td>
       <td>${escHtml(work)}</td>

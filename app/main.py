@@ -54,6 +54,8 @@ app.include_router(console_mod.router)
 from . import payments_eval as payments_eval_mod
 from . import payments_eval_api as payments_eval_api_mod
 app.include_router(payments_eval_api_mod.router)
+from . import eval_draft_api as eval_draft_api_mod
+app.include_router(eval_draft_api_mod.router)
 RISK_CONSOLE_ENABLED = os.getenv("RISK_CONSOLE_ENABLED", "1") != "0"
 
 app.add_middleware(

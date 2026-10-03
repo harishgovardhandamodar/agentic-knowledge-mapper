@@ -38,6 +38,15 @@ def _make_run(client, actor="tester"):
 
 
 class TestSeed(unittest.TestCase):
+    def _v1_questions(self, db):
+        from sqlalchemy import func
+        return (db.query(EvaluationQuestion)
+                .join(EvaluationSection)
+                .filter(EvaluationSection.catalog_id ==
+                        db.query(EvaluationCatalog.id)
+                        .filter(EvaluationCatalog.version == "v1"))
+                .count())
+
     def test_catalog_v1_shape(self):
         info = _seed()
         self.assertEqual(info["sections"], 12)
@@ -45,11 +54,17 @@ class TestSeed(unittest.TestCase):
         self.assertEqual(info["version"], "v1")
         db = SessionLocal()
         try:
-            keys = [q.key for q in db.query(EvaluationQuestion).all()]
-            self.assertEqual(len(keys), len(set(keys)), "question keys unique")
-            sections = db.query(EvaluationSection).all()
-            self.assertEqual(len({s.key for s in sections}),
-                             len(sections), "section keys unique")
+            v1_id = db.query(EvaluationCatalog.id).filter(
+                EvaluationCatalog.version == "v1").scalar()
+            qkeys = [q.key for q in db.query(EvaluationQuestion)
+                     .join(EvaluationSection)
+                     .filter(EvaluationSection.catalog_id == v1_id).all()]
+            self.assertEqual(len(qkeys), len(set(qkeys)),
+                             "question keys unique within v1")
+            skey = [s.key for s in db.query(EvaluationSection)
+                    .filter(EvaluationSection.catalog_id == v1_id).all()]
+            self.assertEqual(len(skey), len(set(skey)),
+                             "section keys unique within v1")
         finally:
             db.close()
 
@@ -59,8 +74,14 @@ class TestSeed(unittest.TestCase):
         self.assertEqual(first["questions"], second["questions"])
         db = SessionLocal()
         try:
-            self.assertEqual(db.query(EvaluationQuestion).count(), 53)
-            self.assertEqual(db.query(EvaluationCatalog).count(), 1)
+            v1_id = db.query(EvaluationCatalog.id).filter(
+                EvaluationCatalog.version == "v1").scalar()
+            qn = (db.query(EvaluationQuestion)
+                  .join(EvaluationSection)
+                  .filter(EvaluationSection.catalog_id == v1_id).count())
+            self.assertEqual(qn, 53)
+            self.assertEqual(db.query(EvaluationCatalog).filter(
+                EvaluationCatalog.version == "v1").count(), 1)
         finally:
             db.close()
 

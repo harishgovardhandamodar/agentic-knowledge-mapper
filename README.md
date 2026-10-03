@@ -476,6 +476,39 @@ named operator; each run-create / answer / complete action is recorded on the
 audit ledger. Set `PAYMENTS_EVAL_ROLES=admin,security` to require an
 `X-AKM-Role` gate on top.
 
+## Agentic Manager — deep-research question drafting
+
+Domain-agnostic drafting of evaluation / research question sets (security,
+privacy, safety, compliance, product risk, ops) via the reasoning workflow:
+*frame the target → choose axes from the versioned axis library → draft by
+section → quality pass → package as a seedable catalog*. Every draft is
+persisted (frame, assumptions, axes, rationale) for auditability.
+
+```bash
+# 1. draft a question set for a domain+target (LLM; deterministic fallback)
+DRAFT=$(curl -s -H 'X-AKM-Actor: operator' -X POST $BASE/api/eval-draft \
+  -H 'Content-Type: application/json' \
+  -d '{"domain":"agentic payments","target":"a payment-capable trading agent","depth":"deep"}')
+DID=$(echo $DRAFT | python3 -c 'import json,sys;print(json.load(sys.stdin)["draft_id"])')
+# 2. seed the draft into EvaluationCatalog (+ optionally start an EvaluationRun)
+curl -s -H 'X-AKM-Actor: operator' -X POST $BASE/api/eval-draft/$DID/seed \
+  -H 'Content-Type: application/json' \
+  -d '{"start_run":true,"run_target_agent_id":"pay-agent-7","run_title":"Deep eval"}'
+# 3. export variants: catalog | brief | agenda | adversarial
+curl -s $BASE/api/eval-draft/$DID/catalog.json
+curl -s "$BASE/api/eval-draft/$DID/report.md?format=brief"
+```
+
+Drafting rules: 8–15 sections with intent (not a flat list), questions force
+evidence (mechanism / control owner / artifact / residual risk), the full
+lifecycle is covered, control existence is separated from control strength,
+and every set ends with threat model + accepted residual risk + worst-case
+exposure. The quality pass enforces ≥20% failure-mode / residual-risk
+questions, stable snake_case keys, and severity hints. Output always fits the
+`EvaluationCatalog` schema, so a draft can seed a catalog that the payments
+evaluation run machinery scores with no reformatting. `depth=exec` produces a
+shorter 5–6 section working agenda.
+
 ## Setup
 
 Prerequisites: Docker with compose, NVIDIA drivers (for GPU Ollama hosts),

@@ -89,10 +89,17 @@ def list_runs(limit: int = Query(50, le=500), status: str = Query(None)):
         for r in rows:
             events = (db.query(func.count(LedgerEvent.id))
                       .filter(LedgerEvent.run_id == r.id).scalar() or 0)
+            # Swarm control-flow signal: how many agent↔orchestrator handoffs
+            # this run produced. The audit list surfaces it as a badge so a
+            # reviewer can spot the swarm-orchestrated runs at a glance.
+            hops = (db.query(func.count(LedgerEvent.id))
+                    .filter(LedgerEvent.run_id == r.id,
+                            LedgerEvent.kind == "agent.hop").scalar() or 0)
             out.append({"run_id": r.id, "label": r.label, "status": r.status,
                         "kind": r.kind, "session_id": r.session_id,
                         "mandate_hash": r.mandate_hash, "head_hash": r.head_hash,
                         "head_seq": r.head_seq, "events": events,
+                        "hops": hops,
                         "created_at": str(r.created_at), "closed_at": str(r.closed_at)})
         return {"runs": out, "total": len(out)}
     finally:

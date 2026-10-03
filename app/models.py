@@ -646,3 +646,32 @@ class EvaluationAnswer(Base):
 
     __table_args__ = (UniqueConstraint("run_id", "question_id",
                                        name="uq_eval_answer_run_q"),)
+
+
+class EvaluationDraft(Base):
+    """A drafted deep-research question set, persisted for auditability.
+
+    ``sections_json`` holds the draft in the seedable EvaluationCatalog
+    schema; ``axes_json`` and ``rationale`` record why the set looks the way
+    it does, so a reviewer can trace the framing assumptions behind a catalog
+    without trusting the output blindly."""
+    __tablename__ = "evaluation_drafts"
+
+    id = Column(Integer, primary_key=True, index=True)
+    domain = Column(String(200), nullable=False, index=True)
+    target = Column(String(300), nullable=False)
+    depth = Column(String(20), nullable=False, default="deep")
+    axes_json = Column(Text, nullable=False, default="[]")
+    sections_json = Column(Text, nullable=False, default="[]")
+    rationale = Column(Text, nullable=True)
+    source = Column(String(20), nullable=True)  # llm|deterministic|llm+fallback
+    status = Column(String(20), nullable=False, default="draft",
+                    index=True)  # draft|seeded|run_started
+    seeded_catalog_id = Column(Integer,
+                               ForeignKey("evaluation_catalogs.id",
+                                          ondelete="SET NULL"),
+                               nullable=True)
+    seeded_by = Column(String(120), nullable=True)
+    created_by = Column(String(120), nullable=True)
+    created_at = Column(DateTime, default=_now)
+    updated_at = Column(DateTime, default=_now, onupdate=_now)

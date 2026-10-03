@@ -82,10 +82,32 @@ def _plan_queries(inv: Investigation) -> dict:
         _provider_brief = False
     if _provider_brief:
         user += _provider_prompt_hint()
-    plan = llm.chat_json([{"role": "system", "content": sys},
-                          {"role": "user", "content": user}], max_tokens=1024)
-    queries = (plan.get("queries") or [])[:6]
     enabled = set(s.strip() for s in (inv.sources or "").split(",") if s.strip())
+
+    def _deterministic_plan() -> dict:
+        # Never let the planner fail a run: a keyword-derived plan is a
+        # serviceable fallback when the model cannot produce parseable JSON.
+        first = (inv.keywords.split(",")[0].strip() or inv.title or "").strip()
+        return {"rationale": "deterministic fallback (model output unusable)",
+                "queries": [{"text": first[:120] or "research",
+                             "sources": list(enabled) or ["web"]}]}
+
+    plan = None
+    # A thinking model burns tokens on reasoning, so a small cap truncates the
+    # JSON mid-string. Retry at a larger cap before giving up on the model.
+    for mt in (2048, 4096):
+        try:
+            plan = llm.chat_json([{"role": "system", "content": sys},
+                                  {"role": "user", "content": user}],
+                                 max_tokens=mt, temperature=0.2)
+            if isinstance(plan, dict) and plan.get("queries"):
+                break
+            plan = None
+        except Exception:
+            plan = None
+    if plan is None:
+        return _deterministic_plan()
+    queries = (plan.get("queries") or [])[:6]
     clean = []
     for q in queries:
         if not isinstance(q, dict) or not q.get("text"):
@@ -653,9 +675,9 @@ def run_investigation_agent(investigation_id: int, max_items: int = 25,
                                      f"Kept so far ({total_kept}): "
                                      f"{[e['title'][:60] for e in existing[-8:]]}\n"
                                      "Reply {\"queries\": [{\"text\": str, \"sources\": [...]}]} "
-                                     "max 3 follow-up queries exploring gaps. "
-                                     f"Sources allowed: {inv.sources}")}],
-                        max_tokens=512)
+"max 3 follow-up queries exploring gaps. "
+                                      f"Sources allowed: {inv.sources}")}],
+                         max_tokens=1024)
                     queries = [{"text": q["text"][:120], "sources": q.get("sources") or ["web"]}
                                for q in (follow.get("queries") or [])[:3] if q.get("text")]
                     if not queries:

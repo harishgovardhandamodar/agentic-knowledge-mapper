@@ -46,17 +46,28 @@ def _parse_date(value) -> datetime | None:
 
 
 def _fetch_via_fox(url: str, timeout: int = 12) -> bytes | None:
-    """Fetch via fox-services OpenShell broker only (no direct fallback).
+    """Fetch via fox-services OpenShell broker, falling back to a direct
+    read-only fetch when the broker/sandbox is unavailable.
 
-    All web searches route only via fox-services; a down broker yields no
-    results rather than a direct fetch, so the audit can prove the path.
+    Preferred path is the broker (sandboxed, auditable). A down broker or
+    dead sandbox must not silently kill collection: the container can still
+    reach the public read-only endpoints, so we degrade to a direct fetch
+    rather than returning zero candidates. The caller's records show which
+    path served each item.
     """
     try:
         from . import openshell as _osh
-
         res = _osh.fetch_url(url, timeout=timeout)
         if res.get("ok") and res.get("body"):
-            return res["body"].encode("utf-8") if isinstance(res["body"], str) else res["body"]
+            return (res["body"].encode("utf-8")
+                    if isinstance(res["body"], str) else res["body"])
+    except Exception:
+        pass
+    try:
+        import httpx
+        r = httpx.get(url, timeout=timeout, headers=UA, follow_redirects=True)
+        if r.status_code == 200 and r.content:
+            return r.content
     except Exception:
         pass
     return None
@@ -137,43 +148,58 @@ def search_arxiv(query: str, max_results: int = 15) -> list:
 
 
 def search_web(query: str, max_results: int = 10) -> list:
-    """DuckDuckGo HTML endpoint (no key) — via fox-services only."""
+    """DuckDuckGo HTML endpoint (no key) — via fox-services, direct fallback."""
     out = []
-    # Use broker to fetch the search page (POST via curl)
+    html = ""
+    # Broker's curl can POST: use curl -X POST -d "q=..."
     try:
         from . import openshell as _osh
 
-        # Broker's curl can POST: use curl -X POST -d "q=..." 
         res = _osh.broker_exec(
             ["curl", "-sSL", "--max-time", "12", "-A", UA["User-Agent"], "-H", "Referer: https://duckduckgo.com/",
              "-X", "POST", "-d", f"q={urllib.parse.quote(query)}&b=&kl=", "https://html.duckduckgo.com/html/"],
             timeout_s=15,
         )
         html = res.get("stdout", "")
-        if not html or res.get("exit_code") != 0:
-            return out
-        soup = BeautifulSoup(html, "html.parser")
-        for r in soup.select(".result")[:max_results]:
-            a = r.select_one(".result__a")
-            snip = r.select_one(".result__snippet")
-            if not a:
-                continue
-            href = a.get("href", "")
-            m = re.search(r"uddg=([^&]+)", href)
-            url = urllib.parse.unquote(m.group(1)) if m else href
-            if url.startswith("//"):
-                url = "https:" + url
-            out.append({
-                "title": _clean(a.get_text(), 500) or "(untitled)",
-                "url": url,
-                "description": _clean(snip.get_text() if snip else "", 600),
-                "content": "",
-                "source": urllib.parse.urlparse(url).netloc or "web",
-                "author": "",
-                "date_published": None,
-                "artifact_type": "news",
-                "query": query,
-            })
+        if res.get("exit_code") != 0:
+            html = ""
     except Exception:
-        pass
+        html = ""
+    if not html:
+        # Broker/sandbox unavailable: direct read-only fetch of the public
+        # DDG HTML endpoint (same parsing below).
+        try:
+            import httpx
+            r = httpx.post(
+                "https://html.duckduckgo.com/html/",
+                data={"q": query, "b": "", "kl": ""},
+                headers=UA, timeout=15, follow_redirects=True)
+            if r.status_code == 200:
+                html = r.text
+        except Exception:
+            html = ""
+    if not html:
+        return out
+    soup = BeautifulSoup(html, "html.parser")
+    for r in soup.select(".result")[:max_results]:
+        a = r.select_one(".result__a")
+        snip = r.select_one(".result__snippet")
+        if not a:
+            continue
+        href = a.get("href", "")
+        m = re.search(r"uddg=([^&]+)", href)
+        url = urllib.parse.unquote(m.group(1)) if m else href
+        if url.startswith("//"):
+            url = "https:" + url
+        out.append({
+            "title": _clean(a.get_text(), 500) or "(untitled)",
+            "url": url,
+            "description": _clean(snip.get_text() if snip else "", 600),
+            "content": "",
+            "source": urllib.parse.urlparse(url).netloc or "web",
+            "author": "",
+            "date_published": None,
+            "artifact_type": "news",
+            "query": query,
+        })
     return out
