@@ -392,7 +392,7 @@ an action are provable afterwards:
 | GET | `/api/investigations/{id}/summary` | Executive summary overlay data |
 | POST | `/api/investigations/{id}/summary/regenerate` | Recompute the summary from current review flags |
 | GET | `/api/investigations/{id}/dossier` | Investigation dossier: request, runs, collection, score audit |
-| GET | `/api/investigations/{id}/dossier/markdown`, `…/pdf` | The same write-up as Markdown / PDF |
+| GET | `/api/investigations/{id}/dossier/markdown`, `…/pdf` | The same write-up as Markdown / PDF (PDF via pandoc + LaTeX; `?engine=reportlab` for the shorter leaflet) |
 | GET | `/api/investigations/{id}/dossier/bundle` | `.zip`: the Markdown with picture links plus every diagram as `images/*.png` |
 | GET | `/api/investigations/{id}/artifacts?review=&search=` | Review queue |
 | GET | `/api/investigations/{id}/artifacts/overview` | Collection: timeline, purpose, actor involvement shares |
@@ -541,6 +541,29 @@ LLM_BASE_URL=http://localhost:8210/v1 python -m uvicorn app.main:app --port 8204
 ```
 
 Operations (deploy, scheduler, failover, recovery): [operations](docs/operations.md).
+
+### PDF export toolchain (dossier → pandoc/LaTeX)
+
+The full **investigation dossier PDF** is printed from the stored dossier
+Markdown via **pandoc + a LaTeX engine** (A4, table of contents, long tables,
+mermaid rendered to figures). The Docker image installs the toolchain
+(`pandoc`, `texlive-latex-base`, `texlive-latex-recommended`,
+`texlive-latex-extra`, `texlive-fonts-recommended`); a dev box needs the same:
+
+```bash
+apt-get install -y pandoc texlive-latex-base texlive-latex-recommended \
+                   texlive-latex-extra texlive-fonts-recommended
+# or run the CLI twin directly:
+scripts/md_dossier_to_pdf.sh dossier.md out.pdf
+```
+
+`GET /api/investigations/{id}/dossier/pdf` uses this path by default and
+returns **501** when pandoc/LaTeX is absent; `?engine=reportlab` keeps the
+shorter reportlab leaflet. Env: `AKM_PANDOC_BIN`, `AKM_PDF_ENGINE`
+(default `pdflatex`), `AKM_PDF_ENGINE_FALLBACK` (default `xelatex`),
+`AKM_PANDOC_TIMEOUT_S` (default 120). Mermaid figures use the existing
+headless-Chromium cache (`AKM_MERMAID_CACHE`); a diagram that cannot render
+stays as a code block so the export never loses content.
 
 ## Local compute
 

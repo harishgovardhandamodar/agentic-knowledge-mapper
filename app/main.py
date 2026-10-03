@@ -1428,8 +1428,10 @@ def get_dossier_bundle(inv_id: int, db: Session = Depends(get_db)):
 
 
 @app.get("/api/investigations/{inv_id}/dossier/pdf")
-def get_dossier_pdf(inv_id: int, db: Session = Depends(get_db)):
+def get_dossier_pdf(inv_id: int, engine: str = Query("pandoc"),
+                    db: Session = Depends(get_db)):
     from .dossier import dossier_markdown, investigation_dossier
+    from . import dossier_pdf
     try:
         # One read, one payload: the cover's numbers and the body are the same
         # snapshot, so the verdict block cannot disagree with the sections.
@@ -1439,6 +1441,18 @@ def get_dossier_pdf(inv_id: int, db: Session = Depends(get_db)):
         raise HTTPException(404, "Investigation not found")
     inv = d["investigation"]
     col = d["collection"]
+    # Default: the full dossier printed via pandoc + LaTeX (A4, TOC, mermaid
+    # figures). `?engine=reportlab` keeps the shorter reportlab leaflet.
+    if engine != "reportlab":
+        try:
+            pdf = dossier_pdf.build_pdf(
+                md, title=f"Investigation dossier — {inv['title']}")
+        except RuntimeError as exc:
+            raise HTTPException(501, str(exc))
+        return Response(
+            content=pdf, media_type="application/pdf",
+            headers={"Content-Disposition":
+                     f'attachment; filename="investigation-{inv_id}-dossier.pdf"'})
     # One verdict block only when a single score exists: a dossier that
     # reports three scores on different scales must not print one of them
     # as the number, so it prints the scope table instead.
