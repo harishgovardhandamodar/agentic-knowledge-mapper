@@ -356,6 +356,39 @@ class AssuranceApiCase(unittest.TestCase):
         r = self.client.post(f"/api/assurance/assessments/{rec.id}/re-score")
         self.assertEqual(r.status_code, 409)
 
+    def test_known_issues_refresh_and_list_endpoints(self):
+        from unittest import mock
+        from app import cve as _cve
+        with mock.patch.object(
+                _cve, "collect_known_issues",
+                return_value={"skipped": False, "cves": ["CVE-2025-32711"],
+                              "issues": [], "queries": [], "degraded_sources": []}):
+            r = self.client.post(
+                f"/api/investigations/{self.inv.id}/known-issues/refresh")
+        self.assertEqual(r.status_code, 200)
+        body = r.json()
+        self.assertEqual(body["cves"], ["CVE-2025-32711"])
+        self.assertIn("cve_findings", body)
+        self.assertIn("known_issue_artifacts", body)
+        lst = self.client.get(
+            f"/api/investigations/{self.inv.id}/known-issues").json()
+        self.assertEqual(lst["investigation_id"], self.inv.id)
+        self.assertIn("cves", lst)
+        self.assertIn("known_issues", lst)
+
+    def test_known_issues_refresh_without_a_subject_skips(self):
+        from unittest import mock
+        from app import cve as _cve
+        with mock.patch.object(
+                _cve, "collect_known_issues",
+                return_value={"skipped": True, "reason": "no_subject",
+                              "cves": [], "issues": [], "queries": [],
+                              "degraded_sources": []}):
+            r = self.client.post(
+                f"/api/investigations/{self.inv.id}/known-issues/refresh")
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(r.json()["skipped"])
+
     def test_alerts_escalate_an_unquantified_restricted_tier(self):
         self._assessment()
         body = self.client.get(

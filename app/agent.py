@@ -55,12 +55,23 @@ def _collect_run_cves(db, run, inv):
         found = _cve.collect_investigation_cves(db, inv.id)
     except Exception:
         return []
-    if found["collected"]:
+    # Proactive pass: search CVEs/advisories for the investigation's subject
+    # (product/vendor/package) when one is identifiable. No-op otherwise, and
+    # NVD-keyword only here -- the heavier web/RSS advisory search runs on the
+    # explicit refresh and on security assessments, where latency is expected.
+    searched = {}
+    try:
+        from . import cve as _cve
+        searched = _cve.collect_known_issues(db, inv.id, search_fn=lambda _q: [])
+    except Exception:
+        searched = {"cves": [], "issues": []}
+    if found["collected"] or searched.get("cves") or searched.get("issues"):
         _event(db, run.id, "cve",
-               f"Known issues: collected {len(found['collected'])} CVE(s) "
-               f"({', '.join(found['collected'][:5])}).",
-               {"cves": found["collected"]})
-    return found["collected"]
+               f"Known issues: collected {len(found['collected'])} CVE(s)"
+               + f" + {len(searched.get('cves', []))} searched, "
+               + f"{len(searched.get('issues', []))} known issue(s).",
+               {"cves": found["collected"] + searched.get("cves", [])[:5]})
+    return found["collected"] + searched.get("cves", [])
 
 
 def _plan_queries(inv: Investigation) -> dict:

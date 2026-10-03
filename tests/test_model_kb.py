@@ -1170,7 +1170,13 @@ class TestPipelineSyncHook(KBTestCase):
         # live worker would race this run and leave threads behind the suite
         ctxs = [mock.patch.object(sa.sec_engine, "build_assessment",
                                   return_value=fake),
-                mock.patch.object(sa, "_ensure_worker", lambda: None)]
+                mock.patch.object(sa, "_ensure_worker", lambda: None),
+                # keep the known-issues stage off the network; covered by its
+                # own suite
+                mock.patch.object(sa, "KNOWN_ISSUES_RUNNER",
+                                  lambda db, inv_id, product_name="": {
+                                      "cves": [], "issues": [], "queries": [],
+                                      "degraded_sources": []})]
         if sync_side_effect is not None:
             ctxs.append(mock.patch("app.model_kb.sync_model_kb",
                                    sync_side_effect))
@@ -1284,7 +1290,13 @@ class TestPipelineSyncHook(KBTestCase):
         # live worker would race this run and leave threads behind the suite
         ctxs = [mock.patch.object(sa.sec_engine, "build_assessment",
                                   return_value=fake),
-                mock.patch.object(sa, "_ensure_worker", lambda: None)]
+                mock.patch.object(sa, "_ensure_worker", lambda: None),
+                # keep the known-issues stage off the network; covered by its
+                # own suite
+                mock.patch.object(sa, "KNOWN_ISSUES_RUNNER",
+                                  lambda db, inv_id, product_name="": {
+                                      "cves": [], "issues": [], "queries": [],
+                                      "degraded_sources": []})]
         if sync_side_effect is not None:
             ctxs.append(mock.patch("app.model_kb.sync_model_kb",
                                    sync_side_effect))

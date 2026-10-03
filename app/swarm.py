@@ -80,10 +80,10 @@ ROLE_CONTRACTS: dict[str, dict[str, Any]] = {
         "may_advance_past_gates": True,
     },
     "research-collector": {
-        "responsibility": "Acquire artifacts from web, arXiv, RSS, vendor docs",
+        "responsibility": "Acquire artifacts from web, arXiv, RSS, vendor docs; collect_known_issues skill searches CVEs + advisories for a subject",
         "requires": ["plan", "allowed_sources", "redaction_policy"],
         "produces": ["artifacts_with_provenance", "relevance", "fetch_metadata",
-                     "coverage_gaps"],
+                     "coverage_gaps", "cve_hits", "known_issues"],
         "on_failure": "partial_set_with_explicit_gaps",
         "may_advance_past_gates": False,
     },

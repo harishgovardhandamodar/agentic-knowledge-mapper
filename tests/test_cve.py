@@ -44,6 +44,44 @@ def _investigation(db, title="cve-target"):
     return inv.id
 
 
+class _Resp:
+    def __init__(self, payload, code=200):
+        self._p = payload
+        self.status_code = code
+
+    def json(self):
+        return self._p
+
+
+class _Client:
+    def __init__(self, payload=None, code=200, exc=None):
+        self._p = payload
+        self._c = code
+        self._exc = exc
+
+    def get(self, url, params=None):
+        if self._exc:
+            raise self._exc
+        return _Resp(self._p, self._c)
+
+    def close(self):
+        pass
+
+
+def _nvd_keyword_payload():
+    return {"vulnerabilities": [{
+        "cve": {
+            "id": "CVE-2025-32711",
+            "descriptions": [{"lang": "en",
+                              "value": "EchoLeak disclosure in logs"}],
+            "metrics": {"cvssMetricV31": [{"cvssData": {
+                "baseScore": 7.5,
+                "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N"}}]},
+            "vulnStatus": "Analyzed",
+            "published": "2025-01-01T00:00:00.000",
+        }}]}
+
+
 class TestExtraction(unittest.TestCase):
     def test_finds_ids_case_insensitively_without_duplicates(self):
         self.assertEqual(
@@ -210,6 +248,187 @@ class TestWorkflowHook(unittest.TestCase):
                 self.assertEqual(agent_mod._collect_run_cves(
                     db, run, db.query(Investigation).filter(
                         Investigation.id == inv_id).one()), [])
+        finally:
+            db.close()
+
+
+class TestSubjectExtraction(unittest.TestCase):
+    def test_a_named_product_and_vendor_are_extracted(self):
+        s = cve_mod.extract_subjects(title="OpenSSL security advisory review",
+                                     product_name="OpenSSL")
+        self.assertIn("OpenSSL", s["products"])
+        self.assertIn("OpenSSL", s["vendors"])  # in KNOWN_VENDORS
+
+    def test_existing_cve_ids_are_hints_not_invented_ones(self):
+        s = cve_mod.extract_subjects(title="CVE-2025-32711 in the report")
+        self.assertIn("CVE-2025-32711", s["cve_hints"])
+        self.assertEqual([c for c in s["cve_hints"] if not c.startswith("CVE-")],
+                         [])
+
+    def test_a_vague_brief_yields_no_products(self):
+        s = cve_mod.extract_subjects(title="the model and the api")
+        self.assertEqual(s["products"], [])
+
+    def test_build_queries_emits_the_expected_shapes(self):
+        s = {"vendors": ["OpenSSL"], "products": ["OpenSSL"],
+             "packages": ["npm:foo"], "cve_hints": ["CVE-2025-32711"]}
+        q = cve_mod.build_known_issue_queries(s)
+        shapes = {x["shape"] for x in q}
+        self.assertIn("cve_product", shapes)
+        self.assertIn("advisory_vendor", shapes)
+        self.assertIn("ghsa", shapes)
+        self.assertIn("cve_hint", shapes)
+
+
+class TestKnownIssuesCollect(unittest.TestCase):
+    """The proactive known-issues pass (swarm skill)."""
+
+    def _advisory_search(self, query):
+        return [{"title": "OpenSSL GHSA advisory",
+                 "url": "https://example.invalid/ghsa",
+                 "description": "GHSA-xxxx-xxxx-xxxx security advisory"}]
+
+    def test_collect_known_issues_upserts_cve_and_known_issue(self):
+        db = SessionLocal()
+        try:
+            inv_id = _investigation(db, "OpenSSL advisory")
+            with mock.patch.object(cve_mod, "FETCH_GAP_S", 0):
+                out = cve_mod.collect_known_issues(
+                    db, inv_id, product_name="OpenSSL",
+                    nvd_client=_Client(_nvd_keyword_payload()),
+                    search_fn=self._advisory_search,
+                    fetcher=lambda c: _meta(c))
+            self.assertIn("CVE-2025-32711", out["cves"])
+            self.assertGreaterEqual(len(out["issues"]), 1)
+            self.assertEqual(db.query(CveFinding).filter(
+                CveFinding.investigation_id == inv_id).count(), 1)
+            types = {a.artifact_type for a in db.query(Artifact).filter(
+                Artifact.investigation_id == inv_id).all()}
+            self.assertIn("cve", types)
+            self.assertIn("known_issue", types)
+            self.assertNotEqual(out["degraded_sources"], None)
+        finally:
+            db.close()
+
+    def test_duplicate_cve_is_deduped_to_one_row(self):
+        db = SessionLocal()
+        try:
+            inv_id = _investigation(db, "OpenSSL again")
+            with mock.patch.object(cve_mod, "FETCH_GAP_S", 0):
+                cve_mod.collect_known_issues(
+                    db, inv_id, product_name="OpenSSL",
+                    nvd_client=_Client(_nvd_keyword_payload()),
+                    search_fn=lambda q: [])
+                out2 = cve_mod.collect_known_issues(
+                    db, inv_id, product_name="OpenSSL",
+                    nvd_client=_Client(_nvd_keyword_payload()),
+                    search_fn=lambda q: [])
+            self.assertEqual(out2["duplicate_cves"], 1)
+            self.assertEqual(db.query(CveFinding).filter(
+                CveFinding.investigation_id == inv_id).count(), 1)
+        finally:
+            db.close()
+
+    def test_no_subject_skips_without_searching(self):
+        db = SessionLocal()
+        try:
+            inv_id = _investigation(db, "generic")
+            with mock.patch.object(cve_mod, "FETCH_GAP_S", 0):
+                out = cve_mod.collect_known_issues(db, inv_id, product_name="")
+            self.assertTrue(out["skipped"])
+            self.assertEqual(db.query(CveFinding).filter(
+                CveFinding.investigation_id == inv_id).count(), 0)
+        finally:
+            db.close()
+
+    def test_a_down_nvd_is_degraded_but_never_fatal(self):
+        db = SessionLocal()
+        try:
+            inv_id = _investigation(db, "OpenSSL down")
+            with mock.patch.object(cve_mod, "FETCH_GAP_S", 0):
+                out = cve_mod.collect_known_issues(
+                    db, inv_id, product_name="OpenSSL",
+                    nvd_client=_Client(exc=ConnectionError("down")),
+                    search_fn=self._advisory_search)
+            self.assertIn("nvd_keyword", out["degraded_sources"])
+            # the investigation still gains the advisory from the web path
+            self.assertGreaterEqual(len(out["issues"]), 1)
+        finally:
+            db.close()
+
+    def test_known_issue_without_cve_never_mints_a_number(self):
+        db = SessionLocal()
+        try:
+            inv_id = _investigation(db, "OpenSSL bulletin")
+            with mock.patch.object(cve_mod, "FETCH_GAP_S", 0):
+                out = cve_mod.collect_known_issues(
+                    db, inv_id, product_name="OpenSSL",
+                    nvd_client=_Client(payload={"vulnerabilities": []}),
+                    search_fn=self._advisory_search)
+            self.assertEqual(out["cves"], [])
+            self.assertGreaterEqual(len(out["issues"]), 1)
+            # no CveFinding rows were created for a non-CVE advisory
+            self.assertEqual(db.query(CveFinding).filter(
+                CveFinding.investigation_id == inv_id).count(), 0)
+        finally:
+            db.close()
+
+    def test_map_cve_to_threats_returns_hints(self):
+        self.assertIn("T05", cve_mod.map_cve_to_threats(
+            "prompt injection via imported docs"))
+        self.assertIn("T02", cve_mod.map_cve_to_threats(
+            "training data retention leakage"))
+        self.assertEqual(cve_mod.map_cve_to_threats("nothing relevant"), [])
+
+
+class TestKnownIssuesRunWiring(unittest.TestCase):
+    """The security assessment's known-issues stage leaves an A2A hop."""
+
+    def _run(self, db, inv_id):
+        run = AgentRun(investigation_id=inv_id, status="running",
+                       trigger="security", plan="{}")
+        db.add(run)
+        db.commit()
+        db.refresh(run)
+        return run
+
+    def test_a_product_subject_adds_the_collect_hop(self):
+        from app import security_agent as sa
+        db = SessionLocal()
+        try:
+            inv_id = _investigation(db, "OpenSSL assessment")
+            run = self._run(db, inv_id)
+            result = {"product_name": "OpenSSL", "a2a_trace": []}
+            stub = lambda _db, _inv, product_name="": {  # noqa: E731
+                "cves": ["CVE-2025-32711"], "issues": [],
+                "queries": [{"shape": "cve_product", "query": "OpenSSL CVE"}],
+                "degraded_sources": []}
+            with mock.patch.object(sa, "KNOWN_ISSUES_RUNNER", stub):
+                out = sa._known_issues_pass(db, run,
+                                            {"product_name": "OpenSSL"}, result)
+            self.assertEqual(out["cves"], ["CVE-2025-32711"])
+            hops = [h for h in result["a2a_trace"]
+                    if h.get("intent") == "collect_known_issues"]
+            self.assertEqual(len(hops), 1)
+            self.assertEqual(hops[0]["counts"]["cves"], 1)
+            events = [e.message for e in db.query(AgentEvent).filter(
+                AgentEvent.run_id == run.id).all()]
+            self.assertTrue(any("Known issues" in m for m in events), events)
+        finally:
+            db.close()
+
+    def test_no_product_subject_records_a_skip(self):
+        from app import security_agent as sa
+        db = SessionLocal()
+        try:
+            inv_id = _investigation(db, "vague")
+            run = self._run(db, inv_id)
+            result = {"product_name": "", "a2a_trace": []}
+            with mock.patch.object(sa, "KNOWN_ISSUES_RUNNER", lambda *a, **k: {}):
+                out = sa._known_issues_pass(db, run, {}, result)
+            self.assertTrue(out["skipped"])
+            self.assertFalse([h for h in result["a2a_trace"]
+                              if h.get("intent") == "collect_known_issues"])
         finally:
             db.close()
 

@@ -357,6 +357,14 @@ def _short(text: str, limit: int = 240) -> str:
     return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
 
 
+def _known_issue_kind(a) -> str:
+    """The issue kind stored on a known_issue artifact's node_meta, if any."""
+    meta = _load(getattr(a, "node_meta", None), {}) or {}
+    if isinstance(meta, dict):
+        return str(meta.get("issue_kind") or "known_issue")
+    return "known_issue"
+
+
 def _flatten_headings(md: str) -> str:
     """Compress a report's heading levels into the dossier's own band.
 
@@ -528,6 +536,11 @@ def _collection_section(db, inv_id: int) -> dict[str, Any]:
             .all())
     cves = (db.query(CveFinding).filter(CveFinding.investigation_id == inv_id)
             .all())
+    # Non-CVE known issues (vendor bulletins, GHSA, incidents) as artifacts.
+    known_issue_arts = (db.query(Artifact)
+                        .filter(Artifact.investigation_id == inv_id,
+                                Artifact.artifact_type == "known_issue")
+                        .order_by(Artifact.id.desc()).all())
     exps = (db.query(Explanation)
             .filter(Explanation.investigation_id == inv_id)
             .order_by(Explanation.id.desc()).all())
@@ -618,7 +631,14 @@ def _collection_section(db, inv_id: int) -> dict[str, Any]:
             "published": _iso(c.published_date),
             "impact": _short(c.impact or c.description or "", 300),
             "url": c.source_url or "",
-        } for c in cves],
+        } for c in cves] + [{
+            "cve_id": "", "title": a.title or "",
+            "severity": "n/a", "cvss": None,
+            "status": "known_issue",
+            "published": _iso(a.date_published),
+            "impact": _short(_known_issue_kind(a), 80),
+            "url": a.url or "",
+        } for a in known_issue_arts],
         "answers": answers,
     }
 

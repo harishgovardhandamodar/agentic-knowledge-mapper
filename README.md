@@ -189,6 +189,14 @@ beside a real enrichment looking identical. Each finding also becomes a light
 artifact node in the graph, so the vulnerability is visible in the same place
 as the research that mentions it.
 
+The Known Issues surface is now **proactive as well as reactive**: a
+`known-issues` pass in the agent swarm (research-collector skill) extracts the
+investigation's subject (product/vendor/package/model) and searches NVD by
+keyword plus web/RSS advisories, upserting assigned CVEs **and** non-CVE known
+issues (vendor bulletins, GHSA, incidents) as their own artifact type. Runs
+with no identifiable subject skip; a down CVE source degrades gracefully
+(`degraded_sources`) and never fails the parent run.
+
 ![Known issues with CVE severity, cvss and status](docs/screenshots/15-known-issues.png)
 
 ### Research gaps
@@ -447,6 +455,8 @@ an action are provable afterwards:
 | POST | `/api/investigations/{id}/detect-drift` | Flag off-brief artifacts (kept, never deleted) |
 | GET | `/api/investigations/{id}/cves` | Known issues: list |
 | POST | `/api/investigations/{id}/cves/collect` | Collect + enrich (NVD → CIRCL → honest `unknown`) |
+| POST | `/api/investigations/{id}/known-issues/refresh` | Proactive pass: search CVEs + advisories for the subject, upsert |
+| GET | `/api/investigations/{id}/known-issues` | CVEs + non-CVE known issues, newest first |
 | GET/POST | `/api/investigations/{id}/explain`, `/api/investigations/{id}/explanations` | Ask / history |
 | GET | `/api/explanations/{id}`, `…/thread`, `…/suggestions` | Detail / thread / follow-up ideas |
 | POST | `/api/explanations/{id}/followup`, `…/quiz`, `…/bookmark`, `…/watch`, `…/feedback`, `…/save_to_graph`, `…/investigate_gaps` | Threads, quiz, curation, watch, gap runs |

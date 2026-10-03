@@ -302,6 +302,71 @@ def record_assurance_ledger(run, params: dict, result: dict) -> dict:
             "assurance": written}
 
 
+#: Overridable in tests: the known-issues pass's collector. Defaults to
+#: ``cve.collect_known_issues``; a stub keeps run tests off the network while
+#: still exercising the A2A-hop and ledger-event wiring.
+KNOWN_ISSUES_RUNNER = None
+
+
+def _known_issues_pass(db, run, params, result) -> dict:
+    """Known-issues stage for an assessment run.
+
+    Searches CVEs and advisories for the assessed subject, upserts findings,
+    and leaves an A2A ``collect_known_issues`` hop plus ledger events. Fail-open
+    by contract: a down CVE source never fails the assessment it enriches, and
+    a run with no identifiable subject records a skip instead of a search.
+    """
+    from . import assurance_ledger as _al, cve as _cve
+    product = result.get("product_name") or params.get("product_name") or ""
+    if not product:
+        _event(db, run.id, "known_issues",
+               "known-issues stage skipped: no identifiable subject",
+               {"stage": "skipped", "reason": "no_subject"})
+        return {"skipped": True, "reason": "no_subject"}
+    run_key = f"akm-run-{run.id}"
+    _al.record_swarm_event(run_key, role="research-collector", phase="spawn")
+    runner = KNOWN_ISSUES_RUNNER or _cve.collect_known_issues
+    try:
+        out = runner(db, run.investigation_id, product_name=product)
+    except Exception as exc:  # noqa: BLE001 - the stage must never kill the run
+        out = {"cves": [], "issues": [], "queries": [],
+               "degraded_sources": [type(exc).__name__], "error": f"{exc}"}
+    hops = result.setdefault("a2a_trace", [])
+    hops.append({
+        "agent": "research-collector", "intent": "collect_known_issues",
+        "note": (f"{len(out.get('cves', []))} CVE(s), "
+                 f"{len(out.get('issues', []))} known issue(s)"),
+        "counts": {"cves": len(out.get("cves", [])),
+                   "issues": len(out.get("issues", []))},
+    })
+    for c in out.get("cves", [])[:20]:
+        _al.record_artifact(run_key, artifact_id=f"cve-{c}", action="ingest",
+                            title=f"CVE {c}", source="nvd/circl",
+                            review="pending")
+    for i in out.get("issues", [])[:15]:
+        _al.record_artifact(run_key, artifact_id=f"issue-{i.get('artifact_id')}",
+                            action="ingest", title=i.get("title") or "",
+                            source="advisory-web", review="pending",
+                            detail={"issue_kind": i.get("kind")})
+    for q in out.get("queries", [])[:10]:
+        _al.record_tool(run_key, tool="nvd-keyword", intent=q.get("shape"),
+                        status="ok", redacted=True)
+    _al.record_swarm_event(
+        run_key, role="research-collector", phase="complete",
+        detail={"cves": len(out.get("cves", [])),
+                "issues": len(out.get("issues", [])),
+                "degraded_sources": out.get("degraded_sources", [])})
+    _event(db, run.id, "known_issues",
+           f"Known issues: {len(out.get('cves', []))} CVE(s), "
+           f"{len(out.get('issues', []))} known issue(s)"
+           + (f"; degraded: {', '.join(out.get('degraded_sources', []))}"
+              if out.get("degraded_sources") else ""),
+           {"cves": out.get("cves", [])[:10],
+            "issues": len(out.get("issues", [])),
+            "degraded_sources": out.get("degraded_sources", [])})
+    return out
+
+
 def run_security_assessment(run_id: int, params: dict):
     db = SessionLocal()
     try:
@@ -572,6 +637,10 @@ def run_security_assessment(run_id: int, params: dict):
                + f"; ledger {_ledger['run_id']}.",
                {"policy": _pol, "roles": _ledger["roles"],
                 "assurance": _ledger["assurance"]})
+
+        # Known-issues stage: CVEs + advisories for the assessed subject. Runs
+        # before the row persists so the A2A hop is part of the stored trace.
+        _known_issues_pass(db, run, params, result)
 
         rec = SecurityAssessment(
             investigation_id=inv.id,

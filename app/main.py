@@ -3349,6 +3349,64 @@ def collect_cves_everywhere():
     return cve.collect_all_investigations()
 
 
+@app.post("/api/investigations/{inv_id}/known-issues/refresh")
+def refresh_known_issues(inv_id: int, product_name: str = "",
+                         db: Session = Depends(get_db)):
+    """Proactive known-issues pass: search CVEs + advisories for the
+    investigation's subject and upsert findings.
+
+    Best-effort and fail-open: a degraded CVE/API source is reported in
+    ``degraded_sources``, never turned into a 500. Skips (``skipped: true``)
+    when no product/vendor/package subject is identifiable.
+    """
+    inv = db.query(Investigation).filter(Investigation.id == inv_id).first()
+    if not inv:
+        raise HTTPException(404, "Investigation not found")
+    try:
+        out = cve.collect_known_issues(db, inv_id, product_name=product_name)
+    except Exception as exc:  # noqa: BLE001 - report, don't 500, a bad pass
+        raise HTTPException(502, f"Known-issues pass failed: {exc}")
+    out["cve_findings"] = [cve.finding_out(r) for r in db.query(CveFinding).filter(
+        CveFinding.investigation_id == inv_id).all()]
+    out["known_issue_artifacts"] = [{
+        "id": a.id, "title": a.title or "", "url": a.url or "",
+        "tags": a.tags or "", "kind": _known_issue_kind(a),
+        "review": a.review or "pending",
+    } for a in db.query(Artifact).filter(
+        Artifact.investigation_id == inv_id,
+        Artifact.artifact_type == "known_issue").all()]
+    return out
+
+
+def _known_issue_kind(a) -> str:
+    """The issue kind from a known_issue artifact's node_meta, if stored."""
+    import json as _json
+    try:
+        meta = _json.loads(a.node_meta or "{}") or {}
+        return meta.get("issue_kind") or ""
+    except Exception:
+        return ""
+
+
+@app.get("/api/investigations/{inv_id}/known-issues")
+def list_known_issues(inv_id: int, db: Session = Depends(get_db)):
+    """CVEs + non-CVE known issues for one investigation, newest first."""
+    cves = [cve.finding_out(r) for r in db.query(CveFinding).filter(
+        CveFinding.investigation_id == inv_id)
+        .order_by(CveFinding.id.desc()).all()]
+    issues = [{
+        "id": a.id, "title": a.title or "", "url": a.url or "",
+        "description": a.description or "", "tags": a.tags or "",
+        "kind": _known_issue_kind(a), "review": a.review or "pending",
+    } for a in db.query(Artifact).filter(
+        Artifact.investigation_id == inv_id,
+        Artifact.artifact_type == "known_issue")
+        .order_by(Artifact.id.desc()).all()]
+    return {"investigation_id": inv_id, "cves": cves,
+            "known_issues": issues,
+            "total": len(cves) + len(issues)}
+
+
 def _tag_set(tags: Optional[str]) -> set:
     if not tags:
         return set()
