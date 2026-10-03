@@ -11,6 +11,11 @@ import subprocess
 import tempfile
 import unittest
 
+# Pinned before the app import: app.database reads the URL at import time, and
+# a test run must never touch the developer's working database.
+os.environ["AKM_DATABASE_URL"] = os.environ.get("AKM_TEST_DB") or (
+    "sqlite:///" + os.path.join(tempfile.gettempdir(), "akm_test_dossier_pdf.db"))
+
 from app import dossier_pdf as dp
 
 FIXTURE_MD = """# Investigation dossier — Test subject

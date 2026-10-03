@@ -83,6 +83,15 @@ INTERNAL_KINDS = frozenset({
     "run.start", "run.end", "mandate.set", "mandate.check", "gate.check",
     "approval.request", "approval.grant", "approval.deny", "claim.emit",
     "claim.verify", "drift.detect", "drift.judge", "audit.dropped",
+    "assurance.tool.call",
+    "assurance.lifecycle.create", "assurance.lifecycle.plan",
+    "assurance.lifecycle.re_plan", "assurance.lifecycle.pause",
+    "assurance.lifecycle.resume", "assurance.lifecycle.complete",
+    "assurance.lifecycle.abort", "assurance.lifecycle.supersede",
+    "assurance.artifact.fetch", "assurance.artifact.ingest",
+    "assurance.artifact.review", "assurance.artifact.accept",
+    "assurance.artifact.reject", "assurance.artifact.drift",
+    "assurance.publish",
 })
 
 VALID_VERDICTS = frozenset({"pass", "allow", "deny", "flag", "hold", "block", "grant"})

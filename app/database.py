@@ -138,6 +138,23 @@ _MIGRATIONS = [
     ("risk_entries", "score_rationale", "TEXT"),
     ("risk_entries", "inputs_hash", "VARCHAR(20)"),
     ("risk_entries", "scored_at", "DATETIME"),
+    # Assurance layer (app/assurance.py): declared vs verified residual, the
+    # gates, blast radius, the derived decision and its human override. All
+    # nullable -- a row scored before the gates existed has no honest gate
+    # result, and a defaulted "pass" would defeat the point.
+    ("security_assessments", "assurance_json", "TEXT"),
+    ("security_assessments", "assurance_decision", "VARCHAR(40)"),
+    ("security_assessments", "assurance_decided_by", "VARCHAR(200)"),
+    ("security_assessments", "assurance_decided_at", "DATETIME"),
+    ("security_assessments", "assurance_decision_note", "TEXT"),
+    ("security_assessments", "evidence_confidence", "FLOAT"),
+    ("security_assessments", "max_body_chars", "INTEGER"),
+    # Canonical register scope: which product family a row belongs to, so a
+    # later run updates evidence and coverage rather than forking the list.
+    ("security_assessments", "product_family", "VARCHAR(200)"),
+    # Acceptance decisions are time-bounded: an exception must expire, and
+    # expiry is what triggers re-evaluation.
+    ("security_assessments", "assurance_decision_expires_at", "DATETIME"),
 ]
 
 

@@ -274,6 +274,17 @@ class SecurityAssessRequest(BaseModel):
     deployment_pattern: Optional[str] = ""
     model_focus_terms: Optional[list[str]] = []
     workflows: Optional[list[str]] = []
+    # Assurance layer (app/assurance.py). architecture_checklist is what the
+    # vendor attests to (log retention, tenant isolation, ...); leaving it
+    # empty is the honest answer and is scored as unknown, which forces the
+    # architecture gate rather than silently passing. exposure_inventory is
+    # what makes blast radius computable, and is required for a go/no-go on a
+    # restricted or confidential tier. full_metadata_context controls how much
+    # verbatim provider text is scored -- full is expensive, truncated is the
+    # default, and the recorded choice travels with the result.
+    architecture_checklist: Optional[dict] = None
+    exposure_inventory: Optional[dict] = None
+    full_metadata_context: bool = False
 
 
 class SecurityRescoreRequest(BaseModel):
@@ -1574,6 +1585,11 @@ def _security_json(rec: SecurityAssessment) -> dict:
         _hypjs = {}
     if not _model.get("experiments") and _hypjs.get("experiments"):
         _model = dict(_model, experiments=_hypjs.get("experiments"))
+    # The assurance pass is stored whole, so the API reports the verdict the
+    # row was written under rather than re-deriving it against today's pack.
+    _ass = _load(getattr(rec, "assurance_json", None), {})
+    if not isinstance(_ass, dict):
+        _ass = {}
     return {
         "id": rec.id,
         "investigation_id": rec.investigation_id,
@@ -1627,6 +1643,25 @@ def _security_json(rec: SecurityAssessment) -> dict:
         "a2a_task_id": tr.get("task_id", ""),
         "a2a_trace": tr.get("trace", []),
         "threat_pack": pack,
+        # --- assurance (app/assurance.py) ---
+        # `assessed: False` is a real answer, not an error: it marks a scoring
+        # path that does not run the gates. Reporting it explicitly is what
+        # stops a consumer treating an unassessed row as a passing one.
+        "assurance": _ass or {"assessed": False,
+                              "reason": "This assessment predates the assurance "
+                                        "layer, or its scoring path does not "
+                                        "run the gates."},
+        "assurance_decision": getattr(rec, "assurance_decision", None),
+        "assurance_decided_by": getattr(rec, "assurance_decided_by", None),
+        "assurance_decided_at": (rec.assurance_decided_at.isoformat()
+                                 if getattr(rec, "assurance_decided_at", None)
+                                 else None),
+        "assurance_decision_note": getattr(rec, "assurance_decision_note", None),
+        "assurance_decision_expires_at": (
+            rec.assurance_decision_expires_at.isoformat()
+            if getattr(rec, "assurance_decision_expires_at", None) else None),
+        "evidence_confidence": getattr(rec, "evidence_confidence", None),
+        "product_family": getattr(rec, "product_family", None),
         "created_at": rec.created_at.isoformat() if rec.created_at else None,
         **_assessment_path_fields(rec, scoring),
     }
@@ -1981,6 +2016,11 @@ def start_security_assessment(inv_id: int, data: SecurityAssessRequest,
         "model_meta": model_meta,
         "situation": data.situation,
         "initiative_id": data.initiative_id,
+        # Assurance inputs. Empty stays empty on purpose: an absent
+        # architecture checklist scores as unknown and forces the gate.
+        "architecture_checklist": data.architecture_checklist,
+        "exposure_inventory": data.exposure_inventory,
+        "full_metadata_context": bool(data.full_metadata_context),
     }, requested_by=ledger_api.request_actor(request))
     return {"status": "started", "run_id": run_id,
             "assessment_mode": _mode, "assessment_path": _path}
@@ -2195,6 +2235,381 @@ def get_security_assessment(assessment_id: int, db: Session = Depends(get_db)):
     if not rec:
         raise HTTPException(404, "Assessment not found")
     return _security_json(rec)
+
+
+# ---------------------------------------------- assurance endpoints -------
+# The assurance surface is deliberately separate from the score endpoints: a
+# caller who wants the number can still have it, but a caller who wants to sign
+# off on it is handed the confidence, gate status and blast radius too.
+
+class AssuranceDecisionRequest(BaseModel):
+    """A leadership acceptance, rejection or time-bounded exception."""
+    decision: str  # accept | accept_with_mandatory_guardrails | reject | exception
+    actor: str = ""
+    rationale: str = ""
+    expires_days: Optional[int] = None
+    override: bool = False
+
+
+class EvidenceReviewRequest(BaseModel):
+    """Accept or reject a collected artifact as primary evidence.
+
+    Only accepted primary evidence moves the verified residual. Pending rows
+    stay in the queue and contribute nothing, which is why this endpoint
+    reports what the decision would change rather than implying it already did.
+    """
+    review: str = "accepted"  # accepted | rejected
+    reviewer: str = ""
+    note: str = ""
+
+
+def _assessment_or_404(assessment_id: int, db: Session) -> SecurityAssessment:
+    rec = db.query(SecurityAssessment).filter(
+        SecurityAssessment.id == assessment_id).first()
+    if not rec:
+        raise HTTPException(404, "Assessment not found")
+    return rec
+
+
+def _assurance_or_422(rec: SecurityAssessment) -> dict:
+    from . import assurance as _a
+    try:
+        ens = json.loads(rec.assurance_json or "{}") or {}
+    except Exception:
+        ens = {}
+    if ens.get("assessed") is not True:
+        raise HTTPException(422, "This assessment was not scored through the "
+                                 "assurance layer; there are no gates to report")
+    return ens
+
+
+@app.get("/api/security/assessments/{assessment_id}/assurance")
+def get_assurance(assessment_id: int, db: Session = Depends(get_db)):
+    """The current assessment: declared vs verified residual and its gates.
+
+    Returns both numbers plus the evidence confidence that sits between them.
+    A caller wanting only `verified.residual_pct` can have it -- but the
+    confidence, gate status and blast radius travel with it in the same object.
+    """
+    from . import leadership as _ld
+    rec = _assessment_or_404(assessment_id, db)
+    ens = _assurance_or_422(rec)
+    return {
+        "assessment_id": rec.id,
+        "investigation_id": rec.investigation_id,
+        "product_name": rec.product_name,
+        "product_family": getattr(rec, "product_family", None),
+        "exposure": rec.exposure,
+        "assurance": ens,
+        # The decision as leadership sees it: derived, overridden, or expired.
+        "decision_state": _ld._decision_state(_ld._assessment_dict(rec)),
+        "recorded_decision": getattr(rec, "assurance_decision", None),
+        "decision_derived": (ens.get("decision") or {}).get("decision"),
+        "decision_expires_at": (
+            rec.assurance_decision_expires_at.isoformat()
+            if getattr(rec, "assurance_decision_expires_at", None) else None),
+        "evidence_confidence": getattr(rec, "evidence_confidence", None),
+        "threat_pack": {"version": getattr(rec, "threat_pack_version", None),
+                        "fingerprint": getattr(rec, "threat_pack_fingerprint", None)},
+    }
+
+
+@app.get("/api/security/assessments/{assessment_id}/vendor-questionnaire")
+def get_vendor_questionnaire(assessment_id: int,
+                             db: Session = Depends(get_db)):
+    """Questions to send the vendor, with the threat each one unblocks.
+
+    Built from the open architecture gate and the missing evidence classes, so
+    it cannot ask about something already answered and cannot omit the
+    question holding a threat at its inherent score.
+    """
+    from . import assurance as _a
+    rec = _assessment_or_404(assessment_id, db)
+    ens = _assurance_or_422(rec)
+    q = _a.vendor_questionnaire(ens.get("architecture_gate"),
+                                ens.get("forensics"),
+                                ens.get("chains"))
+    return {"assessment_id": rec.id, "product_name": rec.product_name, **q}
+
+
+@app.get("/api/security/assessments/{assessment_id}/review-queue")
+def get_assurance_review_queue(assessment_id: int,
+                               db: Session = Depends(get_db)):
+    """Evidence and architecture items awaiting a human, with the threat each
+    one would move. Ordered by the residual it would release."""
+    from . import assurance as _a
+    rec = _assessment_or_404(assessment_id, db)
+    _assurance_or_422(rec)
+    arts = db.query(Artifact).filter(
+        Artifact.investigation_id == rec.investigation_id,
+        Artifact.review == "pending").all()
+    return {"assessment_id": rec.id,
+            **_a.review_queue([_artifact_json(a) for a in arts])}
+
+
+@app.get("/api/security/assessments/{assessment_id}/assurance/register")
+def get_canonical_register(assessment_id: int, db: Session = Depends(get_db)):
+    """The de-duplicated control register this assessment contributes to.
+
+    Reported as keys, not rows: the register itself is derived on read from
+    every assessment sharing a product family, so what this endpoint proves is
+    that two runs of the same family address the same entries instead of
+    appending a slightly different threat list.
+    """
+    from . import assurance as _a
+    rec = _assessment_or_404(assessment_id, db)
+    ens = _assurance_or_422(rec)
+    family = getattr(rec, "product_family", None) or rec.product_name
+    keys = []
+    for layer in ("own", "model", "platform", "third_party"):
+        for t in (ens.get("threats") or []):
+            if not isinstance(t, dict):
+                continue
+            ref = (t.get("control_id") or t.get("id") or "?")
+            keys.append(_a.canonical_register_key(family, layer, ref))
+    return {
+        "assessment_id": rec.id,
+        "product_family": family,
+        "canonical_keys": sorted(set(keys)),
+        "count": len(set(keys)),
+        "note": ("Two runs of one product family resolve to the same keys, so "
+                 "the second updates coverage instead of duplicating the list."),
+    }
+
+
+@app.post("/api/security/assessments/{assessment_id}/decision")
+def record_assurance_decision(assessment_id: int, data: AssuranceDecisionRequest,
+                              request: Request, db: Session = Depends(get_db)):
+    """Record a leadership decision against an assessment.
+
+    Written to the row and to the hash-chained ledger with identity and
+    rationale. An exception is always time-bounded: it expires and the row
+    returns to open rather than becoming a permanent override.
+    """
+    from . import leadership as _ld
+    # request_actor_or_empty, not request_actor: a decision signed with the
+    # shared default actor is not signed by anyone, so a caller with no name
+    # and no session is refused rather than quietly given "user".
+    actor = (data.actor or "").strip() or ledger_api.request_actor_or_empty(request)
+    try:
+        return _ld.record_decision(
+            db, assessment_id, data.decision, actor=actor,
+            rationale=data.rationale, expires_days=data.expires_days,
+            override=data.override)
+    except LookupError:
+        raise HTTPException(404, "Assessment not found")
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+
+
+@app.post("/api/security/assessments/{assessment_id}/evidence/{artifact_id}/review")
+def review_assurance_evidence(assessment_id: int, artifact_id: int,
+                              data: EvidenceReviewRequest, request: Request,
+                              db: Session = Depends(get_db)):
+    """Accept or reject one artifact as primary evidence for an assessment.
+
+    The response states what the review would change and how much: an accepted
+    artifact does not retroactively edit the stored residual, it changes the
+    next one. Saying so is what stops a reviewer believing the score on screen
+    already reflects their click.
+    """
+    from . import assurance as _a
+    from . import leadership as _ld
+    rec = _assessment_or_404(assessment_id, db)
+    art = db.query(Artifact).filter(Artifact.id == artifact_id).first()
+    if not art:
+        raise HTTPException(404, "Artifact not found")
+    if art.assessment_id and int(art.assessment_id) != int(rec.id):
+        raise HTTPException(409, "Artifact belongs to a different assessment")
+    review = (data.review or "").lower()
+    if review not in ("accepted", "rejected"):
+        raise HTTPException(422, "review must be accepted or rejected")
+    reviewer = (data.reviewer or "").strip() or ledger_api.request_actor(request)
+    art.review = review
+    if data.note:
+        art.relevance_reason = (art.relevance_reason or "")
+        art.description = data.note
+    db.commit()
+    ens = _assurance_or_422(rec)
+    # What the review would change, computed rather than asserted: an accepted
+    # artifact only moves the verified layer if it is primary and relevant
+    # enough, so a click on a marketing page changes nothing and saying so is
+    # the useful part of the response.
+    impact = _evidence_review_impact(art, ens)
+    ledger_api.human_action(request, "reviewed_evidence", {
+        "assessment": rec.id, "artifact": artifact_id, "review": review,
+        "reviewer": reviewer})
+    db.refresh(rec)
+    return {
+        "assessment_id": rec.id,
+        "artifact_id": artifact_id,
+        "review": review,
+        "reviewer": reviewer,
+        "evidence_confidence": getattr(rec, "evidence_confidence", None),
+        "impact": impact,
+        "note": ("The stored residual is unchanged: the stored assurance pass "
+                 "is the record of what was true when it was scored. The next "
+                 "assessment reflects this review."),
+    }
+
+
+def _evidence_review_impact(art: Artifact, ens: dict) -> dict:
+    """How much residual credit this artifact would release if accepted."""
+    from . import assurance as _a
+    art_type = (art.artifact_type or art.origin or "").lower()
+    primary = art_type in _a._PRIMARY_TYPES
+    relevance = art.relevance if art.relevance is not None else 0.0
+    drifted = bool(art.drift)
+    qualifies = bool(primary and relevance >= _a.MIN_ACCEPTED_RELEVANCE
+                     and not drifted)
+    threats = []
+    for t in (ens.get("threats") or []):
+        if isinstance(t, dict) and (t.get("coverage_confidence_pct") or 0) < 100:
+            threats.append({"threat_id": t.get("id"), "title": t.get("title"),
+                            "coverage_confidence_pct": t.get("coverage_confidence_pct")})
+    return {
+        "counts_as_primary": primary,
+        "relevance": relevance,
+        "drifted": drifted,
+        "qualifies_for_verified_credit": qualifies,
+        "would_raise_coverage_for": threats[:5],
+        "note": ("Pending artifacts never reduce the verified residual. Only "
+                 "accepted primary evidence above the relevance floor, with "
+                 "no drift flag, releases credit."),
+    }
+
+
+@app.get("/api/security/assessments/{assessment_id}/ledger/integrity")
+def get_assurance_ledger_integrity(assessment_id: int,
+                                   db: Session = Depends(get_db)):
+    """Chain integrity plus event-class completeness for one assessment's run.
+
+    An intact chain proves events were not edited. It does not prove the
+    events that should have happened did -- that is what the completeness and
+    absence checks report alongside it.
+    """
+    from . import assurance_ledger as _al
+    rec = _assessment_or_404(assessment_id, db)
+    run_id = f"akm-run-{rec.run_id}" if rec.run_id else f"akm-assessment-{rec.id}"
+    return _al.integrity_report(run_id, db=db)
+
+
+@app.get("/api/security/assessments/{assessment_id}/evidence-pack")
+def get_assurance_evidence_pack(assessment_id: int,
+                                db: Session = Depends(get_db)):
+    """Audit-ready evidence pack: hash-chained events, exports and assertions.
+
+    Deliberately a pack and not a document -- the reader can verify it without
+    trusting this service, which is the point of an assurance artifact.
+    """
+    from . import assurance_ledger as _al
+    rec = _assessment_or_404(assessment_id, db)
+    run_id = f"akm-run-{rec.run_id}" if rec.run_id else f"akm-assessment-{rec.id}"
+    return _al.evidence_pack(run_id, db=db)
+
+
+@app.get("/api/assurance/ledger/integrity-monitor")
+def assurance_integrity_monitor(limit: int = 40, db: Session = Depends(get_db)):
+    """§8.4 continuous integrity monitoring: which recent runs still verify."""
+    from . import assurance_ledger as _al
+    return _al.monitor_integrity(db=db, limit=limit)
+
+
+@app.get("/api/assurance/ledger/siem-export")
+def assurance_siem_export(limit: int = 40, db: Session = Depends(get_db)):
+    """§8.4 streaming export: recent ledger events as minimised JSON lines.
+
+    One event per line, payload minimised (hashes, not prompts), ready to be
+    piped into a SIEM / SOAR ingestion point.
+    """
+    from fastapi.responses import PlainTextResponse
+    from . import assurance_ledger as _al
+
+    lines: list[str] = []
+    _al.export_siem_events(db=db, limit=limit, sink=lines.append)
+    return PlainTextResponse("\n".join(lines), media_type="application/x-ndjson")
+
+
+# ------------------------------------- leadership dashboard endpoints -----
+
+@app.get("/api/leadership/board")
+def leadership_board(investigation_id: Optional[int] = None,
+                     window_days: int = 90, persona: str = "executive",
+                     db: Session = Depends(get_db)):
+    """The leadership decision view: risk position, decision queue, assurance
+    health, exposure lens, system integrity and alerts in one payload."""
+    from . import leadership as _ld
+    return _ld.board(db, investigation_id, window_days=window_days,
+                     persona=persona)
+
+
+@app.get("/api/leadership/risk-position")
+def leadership_risk_position(investigation_id: Optional[int] = None,
+                             window_days: int = 90,
+                             db: Session = Depends(get_db)):
+    """Verified residual by data tier, each with its evidence confidence."""
+    from . import leadership as _ld
+    return _ld.risk_position(db, investigation_id, window_days=window_days)
+
+
+@app.get("/api/leadership/decision-queue")
+def leadership_decision_queue(investigation_id: Optional[int] = None,
+                              db: Session = Depends(get_db)):
+    """Everything waiting on a decision, and what would change the answer."""
+    from . import leadership as _ld
+    return _ld.decision_queue(db, investigation_id)
+
+
+@app.get("/api/leadership/assurance-health")
+def leadership_assurance_health(investigation_id: Optional[int] = None,
+                                db: Session = Depends(get_db)):
+    """Controls verified vs declared, forensics, ledger integrity, stalled runs."""
+    from . import leadership as _ld
+    return _ld.assurance_health(db, investigation_id)
+
+
+@app.get("/api/leadership/exposure")
+def leadership_exposure(investigation_id: Optional[int] = None,
+                       db: Session = Depends(get_db)):
+    """Restricted/confidential assets, privileged users and material items."""
+    from . import leadership as _ld
+    return _ld.exposure_lens(db, investigation_id)
+
+
+@app.get("/api/leadership/system-integrity")
+def leadership_system_integrity(investigation_id: Optional[int] = None,
+                                db: Session = Depends(get_db)):
+    """Swarm health, threat-pack currency, ledger completeness, time-to-close."""
+    from . import leadership as _ld
+    return _ld.system_integrity(db, investigation_id)
+
+
+@app.get("/api/leadership/alerts")
+def leadership_alerts(investigation_id: Optional[int] = None,
+                      db: Session = Depends(get_db)):
+    """What needs a person now, at block/warn severity."""
+    from . import leadership as _ld
+    return _ld.alerts(db, investigation_id)
+
+
+@app.get("/api/leadership/exceptions")
+def leadership_exceptions(investigation_id: Optional[int] = None,
+                          db: Session = Depends(get_db)):
+    """Time-bounded exceptions and their expiry status."""
+    from . import leadership as _ld
+    return _ld.exception_register(db, investigation_id)
+
+
+@app.get("/api/leadership/change-log/{investigation_id}")
+def leadership_change_log(investigation_id: int,
+                          db: Session = Depends(get_db)):
+    """Current vs superseded assessments for one investigation."""
+    from . import leadership as _ld
+    inv = db.query(Investigation).filter(Investigation.id == investigation_id).first()
+    if not inv:
+        raise HTTPException(404, "Investigation not found")
+    return {"investigation_id": investigation_id,
+            **_ld.change_log(db, investigation_id)}
 
 
 def _hypothesis_rec(assessment_id: int, db: Session):

@@ -1080,6 +1080,41 @@ def _aggregate(values: list[float]) -> float:
     return _WORST_WEIGHT * worst + _BREADTH_WEIGHT * breadth
 
 
+def _aggregate_pct(rows: list[dict[str, Any]],
+                   applicability: Optional[dict[str, float]] = None,
+                   ) -> tuple[float, float, list[dict[str, Any]]]:
+    """(inherent_pct, residual_pct, applicable_rows) from already-scored rows.
+
+    Split out of :func:`score_assessment` so exactly one implementation of the
+    aggregate exists. The assurance layer re-scores rows whose residual has been
+    forced back to inherent by an evidence or architecture gate; it must land on
+    the same arithmetic the headline uses, or the two layers would disagree
+    about the same inputs.
+    """
+    if not rows:
+        return 0.0, 0.0, []
+    applicable = [r for r in rows if r.get("applicable", True)]
+    if not applicable:  # never produce a meaningless 0 for an empty scope
+        applicable = rows
+    weights = []
+    for r in applicable:
+        try:
+            weights.append(max(0.0, min(1.0, float((applicability or {}).get(r["id"], 1.0)))))
+        except (TypeError, ValueError):
+            weights.append(1.0)
+    norm = (sum(weights) / len(weights)) if weights else 0.0
+    if norm <= 0:
+        # nothing claims relevance: fall back to the unweighted aggregate
+        # rather than manufacturing a zero
+        weights = [1.0] * len(applicable)
+        norm = 1.0
+    inh = _aggregate([s * w for s, w in zip(
+        [r["inherent_score"] for r in applicable], weights)]) / (25.0 * norm)
+    res = _aggregate([s * w for s, w in zip(
+        [r["residual_score"] for r in applicable], weights)]) / (25.0 * norm)
+    return round(min(100.0, inh * 100.0), 1), round(min(100.0, res * 100.0), 1), applicable
+
+
 def _posture(pct: float) -> str:
     if pct >= 75:
         return "HIGH RISK — do not enable for this data tier without the mitigations below"
@@ -1153,27 +1188,7 @@ def score_assessment(
             "applicable": a >= _MIN_APPLICABILITY,
         })
 
-    applicable = [r for r in rows if r["applicable"]]
-    if not applicable:  # never produce a meaningless 0 for an empty scope
-        applicable = rows
-    weights = []
-    for r in applicable:
-        try:
-            weights.append(max(0.0, min(1.0, float(app.get(r["id"], 1.0)))))
-        except (TypeError, ValueError):
-            weights.append(1.0)
-    norm = (sum(weights) / len(weights)) if weights else 0.0
-    if norm <= 0:
-        # nothing claims relevance: fall back to the unweighted aggregate
-        # rather than manufacturing a zero
-        weights = [1.0] * len(applicable)
-        norm = 1.0
-    inh = _aggregate([s * w for s, w in zip(
-        [r["inherent_score"] for r in applicable], weights)]) / (25.0 * norm)
-    res = _aggregate([s * w for s, w in zip(
-        [r["residual_score"] for r in applicable], weights)]) / (25.0 * norm)
-    inherent_pct = round(min(100.0, inh * 100.0), 1)
-    residual_pct = round(min(100.0, res * 100.0), 1)
+    inherent_pct, residual_pct, applicable = _aggregate_pct(rows, app)
 
     def _dist(key: str) -> dict[str, int]:
         out: dict[str, int] = {}
@@ -1326,6 +1341,32 @@ _ROLE_ARTIFACT_TERMS: dict[str, tuple[str, ...]] = {
 }
 
 
+def _assurance_not_assessed(path: str) -> dict[str, Any]:
+    """Explicit "assurance not assessed" marker for non-product paths.
+
+    Better an honest absent verdict than a defaulted passing one: the gates in
+    :mod:`app.assurance` are written against the product threat pack's
+    controls, and applying them to a model-internals score would credit
+    controls nobody attested.
+    """
+    from . import assurance as _a
+
+    return {
+        "method": _a.ASSURANCE_METHOD,
+        "version": _a.ASSURANCE_VERSION,
+        "fingerprint": _a.assurance_fingerprint(),
+        "assessed": False,
+        "assessment_path": path,
+        "headline_layer": "declared",
+        "note": ("Assurance gates (verified residual, architecture "
+                 "completeness, evidence acceptance, forensics readiness, "
+                 "blast radius) apply to the product threat-pack path. This "
+                 "row is scored on a different instrument and carries no "
+                 "verified-residual verdict."),
+        "gates_open": ["assurance_not_assessed"],
+    }
+
+
 def _load_investigation_artifacts(db: Any, investigation_id: Any) -> list[dict[str, Any]]:
     """Normalised artifact rows for the investigation this assessment belongs to."""
     if db is None or investigation_id in (None, ""):
@@ -1349,6 +1390,17 @@ def _load_investigation_artifacts(db: Any, investigation_id: Any) -> list[dict[s
             "tags": a.tags or "",
             "relevance": float(a.relevance or 0.0),
             "snippet": (a.description or a.content or "")[:400],
+            # Assurance-grade provenance. A control can only be credited in the
+            # verified layer when an *accepted* artifact backs it, so the review
+            # state has to travel with the row rather than be re-queried.
+            "artifact_type": a.artifact_type or "",
+            "source": a.source or "",
+            "description": (a.description or "")[:600],
+            "review": a.review or "pending",
+            "drift": bool(a.drift),
+            "origin": a.origin or "agent",
+            "created_at": a.created_at,
+            "date_published": a.date_published,
         })
     return out
 
@@ -1618,7 +1670,10 @@ def build_assessment(
                     declared_controls: Optional[list[str]] = None,
                     control_plan_override: Optional[dict[str, Any]] = None,
                     assessment_mode: str = "",
-                    model_meta: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+                    model_meta: Optional[dict[str, Any]] = None,
+                    architecture_checklist: Optional[dict[str, Any]] = None,
+                    exposure_inventory: Optional[dict[str, Any]] = None,
+                    full_metadata_context: Optional[bool] = None) -> dict[str, Any]:
     exposure = (exposure or "confidential_data").strip()
     if exposure not in EXPOSURE_META:
         exposure = "confidential_data"
@@ -1764,6 +1819,24 @@ def build_assessment(
     osh_block = _osh.assessment_openshell_block(
         pages, product_name or "Target product", exposure,
         scoring["active_controls"])
+    # ---- assurance pass: declared vs verified residual + gates -------------
+    # Runs on the standard (product) path only: the model/hypothesis paths
+    # score different things with different instruments, and applying the
+    # product threat-pack's gates to them would assert controls nobody
+    # attested. Those paths get an explicit "not assessed" marker instead.
+    from . import assurance as _assurance
+
+    assurance_block = _assurance.assess(
+        exposure=exposure,
+        inherent_threats=inherent,
+        declared_controls=scoring.get("active_controls") or declared_controls or [],
+        applicability=(a2a.get("applicability") or None),
+        artifacts=inv_artifacts,
+        architecture_checklist=architecture_checklist,
+        exposure_inventory=exposure_inventory,
+        known_exploits=a2a.get("known_exploits") or [],
+        full_metadata_context=full_metadata_context,
+    )
     markdown = render_markdown(
         product_name=product_name or "Target product",
         product_url=product_url or "",
@@ -1818,6 +1891,7 @@ def build_assessment(
         "a2a_trace": a2a.get("a2a_trace", []),
         "a2a_task_id": a2a.get("task_id", ""),
         "openshell": osh_block,
+        "assurance": assurance_block,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -1937,6 +2011,7 @@ def _build_model_assessment(product_name: str, product_url: str,
         "a2a_trace": a2a.get("a2a_trace", []),
         "a2a_task_id": a2a.get("task_id", ""),
         "openshell": [],
+        "assurance": _assurance_not_assessed("model"),
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -2178,6 +2253,7 @@ def _build_model_engineering_assessment(
         "a2a_trace": a2a.get("a2a_trace", []),
         "a2a_task_id": a2a.get("task_id", ""),
         "openshell": [],
+        "assurance": _assurance_not_assessed("model_engineering"),
         "created_at": datetime.now(timezone.utc).isoformat(),
         "model_meta": model_meta,
         "model_attacks": findings,
@@ -2314,6 +2390,7 @@ def _build_adversarial_assessment(product_name: str, product_url: str,
         "a2a_trace": a2a.get("a2a_trace", []),
         "a2a_task_id": a2a.get("task_id", ""),
         "openshell": [],
+        "assurance": _assurance_not_assessed("model_adversarial"),
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -2562,6 +2639,7 @@ def _build_hypothesis_assessment(product_name: str, product_url: str,
         "a2a_trace": a2a.get("a2a_trace", []),
         "a2a_task_id": a2a.get("task_id", ""),
         "openshell": [],
+        "assurance": _assurance_not_assessed("model_hypothesis"),
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
 

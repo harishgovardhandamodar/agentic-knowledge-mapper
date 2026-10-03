@@ -14,6 +14,7 @@ evidence.
 """
 import json
 import contextvars
+import re
 import threading
 import traceback
 from datetime import datetime, timezone
@@ -107,6 +108,29 @@ def _event(db: Session, run_id: int, stage: str, message: str, data: dict | None
     db.commit()
 
 
+#: Vendor/product noise stripped before a name is used as a register family, so
+#: "Collibra AI Writing Assistant (Enterprise)" and "Collibra AI Writing
+#: Assistant" resolve to the same canonical family and a re-run updates the
+#: existing rows instead of forking the threat list.
+_FAMILY_NOISE = re.compile(
+    r"\((?:enterprise|pro|business|beta|preview|free|saas|trial)\)|\b(?:"
+    r"enterprise|professional|business|beta|preview|free|trial|saas|inc|ltd|"
+    r"llc|gmbh|plc|corp|corporation|limited|company)\b", re.I)
+
+
+def product_family(name: str) -> str:
+    """Canonical product family from a product name.
+
+    The canonical threat register is keyed per family: two runs of the same
+    product must land on the same rows so the later run updates evidence and
+    coverage instead of producing a second, slightly different threat list
+    beside the first.
+    """
+    cleaned = _FAMILY_NOISE.sub(" ", str(name or ""))
+    cleaned = re.sub(r"[^a-z0-9]+", " ", cleaned.lower()).strip()
+    return " ".join(cleaned.split())[:200] or "unassigned"
+
+
 def security_run_stats(result: dict, assessment_id: int,
                        duration_ms: int | None) -> dict:
     """The measurable trace every security run leaves in ``agent_runs.stats``.
@@ -131,6 +155,151 @@ def security_run_stats(result: dict, assessment_id: int,
             "known_exploits": len(result.get("known_exploits", [])),
             "collector_cache_hits": result.get("collector_cache_hits", 0),
             "duration_ms": duration_ms}
+
+
+def _trace_roles(result: dict) -> list[tuple[str, bool]]:
+    """Roles the A2A trace actually exercised, in first-seen order.
+
+    Each entry is ``(role, failed)``. Roles are read from the trace rather than
+    from the static roster: the ledger's job is to say which roles ran, and a
+    roster would assert that for a run that never started one. An agent name
+    that matches no contract still comes back, so it shows up as uncontracted
+    in the topology instead of vanishing.
+    """
+    from . import swarm as _sw
+    seen: dict[str, bool] = {}
+    for hop in result.get("a2a_trace") or []:
+        agent = str(hop.get("agent") or "").strip()
+        if not agent:
+            continue
+        role = agent if agent in _sw.ROLE_CONTRACTS else next(
+            (r for r in _sw.ROLE_CONTRACTS
+             if agent == r or agent.endswith("-" + r)), agent)
+        failed = any(w in str(hop.get("intent") or "")
+                     for w in ("error", "fail", "refuse"))
+        # dict insertion order is first-seen order, and the later hop's verdict
+        # overwrites the earlier one's: a role that started clean and then
+        # errored is a failure.
+        seen[role] = seen.get(role, False) or failed
+    return list(seen.items())
+
+
+def record_assurance_ledger(run, params: dict, result: dict) -> dict:
+    """Write this run's assurance verdict and role trace to the ledger.
+
+    The assessment row already stores the numbers; this stores the evidence for
+    them -- which gates ran, which roles ran, and what the policy point decided
+    before a residual was allowed out. Without it the leadership integrity view
+    reads runs with no events at all, and correctly reports that absence, which
+    is a true statement about a run that was never recorded.
+
+    Failures here are reported, not raised: a missing audit trail must not
+    destroy the assessment that was otherwise sound.
+    """
+    from . import assurance_ledger as _al
+    from . import swarm as _sw
+
+    assurance = result.get("assurance") or {}
+    exposure = result.get("exposure") or "confidential_data"
+    run_key = f"akm-run-{run.id}"
+    product = result.get("product_name") or params.get("product_name") or ""
+
+    policy = _sw.policy_enforcement_point(
+        exposure=exposure,
+        architecture_gate=assurance.get("architecture_gate") or {},
+        evidence_gate=assurance.get("evidence_gate") or {},
+        forensics=assurance.get("forensics") or {},
+        threat_pack_stale=bool(params.get("threat_pack_stale")),
+        min_evidence_confidence=float(
+            params.get("min_evidence_confidence") or 0.0),
+        evidence_confidence=assurance.get("evidence_confidence"),
+    )
+
+    roles = _trace_roles(result) or [("orchestrator", False)]
+    if "scorer" not in {r for r, _ in roles}:
+        # Scoring is deterministic and leaves no A2A hop, but it is the act the
+        # policy point exists to gate, so it gets a role event of its own. A
+        # refusal is recorded as a completion with the policy attached: refusing
+        # to emit a residual is the contract working, not the scorer failing.
+        roles.append(("scorer", False))
+    for role, _failed in roles:
+        _al.record_swarm_event(run_key, role=role, phase="spawn")
+    for role, failed in roles:
+        _al.record_swarm_event(
+            run_key, role=role, phase="failure" if failed else "complete",
+            completeness=(assurance.get("decision") or {}).get("decision"),
+            confidence=assurance.get("evidence_confidence"),
+            policy=policy if role == "scorer" else None,
+        )
+
+    _al.record_lifecycle(run_key, phase="plan", actor="orchestrator",
+                         detail={"product": product, "exposure": exposure,
+                                 "assessment_mode":
+                                     (result.get("scoring") or {}).get(
+                                         "assessment_path")})
+
+    # Artifact lifecycle: one event per evidence item the collector returned,
+    # so the provenance class is covered by what actually happened rather than
+    # by a generic marker.
+    for ev in (result.get("evidence") or [])[:50]:
+        _al.record_artifact(
+            run_key, artifact_id=str(ev.get("url") or ev.get("id") or "art")[:120],
+            action="ingest", title=ev.get("title") or "",
+            source=str(ev.get("source") or "")[:120],
+            relevance=ev.get("relevance"),
+            review=ev.get("review") or "pending",
+            detail={"collected_at": ev.get("collected_at")})
+
+    # Tool invocations: the queries the collector actually ran.
+    for q in (result.get("queries_run") or [])[:30]:
+        _al.record_tool(run_key, tool="collector-search",
+                        intent=str(q)[:120], status="ok", redacted=True)
+
+    _al.record_publication(
+        run_key, doc_id=f"assessment-{run.id}", version=str(result.get("threat_pack_version") or "v1"),
+        audience=["leadership", "audit"], assessment_id=None,
+        supersedes=None, detail={"posture": result.get("posture", "")})
+
+    # Model & prompt context: the report-writer synthesis is the one LLM hop on
+    # a product path, so its fingerprint is recorded with the configured model
+    # identity. Hashes only -- the immutable ledger never stores the prompt.
+    try:
+        from . import llm as _llm
+        _al.record_prompt_fingerprint(
+            run_key, actor="report-writer", model=_llm.MODEL,
+            prompt_template="report_writer.synthesis", redaction="hashed")
+    except Exception:
+        pass
+
+    # System integrity: the run checks its own chain before closing and records
+    # the result, so a healthy fabric shows the check rather than a silent gap.
+    _integrity = _al.integrity_report(run_key)
+    _al.record_integrity_check(
+        run_key, check="chain_continuity_at_close",
+        passed=bool(_integrity["chain_intact"]),
+        detail={"events": _integrity["events"]})
+
+    _al.record_lifecycle(run_key, phase="complete", actor="orchestrator",
+                         detail={"assessment_id": None})
+
+    # §13.4 critic: a second pass over the run's own record. It never scores;
+    # it asks whether the record supports the claim, and its findings travel
+    # with the run so leadership sees them beside the residual.
+    try:
+        _critic = _sw.critic_review(events=_al._load_events(run_key),
+                                    assurance=assurance)
+        _al.record_swarm_event(
+            run_key, role="critic", phase="complete",
+            detail={"findings": _critic["findings"],
+                    "clean": _critic["clean"]})
+    except Exception:
+        pass
+
+    written = _al.record_assurance(run_key, assurance, product=product,
+                                   exposure=exposure)
+    return {"run_id": run_key, "policy": policy,
+            "roles": [{"role": r, "failed": f} for r, f in roles],
+            "assurance": written}
 
 
 def run_security_assessment(run_id: int, params: dict):
@@ -279,10 +448,34 @@ def run_security_assessment(run_id: int, params: dict):
             control_plan_override=approved_plan,
             assessment_mode=params.get("assessment_mode") or "",
             model_meta=params.get("model_meta") or {},
+            architecture_checklist=params.get("architecture_checklist"),
+            exposure_inventory=params.get("exposure_inventory"),
+            full_metadata_context=params.get("full_metadata_context"),
         )
 
         plan = result.get("control_plan", {})
         _path = (result.get("scoring", {}).get("assessment_path") or "standard")
+        _ass = result.get("assurance") or {}
+        if _ass.get("assessed") is not False:
+            _dec = (_ass.get("decision") or {}).get("decision") or "unknown"
+            _event(db, run.id, "assurance",
+                   f"Assurance pass: declared residual "
+                   f"{(_ass.get('declared') or {}).get('residual_pct')}% → verified "
+                   f"{(_ass.get('verified') or {}).get('residual_pct')}% "
+                   f"(evidence confidence {(_ass.get('evidence_confidence_pct') or 0):g}%, "
+                   f"forensics {(_ass.get('forensics') or {}).get('score')}"
+                   f"/{(_ass.get('forensics') or {}).get('max_score')}). "
+                   f"Decision: {_dec}. Gates open: "
+                   f"{', '.join(_ass.get('gates_open') or []) or 'none'}.",
+                   {"declared_residual_pct": (_ass.get("declared") or {}).get("residual_pct"),
+                    "verified_residual_pct": (_ass.get("verified") or {}).get("residual_pct"),
+                    "evidence_confidence": _ass.get("evidence_confidence"),
+                    "decision": _dec,
+                    "gates_open": _ass.get("gates_open"),
+                    "unverified_controls": _ass.get("unverified_controls"),
+                    "architecture_open_items": (_ass.get("architecture_gate") or {}).get("open_items"),
+                    "forced_to_inherent": _ass.get("forced_to_inherent"),
+                    "assurance_fingerprint": _ass.get("fingerprint")})
         if _path == "model_adversarial":
             # Named per-hop, not per-catalog-agent: on this path no
             # control-analyst and no threat-intel ran, and an event log that
@@ -368,6 +561,18 @@ def run_security_assessment(run_id: int, params: dict):
                f"({result.get('queries_run') and len(result['queries_run'])} queries).",
                {"evidence": [e["title"][:80] for e in result.get("evidence", [])[:10]]})
 
+        _ledger = record_assurance_ledger(run, params, result)
+        _pol = _ledger["policy"]
+        _event(db, run.id, "audit",
+               f"Assurance recorded: {len(_ledger['roles'])} role(s), "
+               f"policy {_pol['decision']}"
+               + (f" (blocked by {', '.join(_pol['blocked_by'])})"
+                  if _pol["blocked_by"] else "")
+               + (f", {len(_pol['warnings'])} warning(s)" if _pol["warnings"] else "")
+               + f"; ledger {_ledger['run_id']}.",
+               {"policy": _pol, "roles": _ledger["roles"],
+                "assurance": _ledger["assurance"]})
+
         rec = SecurityAssessment(
             investigation_id=inv.id,
             run_id=run.id,
@@ -389,6 +594,13 @@ def run_security_assessment(run_id: int, params: dict):
                 "openshell": result.get("openshell", {}),
             }),
             scoring_json=json.dumps(result.get("scoring", {})),
+            assurance_json=json.dumps(result["assurance"])
+            if result.get("assurance") else None,
+            assurance_decision=(result.get("assurance") or {}).get(
+                "decision", {}).get("decision"),
+            evidence_confidence=(result.get("assurance") or {}).get(
+                "evidence_confidence"),
+            product_family=params.get("product_family") or product_family(result.get("product_name") or ""),
             situation_json=json.dumps(params["situation"])
             if params.get("situation") else None,
             initiative_id=params.get("initiative_id"),

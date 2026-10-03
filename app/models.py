@@ -281,9 +281,35 @@ class SecurityAssessment(Base):
     # assessment assessed before this existed has no honest answer to give --
     # stamping a default would claim a control environment nobody declared.
     situation_json = Column(Text, nullable=True)
+    # Assurance layer (app/assurance.py): declared vs verified residual, the
+    # architecture / evidence / forensics gates, blast radius, the derived
+    # decision frame and the vendor questionnaire. Nullable for the same
+    # reason as situation_json -- an older row predates the gates, and
+    # inventing a passing gate result would be the exact failure the gates
+    # exist to prevent.
+    assurance_json = Column(Text, nullable=True)
+    assurance_decision = Column(String(40), nullable=True)  # accept|accept_with_mandatory_guardrails|reject_until_architecture_gate_closed
+    assurance_decided_by = Column(String(200), nullable=True)
+    assurance_decided_at = Column(DateTime, nullable=True)
+    assurance_decision_note = Column(Text, nullable=True)
+    # Set for time-bounded exceptions only. An acceptance that expires drops
+    # the row back to open and triggers re-evaluation, so an override cannot
+    # quietly become permanent by never being revisited.
+    assurance_decision_expires_at = Column(DateTime, nullable=True)
+    # Share of the residual reduction that rests on accepted primary evidence.
+    # Kept as its own column so a portfolio rollup never has to re-derive it,
+    # and never mistakes it for the residual itself.
+    evidence_confidence = Column(Float, nullable=True)
+    # Verbatim ceiling the main report body must respect before long
+    # deep-dives and artifact tables move to appendices.
+    max_body_chars = Column(Integer, nullable=True)
     # Which business initiative this assessment informs, when there is one.
     initiative_id = Column(Integer, ForeignKey("initiatives.id", ondelete="SET NULL"),
                            nullable=True, index=True)
+    # Product family this row belongs to. Later runs of the same family update
+    # evidence and coverage on the canonical register rows instead of adding a
+    # slightly-different threat list beside them.
+    product_family = Column(String(200), nullable=True, index=True)
     created_at = Column(DateTime, default=_now)
 
 
