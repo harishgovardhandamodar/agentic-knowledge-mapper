@@ -99,12 +99,22 @@ flowchart TB
         LEAK["leakage.py<br/>pathways + PB01-07"]
         LLM["llm.py<br/>gateway client"]
         LED["ledger.py<br/>hash-chained audit"]
+        AS["assurance.py<br/>declared vs verified residual + gates"]
+        ALED["assurance_ledger.py<br/>assurance events + integrity monitor"]
+        SW["swarm.py<br/>role contracts · policy engine · critic"]
+        LD["leadership.py<br/>decision-grade dashboard views"]
     end
     DB[("SQLite WAL<br/>data/akm.db · 20+ tables<br/>initiatives · risks · snapshots")]
     UI & RC --> API
     API --> AG & EX & SEC & MGR & SCH & CON & KBS
     SEC --> JOB
     JOB --> SEC
+    SEC --> AS
+    AS --> ALED
+    SEC --> ALED
+    SW --> ALED
+    LD --> ALED & AS & SW
+    API --> LD
     AG --> SRCH --> FOX
     AG & EX & SEC --> LLM --> FOX
     AG & EX & SEC & MGR & LED & PORT & EXEC & PP & MEM --> DB
@@ -124,7 +134,11 @@ flowchart TB
 | `app/main.py` | FastAPI routes (~110 paths), request schemas, JSON serializers, `/console` + `/api/console/*` + `/api/search` |
 | `app/agent.py` | Collection loop: plan → search → analyze → map → refine (background thread); provider posture + RLHF + memorization query packs |
 | `app/explainer.py` | Question answering: graph-first research → compose → ground → critique → diagram; investigation_summary now carries `manager_synthesis` |
-| `app/security_agent.py` + `app/agents.py` + `app/security.py` + `app/threatpack.py` | Security assessments via A2A envelope protocol, scored against versioned pack; agents now include `model-adv-intel` RM01-06, hypothesis `H-RM01/05`, mitigation `MM16` |
+| `app/security_agent.py` + `app/agents.py` + `app/security.py` + `app/threatpack.py` | Security assessments via A2A envelope protocol, scored against versioned pack; agents now include `model-adv-intel` RM01-06, hypothesis `H-RM01/05`, mitigation `MM16`; each run writes the ledger it is judged by (`record_assurance_ledger`) |
+| `app/assurance.py` | Assurance engine: declared vs verified residual, architecture/evidence/forensics gates, blast radius, injection cap and chains, decision frame, vendor questionnaire, canonical register keys |
+| `app/assurance_ledger.py` | Assurance events on the base ledger (gates, swarm, artifacts, lifecycle, tool, publication, model context), 11 mandatory event classes, §8.5 absence alerts, chain-integrity monitor, SIEM export, re-score triggers |
+| `app/swarm.py` | Swarm governance: per-role contracts, `policy_enforcement_point` + `policy_engine` (scoring gates + source scope + budget), topology/health views, resume-from-ledger, typed hand-offs, critic role |
+| `app/leadership.py` | Decision-grade dashboard: risk position (tier + confidence + verified share), decision queue, assurance health, exposure lens, system integrity, alerts, exceptions register, change log, persona-layered board |
 | `app/dossier.py` | Report assembly: executive summary + 7 sections + model synthesis RM01-06 + W3 from stored rows, Markdown/HTML, Markdown+images bundle |
 | `app/mermaid_png.py` | Figure renderer: batch-draws mermaid sources to PNG via headless Chromium, cached by source hash |
 | `app/model_eval.py` | Model-engineering core: family/modality enums, attack taxonomy (`memorization`/`alignment_data_leakage` + subtypes `preference_memorization` etc., `method_general` 0.25), `adversarial_coverage_v1` + `adoption_risk_v1` (`preference_data_exposure` signal), method versions 2.0.0/1.1.0, fingerprints (no LLM, evalkit-pinned) |
@@ -205,6 +219,37 @@ classDiagram
         +run_security_assessment()
         +launch_security_assessment()
         +resume_security_assessment()
+        +record_assurance_ledger()
+    }
+    class AssuranceEngine {
+        +assess()
+        +decision_frame()
+        +architecture_gate() + evidence_gate()
+        +injection_cap() + blast_radius()
+    }
+    class AssuranceLedger {
+        +record_assurance()
+        +record_swarm_event()
+        +record_human_decision()
+        +integrity_report()
+        +monitor_integrity()
+        +re_score_triggers()
+    }
+    class Swarm {
+        +ROLE_CONTRACTS
+        +policy_engine()
+        +topology() + health()
+        +resume_state()
+        +critic_review()
+        +check_scope() + budget_allows()
+    }
+    class Leadership {
+        +risk_position()
+        +decision_queue()
+        +assurance_health()
+        +system_integrity()
+        +board(persona)
+        +record_decision()
     }
     class A2A {
         +dispatch()
@@ -252,6 +297,14 @@ classDiagram
     Portfolio --> ProviderPosture : PDP/RLHF/SAF
     Portfolio --> Memorization : RM rows
     SecurityAgent --> JobQueue : enqueue + claim
+    SecurityAgent --> AssuranceEngine : assess()
+    SecurityAgent --> AssuranceLedger : writes the run's events
+    SecurityAgent --> Swarm : policy before scoring
+    AssuranceEngine --> AssuranceLedger : gates as one event each
+    Swarm --> AssuranceLedger : role + policy events
+    Leadership --> AssuranceLedger : reads integrity + completeness
+    Leadership --> AssuranceEngine : verifies the stored verdict
+    Leadership --> Swarm : system health
     CollectionAgent --> SearchProviders : queries
     CollectionAgent --> LLMClient : plan/analyze
     CollectionAgent --> Store : persists
@@ -292,6 +345,35 @@ sequenceDiagram
     AGT->>DB: run.status=done + stats
     UI->>API: GET /investigations/{id}/graph
     API-->>UI: nodes + edges → vis-network
+```
+
+## Assurance closed loop (swarm → ledger → dashboard → decision)
+
+A security run is judged by the record it leaves, not by the number it prints.
+The same ledger the dashboard reads is the one the run wrote, so a leadership
+decision and the evidence behind it cannot diverge.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant RUN as run_security_assessment
+    participant SW as swarm policy engine
+    participant AS as assurance scorer
+    participant LED as assurance ledger
+    participant DASH as leadership
+    actor H as Human reviewer
+    RUN->>SW: policy_enforcement_point(architecture, evidence, scope, budget)
+    SW-->>RUN: decision (scorer_blocked | allowed)
+    RUN->>AS: assess(...)
+    AS-->>RUN: verified residual + confidence + decision frame
+    RUN->>LED: record_lifecycle · record_artifact · record_tool
+    RUN->>LED: record_swarm_event (each role) + critic findings
+    RUN->>LED: record_assurance (gates as one event each)
+    RUN->>LED: record_integrity_check (chain at close)
+    LED->>DASH: integrity_report → absence alerts + 11/11 class coverage
+    DASH-->>H: decision queue (residual + confidence + gate status)
+    H->>LED: record_human_decision (accept/reject/exception + rationale)
+    LED-->>RUN: trigger → re-score when evidence or architecture changed
 ```
 
 ## Report exports (dossier → Markdown / PDF / bundle)
@@ -377,6 +459,17 @@ flowchart LR
   pins the expected scores so a silent model change fails CI instead of
   quietly re-scoring every assessment in the database. See
   [threatpack](threatpack.md).
+- **Residual risk is an organisational decision, not a research output.** The
+  assurance layer closes the loop: the swarm produces the work under policy,
+  the ledger records every material action immutably, and the leadership
+  dashboard renders the risk position so a human can accept, reject or grant a
+  time-bounded exception — which is itself a ledger event feeding the next
+  cycle. See [assurance.md](../design/assurance.md).
+- **Verified is the honest number.** Controls count only when an accepted
+  primary artifact names them; self-attested claims and pending evidence never
+  reduce the residual. The ledger watches for the §8.5 failure modes (scoring
+  under a failed gate, a reduction with no attestation, an acceptance below
+  confidence) as *absent events*, not as prose.
 
 ## Where the boundaries are
 

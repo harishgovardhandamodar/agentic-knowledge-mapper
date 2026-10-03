@@ -237,3 +237,64 @@ its own exceptions.
 - [privacy.md](privacy.md) — what this means for your data
 - [../design/controls.md](../design/controls.md) — every control, with its enforcing file
 - [data-model.md](data-model.md) — the five ledger tables
+
+## The assurance ledger
+
+The base ledger above is the fabric; `app/assurance_ledger.py` is what the
+security evaluation writes onto it. It answers a different question from "is
+the chain intact" — namely "does the chain show the run behaved". An intact
+chain proves nothing was edited; it says nothing about **absence**, so the
+assurance layer records the mandatory event classes and asserts completeness.
+
+### Mandatory event classes
+
+Eleven classes are tracked per run, and a real assessment records all eleven:
+
+| Class | Events |
+|---|---|
+| investigation lifecycle | `assurance.lifecycle.create/plan/pause/resume/complete/abort/supersede` |
+| agent swarm orchestration | `assurance.swarm_spawn/handoff/complete/failure`, `agent.hop` |
+| tool / connector invocation | `assurance.tool.call` (args redacted by default) |
+| artifact lifecycle | `assurance.artifact.fetch/ingest/review/accept/reject/drift` |
+| threat & scoring | `assurance.score`, `assurance.blast_radius` |
+| control attestation | `assurance.control_attestation` |
+| architecture gate | `assurance.architecture_gate` |
+| human decisions | `assurance.decision`, `assurance.exception` (with identity + rationale) |
+| model & prompt context | `assurance.model_context` (hashes only) |
+| output & publication | `assurance.publish` (audience + supersession) |
+| system integrity | `drift.detect` (checks the fabric ran on itself) |
+
+### Absence alerts — the §8.5 failure modes
+
+`absence_alerts()` turns a missing event into a finding. Scoring after a
+blocked gate, a residual reduction with no attestation, a human acceptance
+below the confidence floor, a dropped swarm hop, a mid-run model change, and a
+fabric write failure all surface by name. A blocked architecture gate is
+**not** a fabric failure — reporting the gate doing its job as "the fabric
+broke" would tell leadership to distrust the run that deserves the most trust.
+
+### Integrity monitor, SIEM export, re-score triggers
+
+- `monitor_integrity()` re-verifies every recent run's chain and sequence
+  continuity, so a drifted fabric is found by the system itself.
+- `export_siem_events()` streams runs out as one minimised JSON line per event
+  (hashes, never prompts) for ingestion into a SIEM / SOAR.
+- `re_score_triggers()` names assessments whose evidence or architecture basis
+  changed after scoring — an artifact accepted later, or an explainer run that
+  finished after — so a stale residual is flagged and re-queued (never edited;
+  a re-score is a superseding run).
+
+### API
+
+| Route | Purpose |
+|---|---|
+| `GET /api/security/assessments/{id}/assurance` | the stored assurance verdict + decision state |
+| `GET /api/security/assessments/{id}/vendor-questionnaire` | architecture answers that would unblock each threat |
+| `GET /api/security/assessments/{id}/review-queue` | artifacts awaiting a human decision |
+| `GET /api/security/assessments/{id}/ledger/integrity` | chain integrity + class coverage + absence alerts |
+| `GET /api/security/assessments/{id}/evidence-pack` | one-click audit package |
+| `GET /api/assurance/ledger/integrity-monitor` | every recent run's chain status |
+| `GET /api/assurance/ledger/siem-export` | NDJSON stream for a SIEM |
+| `GET /api/assurance/ledger/re-score-triggers` | assessments with a changed basis |
+| `POST /api/assurance/assessments/{id}/re-score` | re-queue a superseding run |
+| `POST /api/security/assessments/{id}/decision` | human acceptance / exception (→ ledger event) |

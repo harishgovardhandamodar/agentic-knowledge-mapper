@@ -43,6 +43,12 @@ flowchart TB
         EVAL["evalkit.py<br/>50 cases / 21 invariants"]
         LEAK["leakage.py<br/>LP01-08 + PB01-07"]
     end
+    subgraph ASSURANCE["Assurance (closed loop)"]
+        AS["assurance.py<br/>declared vs verified residual · gates"]
+        ALED["assurance_ledger.py<br/>assurance events · integrity monitor"]
+        SWARM["swarm.py<br/>role contracts · policy engine · critic"]
+        LEAD["leadership.py<br/>decision-grade dashboard views"]
+    end
     subgraph INFRA["Infrastructure"]
         SRCH["search.py<br/>RSS · arXiv · DuckDuckGo"]
         LLM["llm.py"]
@@ -59,9 +65,15 @@ flowchart TB
     UI & RC --> MAIN
     MAIN --> LAPI & CONS & KBS
     MAIN --> AGENT & EXPL & SAGENT & MGR & SCHED & JQ & CVEL & STD & PORT & EXEC & PP & MEM
-    LAPI --> LED
+    MAIN --> LEAD
     SAGENT --> APPROV & A2A
     SAGENT --> JQ
+    SAGENT --> SWARM
+    SAGENT --> AS
+    SAGENT --> ALED
+    AS --> ALED
+    SWARM --> ALED
+    LEAD --> ALED & AS & SWARM
     A2A --> SEC & MEVAL & OPEN
     EXPL --> GRD & WG & DRIFT & YIELD
     AGENT --> YIELD
@@ -108,6 +120,46 @@ classDiagram
         +launch_security_assessment(inv, params)
         +resume_security_assessment(run_id, approved_by)
         +security_run_busy(inv)
+        +record_assurance_ledger(run, params, result)
+    }
+    class AssuranceEngine {
+        +assess(exposure, threats, controls, artifacts)
+        +decision_frame(verified, declared, gates)
+        +architecture_gate(checklist, exposure)
+        +evidence_gate(threats, artifacts)
+        +injection_cap(threats, artifacts)
+        +blast_radius(residual, inventory)
+        +canonical_register_key(family, layer, ref)
+    }
+    class AssuranceLedger {
+        +record_assurance(run_id, assurance)
+        +record_swarm_event(run_id, role, phase)
+        +record_human_decision(run_id, actor, decision)
+        +record_lifecycle / record_artifact / record_tool / record_publication
+        +integrity_report(run_id)
+        +monitor_integrity()
+        +export_siem_events()
+        +re_score_triggers()
+    }
+    class Swarm {
+        +ROLE_CONTRACTS / GATE_AUTHORITIES
+        +policy_enforcement_point(exposure, gates)
+        +policy_engine(gates, sources, budget)
+        +topology(events) / health(events)
+        +resume_state(events)
+        +critic_review(events, assurance)
+        +validate_handoff(message)
+        +check_scope(tool, source, allow_list)
+        +budget_allows(used, budget)
+    }
+    class Leadership {
+        +risk_position(db)
+        +decision_queue(db)
+        +assurance_health(db)
+        +system_integrity(db)
+        +alerts(db) / exceptions(db) / change_log(db)
+        +board(db, persona)
+        +record_decision(db, assessment_id, decision)
     }
     class A2ABus {
         +dispatch(envelope, db)
@@ -177,11 +229,21 @@ classDiagram
     FastAPI --> CollectionAgent : launches
     FastAPI --> Explainer : launches
     FastAPI --> SecurityAgent : launches, requires approval
+    FastAPI --> Leadership : serves decision views
+    FastAPI --> AssuranceLedger : integrity / siem / re-score
     FastAPI --> Manager : runs, compiles
     FastAPI --> Scheduler : starts on boot
     FastAPI --> StandardsMatrix : serves
     SecurityAgent --> JobQueue : enqueues + claims
     SecurityAgent --> A2ABus : dispatches
+    SecurityAgent --> Swarm : policy before scoring
+    SecurityAgent --> AssuranceEngine : assesses
+    SecurityAgent --> AssuranceLedger : writes the run's events
+    AssuranceEngine --> AssuranceLedger : one event per gate
+    Swarm --> AssuranceLedger : role + policy events
+    Leadership --> AssuranceLedger : integrity + completeness
+    Leadership --> AssuranceEngine : stored verdict
+    Leadership --> Swarm : system health
     A2ABus --> SecurityEngine : scores + reports
     A2ABus --> OpenshellBroker : sandboxed fetch
     CollectionAgent --> SearchProviders : queries
@@ -204,16 +266,16 @@ flowchart TB
     subgraph P1["app — one package, four layers"]
         direction TB
         L1["Interface<br/>main.py · ledger_api.py"]
-        L2["Agents<br/>agent.py · explainer.py · security_agent.py · agents.py · manager.py"]
-        L3["Engines (pure, testable)<br/>security.py · standards_matrix.py · grounding.py · writeguard.py · drift.py · yield_.py · recommend.py · evalkit.py · openshell.py · cve.py · approvals.py"]
-        L4["Infrastructure<br/>llm.py · search.py · ledger.py · obs.py · scheduler.py · jobqueue.py · models.py · database.py"]
+        L2["Agents<br/>agent.py · explainer.py · security_agent.py · agents.py · manager.py · leadership.py"]
+        L3["Engines (pure, testable)<br/>security.py · assurance.py · swarm.py · standards_matrix.py · grounding.py · writeguard.py · drift.py · yield_.py · recommend.py · evalkit.py · openshell.py · cve.py · approvals.py"]
+        L4["Infrastructure<br/>llm.py · search.py · ledger.py · assurance_ledger.py · obs.py · scheduler.py · jobqueue.py · models.py · database.py"]
     end
     subgraph P2["static — presentation"]
         S1["index.html<br/>no build step; ES2020 in a script tag"]
     end
-    subgraph P3["tests — 27 suites"]
-        T1["unit: grounding, writeguard, drift, yield, recommend, evalkit, approvals, jobqueue, ledger, security, openshell, standards"]
-        T2["integration: investigations, explainer, manager, cves, db isolation, obs"]
+    subgraph P3["tests — 55 suites"]
+        T1["unit: grounding, writeguard, drift, yield, recommend, evalkit, approvals, jobqueue, ledger, security, openshell, standards, assurance, swarm, swarm-adversarial, assurance-ledger"]
+        T2["integration: investigations, explainer, manager, cves, db isolation, obs, assurance-api, leadership"]
     end
     subgraph P4["standards-dashboard — vendored"]
         D1["static build of the AI Standards &amp; Regulations dashboard<br/>served :5173, embedded by iframe"]

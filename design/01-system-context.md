@@ -95,6 +95,10 @@ flowchart TB
 | `agent.py` | plan → search → analyze → map → refine; provider/RLHF/memorization query packs | 429 guard when busy; provider detection before generic parse |
 | `explainer.py` | research → compose → ground → critique → save; `manager_synthesis` carried in summary | Bounded phases; corpus cache; summary carries compiled synthesis |
 | `security_agent.py` | Assessment orchestration + approval gate + PDP/SAF/RLHF/RM hooks | Parks on `awaiting_approval`; posture hooks fail-open |
+| `assurance.py` | Declared-vs-verified residual, architecture/evidence/forensics gates, blast radius, injection cap, decision frame, canonical register keys | Pure engine; verified is the honest number |
+| `assurance_ledger.py` | Assurance events on the ledger (gates, swarm, artifacts, lifecycle, tool, publication), 11 mandatory classes, absence alerts, integrity monitor, SIEM export, re-score triggers | Never raises on write failure; the missing event becomes the finding |
+| `swarm.py` | Role contracts, `policy_engine` (scoring gates + scope + budget), topology/health, resume-from-ledger, typed hand-offs, critic | A failing rule is a reason, not an exception |
+| `leadership.py` | Decision-grade views: risk position, decision queue, assurance health, exposure, system integrity, alerts, exceptions, persona board | Read-only; residual always beside confidence + gate status |
 | `agents.py` | A2A `a2a/1.0` envelopes, 14 agent cards (5 catalog + 4 model + 5 new incl. `mitigation-advisor` + RM) | Every hop on trace + chain |
 | `security.py` | Threat pack 2.1.0, deterministic scoring, report | Pure function; pinned by `evalkit.py` |
 | `model_eval.py` | Model-engineering core: attack taxonomy `memorization`/`alignment_data_leakage` + subtypes, `method_general` 0.25, `preference_data_exposure`, MM01-16, fingerprints 2.0.0/1.1.0 | No LLM; evalkit-pinned |
@@ -187,6 +191,11 @@ flowchart TB
         D1["WAL + busy_timeout=5000"]
         D2["each thread owns its own SessionLocal"]
         D3["additive migrations; the file persists in the volume"]
+    end
+    subgraph FD5["5. An assurance event cannot be written"]
+        E1["record_* returns None instead of raising"]
+        E2["absence becomes a §8.5 finding, not a silent skip"]
+        E3["re_score_triggers flags a residual whose basis changed"]
     end
 
 ```

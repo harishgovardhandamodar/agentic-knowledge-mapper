@@ -520,3 +520,23 @@ have a DLP, a DPIA, or a role mapper; it *weighs* them when scoring a product.
 C13–C15 correspond to the OpenShell integration, which this app does drive.
 The controls this app *enforces* over its own behaviour are catalogued
 separately in [../design/controls.md](../design/controls.md).
+
+## The assurance pass (declared vs verified)
+
+Alongside the catalog scoring, every run now produces an **assurance verdict**
+that separates what the customer *declared* from what the evidence *verifies*:
+
+- A control is verified only when an **accepted primary artifact** names its
+  id; a self-attested vendor page or a pending PDF is not evidence.
+- Pending, low-relevance, or rejected evidence never reduces the residual —
+  the verified number is the honest one.
+- An open **architecture gate** (data-flow, retention, residency, subprocessors)
+  blocks scoring on Restricted/Confidential tiers; the affected threats stay at
+  inherent.
+- **Prompt-injection coverage** is capped at 35% until an accepted adversarial
+  test result exists, so an injection claim cannot push a headline down.
+
+The verdict is written to the assessment row and, event by event, to the audit
+ledger — the same ledger the leadership dashboard reads. See
+[assurance.md](../design/assurance.md) for the closed loop, and
+[ledger.md](ledger.md) for the assurance event classes and absence alerts.

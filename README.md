@@ -10,26 +10,64 @@ audit ledger** with re-derivable proofs. All LLM reasoning goes through the
 **fox-services gateway** (OpenAI-compatible `/v1/chat/completions`, local
 Ollama or mesh peers — no external API keys).
 
+An **assurance layer** turns the security evaluation into a formal risk
+decision: the swarm runs under typed role contracts and a policy engine, the
+ledger records 11 mandatory event classes and raises an alert when one is
+*absent*, and a **leadership dashboard** renders residual risk with its
+confidence and gate status so a human can accept, reject, or grant a
+time-bounded exception — which is itself a ledger event.
+
 ![Knowledge graph of the "frontier model" investigation, with legend](docs/screenshots/01-knowledge-graph.png)
+
+## What's new — assurance-grade evaluation
+
+This work turned the AI Security evaluation from a research instrument into a
+component of a risk-management system:
+
+- **Verified is the honest number.** A control counts only when an **accepted
+  primary artifact** names it; self-attested claims, pending or rejected
+  evidence never reduce the residual. An open **architecture gate** blocks
+  scoring on Restricted/Confidential tiers, and prompt-injection coverage is
+  capped until an adversarial test exists.
+- **The ledger is complete, not just intact.** `app/assurance_ledger.py`
+  records gates, swarm hops, artifacts, lifecycle, tool calls, publications
+  and model context as 11 mandatory event classes. A real run records all 11,
+  and `absence_alerts()` turns a *missing* event into a named §8.5 finding
+  (score after a failed gate, reduction with no attestation, acceptance below
+  confidence, dropped hop, mid-run model change).
+- **The swarm is governed, not opportunistic.** Role contracts, a
+  `policy_engine()` that evaluates scoring gates plus source scope and budget,
+  typed hand-offs, a `critic` self-consistency pass, and resume-from-ledger so
+  an interrupted run rebuilds from its committed events.
+- **Leadership sees the decision, not a PDF.** `app/leadership.py` serves risk
+  position by data tier, a decision queue, assurance health (verified vs
+  declared, time-to-close), an exposure lens, system integrity, alerts and a
+  persona-layered board — residual always beside its confidence and gate status.
+- **Integrity monitoring and SIEM export.** `monitor_integrity()` re-verifies
+  every recent chain; `export_siem_events()` streams runs to the organisation's
+  detection fabric; `re_score_triggers()` flags a residual whose evidence or
+  architecture basis changed after it was written.
+
+Full design: [design/assurance.md](design/assurance.md).
 
 ## Documentation (design, with diagrams)
 
 **Start with [design/](design/README.md)** — the whole system drawn: context,
-UML, data model, sequences, activity, state, UI interaction, privacy, and the
-control catalogue.
+UML, data model, sequences, activity, state, UI interaction, privacy, the
+control catalogue, and the assurance closed loop.
 
 | Doc | Contents |
 |---|---|
-| [**design/**](design/README.md) | Nine diagram documents: [context](design/01-system-context.md) · [UML](design/02-uml.md) · [data model](design/data-model.md) · [interaction](design/interaction.md) · [activity](design/activity.md) · [state](design/state.md) · [UI](design/ui-interaction.md) · [privacy](design/privacy.md) · [controls](design/controls.md) |
-| [docs/architecture.md](docs/architecture.md) | System context, containers, UML component/class diagrams, runtime flows |
+| [**design/**](design/README.md) | Eleven diagram documents: [context](design/01-system-context.md) · [UML](design/02-uml.md) · [data model](design/data-model.md) · [interaction](design/interaction.md) · [activity](design/activity.md) · [state](design/state.md) · [UI](design/ui-interaction.md) · [privacy](design/privacy.md) · [controls](design/controls.md) · [assurance](design/assurance.md) · [risk console](design/risk-console.md) |
+| [docs/architecture.md](docs/architecture.md) | System context, containers, UML component/class diagrams, runtime flows, the assurance closed loop |
 | [docs/agent-loop.md](docs/agent-loop.md) | Collection loop state machine, activity flow, stage protocol, guards |
 | [docs/explainer.md](docs/explainer.md) | Q&A pipeline, graph-first routing, grounding, write guard, threads/quiz/watch |
-| [docs/security-agent.md](docs/security-agent.md) | A2A envelope protocol, fifteen agent cards (catalog + three model paths), threat model, report structure |
+| [docs/security-agent.md](docs/security-agent.md) | A2A envelope protocol, fifteen agent cards (catalog + three model paths), threat model, report structure, the assurance pass |
 | [docs/threatpack.md](docs/threatpack.md) | The versioned scoring catalog: 12 threats, 15 controls, exposure tiers, evalkit |
 | [docs/agentic-manager.md](docs/agentic-manager.md) | Command parsing, fan-out, timeline, summary compilation, nesting |
 | [docs/standards-coverage.md](docs/standards-coverage.md) | 34 frameworks × 10 pillars, score matrix, Findings grading, dashboard |
 | [docs/data-model.md](docs/data-model.md) | ER diagram, tables, review lifecycle, migrations |
-| [docs/ledger.md](docs/ledger.md) | The hash chain, mandates, approvals, proofs, sessions, offline verification |
+| [docs/ledger.md](docs/ledger.md) | The hash chain, mandates, approvals, proofs, sessions, offline verification, the assurance ledger |
 | [docs/privacy.md](docs/privacy.md) | What is stored, what is hashed, what leaves — and what is *not* implemented |
 | [docs/frontend.md](docs/frontend.md) | View map, tab flows, GUI conventions |
 | [docs/operations.md](docs/operations.md) | Deploy, config, LLM failover, scheduler, recovery |
@@ -73,10 +111,13 @@ and [design/01-system-context.md](design/01-system-context.md).
 **Five apps in one page.** The app switcher opens *Mapper* (collect, map,
 review, explain), *AI Security* (assess, score, control), *Agentic Manager*
 (one command → N investigations + a summary), *AI Standards* (34
-frameworks × 10 pillars), and *Design & Architecture* (the nine Mermaid design
-documents, rendered live rather than screenshotted). Mapper has nine views;
-Security has nine sub-tabs; long jobs run through a persisted, lease-based job
-queue so a restart resumes rather than loses.
+frameworks × 10 pillars), and *Design & Architecture* (the eleven Mermaid
+design documents, rendered live rather than screenshotted). Mapper has nine
+views; Security has nine sub-tabs plus a **Leadership Dashboard** layer that
+answers "what is our residual exposure, where are the blocking gaps, what is
+waiting on us, and is the evaluation system itself healthy" from the same
+data the runs wrote; long jobs run through a persisted, lease-based job queue
+so a restart resumes rather than loses.
 
 ## GUI tour
 
@@ -198,6 +239,12 @@ proofs, read claims and their grounding verdicts, trace a claim's blast radius,
 and export a bundle that verifies offline with no database attached.
 
 ![A run's hash-chained events with verdicts, in the security pane](docs/screenshots/23-security-audit-chain.png)
+
+The **assurance ledger** sits on top of this fabric: each security run records
+its gates, swarm hops, artifacts, lifecycle, tool calls and model context as
+events, and the integrity view reports chain status plus the 11 mandatory
+event classes and any *absent* event as a named finding. See
+[docs/ledger.md](docs/ledger.md).
 
 ### AI Security
 
@@ -375,7 +422,7 @@ an action are provable afterwards:
 
 ## API (selection)
 
-96 paths; `GET /openapi.json` lists them all.
+187 paths; `GET /openapi.json` lists them all.
 
 | Method | Path | Description |
 |---|---|---|
@@ -408,6 +455,13 @@ an action are provable afterwards:
 | GET | `/api/investigations/{id}/security/assessments` | Assessment history |
 | GET | `/api/security/assessments/{id}`, `…/markdown`, `…/pdf` | Report / exports |
 | POST | `/api/security/runs/{id}/approval` | Grant or deny a parked run (≠ the requester) |
+| GET | `/api/security/assessments/{id}/assurance` | Stored assurance verdict + decision state |
+| GET | `/api/security/assessments/{id}/vendor-questionnaire` | Architecture answers that would unblock each threat |
+| GET | `/api/security/assessments/{id}/review-queue`, `…/ledger/integrity`, `…/evidence-pack` | Pending evidence, chain+coverage integrity, one-click audit package |
+| POST | `/api/security/assessments/{id}/decision` | Human accept / guardrails / reject / exception (→ ledger event) |
+| GET | `/api/leadership/board?persona=`, `/api/leadership/risk-position`, `…/decision-queue`, `…/assurance-health`, `…/exposure`, `…/system-integrity`, `…/alerts`, `…/exceptions` | Decision-grade dashboard views (Executive / CISO / DPO / Legal / Audit / Security Engineering) |
+| GET | `/api/assurance/ledger/integrity-monitor`, `…/siem-export`, `…/re-score-triggers` | Chain monitor, NDJSON SIEM stream, stale-residual triggers |
+| POST | `/api/assurance/assessments/{id}/re-score` | Re-queue a superseding run when its basis changed |
 | GET | `/api/agents/cards`, `/.well-known/agents` | A2A agent registry (fifteen cards) |
 | GET | `/api/standards/score-matrix?assessment_id=` | Relevance-ranked framework matrix for an assessment |
 | GET | `/api/design/docs`, `/api/design/docs/{id}` | The design set: index with diagram counts / one document as Markdown |
