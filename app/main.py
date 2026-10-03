@@ -51,6 +51,9 @@ app = FastAPI(title="Agentic Knowledge Mapper",
 # (and locked down) separately from the product API.
 app.include_router(ledger_api.router)
 app.include_router(console_mod.router)
+from . import payments_eval as payments_eval_mod
+from . import payments_eval_api as payments_eval_api_mod
+app.include_router(payments_eval_api_mod.router)
 RISK_CONSOLE_ENABLED = os.getenv("RISK_CONSOLE_ENABLED", "1") != "0"
 
 app.add_middleware(
@@ -103,6 +106,16 @@ if os.path.isdir(static_dir):
 @app.on_event("startup")
 def on_start():
     init_db()
+    # Payments evaluation catalog: seeded idempotently so the questionnaire is
+    # always present without a migration step.
+    try:
+        from .database import SessionLocal as _SL
+        from . import payments_eval as _pe
+        _pe.seed_catalog_v1(_SL())
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).warning(
+            "payments-eval catalog seed failed: %s", exc)
     scheduler.start()
     # Queue recovery comes first, and it is what makes the sweep below correct.
     # A job whose worker died with its lease expired is re-queued here; doing it

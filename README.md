@@ -428,6 +428,54 @@ an action are provable afterwards:
 | POST | `/api/ledger/runs/{id}/actions`, `…/approvals`, `/api/ledger/approvals/{id}/decide` | Land an MCP / human / peer action on the chain; decide a gate |
 | GET | `/api/ledger/audit-drops` | What the chain failed to write (fail-open, but never silent) |
 
+## Agentic Payments Security & Privacy Evaluation
+
+Structured questionnaire against a payment-capable agent, managed under the
+Agentic Manager umbrella. A versioned catalog (12 sections, 53 questions) is
+seeded idempotently at startup; operators answer it, the run is scored
+deterministically, and Markdown/JSON reports are exported.
+
+**How to start a run** (API only; requires a named `X-AKM-Actor`):
+
+```bash
+BASE=http://localhost:8204
+A='-H X-AKM-Actor:operator'
+# 1. create a run against a target agent
+RUN=$(curl -s $A -X POST $BASE/api/payments-eval/runs \
+  -H 'Content-Type: application/json' \
+  -d '{"target_agent_id":"pay-agent-1","title":"Payment agent review"}')
+RUN_ID=$(echo $RUN | python3 -c 'import json,sys;print(json.load(sys.stdin)["run"]["id"])')
+# 2. list the catalog, answer questions (pass|partial|fail|na)
+curl -s $BASE/api/payments-eval/catalogs/1 > /tmp/catalog.json
+curl -s $A -X PATCH $BASE/api/payments-eval/runs/$RUN_ID/answers/<question_id> \
+  -H 'Content-Type: application/json' \
+  -d '{"risk_rating":"pass","answer_value":"mTLS + short-lived tokens","evidence_url":"https://…","notes":"verified"}'
+# 3. complete → deterministic overall_score + gap list
+curl -s $A -X POST $BASE/api/payments-eval/runs/$RUN_ID/complete
+# 4. export
+curl -s $BASE/api/payments-eval/runs/$RUN_ID/report.md
+curl -s $BASE/api/payments-eval/runs/$RUN_ID/report.json
+```
+
+**Scoring**: `pass` = 1.0×weight, `partial` = 0.5×weight, `fail` = 0,
+`na` = excluded from the denominator; `overall_score` =
+Σ scores / Σ weights(non-`na`), on a 0–100 scale. Completion also emits
+counts by rating and a fail/partial gap list sorted by severity
+(critical → high → medium → low). Unanswered questions are "not assessed"
+and excluded, not silently failed.
+
+**Extending the catalog**: add a new question to `CATALOG_V1` in
+`app/payments_eval.py` under the right section with a stable `key`
+(question keys are unique per section; the seed upserts idempotently and
+never duplicates). Bump nothing unless you want a distinct version — the
+seed is keyed by `version + section key + question key`.
+
+**Rules**: never store payment credentials or PANs in `answer_value`/`notes`
+(answers are evidence of controls, not the data itself). All writes require a
+named operator; each run-create / answer / complete action is recorded on the
+audit ledger. Set `PAYMENTS_EVAL_ROLES=admin,security` to require an
+`X-AKM-Role` gate on top.
+
 ## Setup
 
 Prerequisites: Docker with compose, NVIDIA drivers (for GPU Ollama hosts),

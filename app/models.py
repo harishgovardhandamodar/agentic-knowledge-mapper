@@ -523,3 +523,126 @@ class Job(Base):
     created_at = Column(DateTime, default=_now)
     started_at = Column(DateTime, nullable=True)
     finished_at = Column(DateTime, nullable=True)
+
+
+# ---------------------------------------------------------------------------
+# Agentic Payments Security & Privacy Evaluation
+# A structured questionnaire run against a payment-capable agent, scored
+# against an idempotently-seeded catalog (payments_eval.seed_catalog_v1).
+#
+# Never store payment credentials or PANs in answers/notes: answer_value and
+# notes are treated as evidence of *controls*, not as the data itself.
+
+
+class EvaluationCatalog(Base):
+    """A versioned evaluation catalog (questionnaire definition)."""
+    __tablename__ = "evaluation_catalogs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    version = Column(String(20), nullable=False, index=True)
+    name = Column(String(200), nullable=False)
+    description = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=_now)
+    updated_at = Column(DateTime, default=_now, onupdate=_now)
+
+    sections = relationship("EvaluationSection",
+                            order_by="EvaluationSection.order_index",
+                            cascade="all, delete-orphan",
+                            back_populates="catalog")
+
+    __table_args__ = (UniqueConstraint("version", name="uq_eval_catalog_version"),)
+
+
+class EvaluationSection(Base):
+    """A catalog section (domain area) of the questionnaire."""
+    __tablename__ = "evaluation_sections"
+
+    id = Column(Integer, primary_key=True, index=True)
+    catalog_id = Column(Integer, ForeignKey("evaluation_catalogs.id",
+                                            ondelete="CASCADE"),
+                        nullable=False, index=True)
+    key = Column(String(80), nullable=False)
+    title = Column(String(200), nullable=False)
+    order_index = Column(Integer, nullable=False, default=0)
+
+    catalog = relationship("EvaluationCatalog", back_populates="sections")
+    questions = relationship("EvaluationQuestion",
+                             order_by="EvaluationQuestion.order_index",
+                             cascade="all, delete-orphan",
+                             back_populates="section")
+
+    __table_args__ = (UniqueConstraint("catalog_id", "key",
+                                       name="uq_eval_section_key"),)
+
+
+class EvaluationQuestion(Base):
+    """One scored question within a section."""
+    __tablename__ = "evaluation_questions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    section_id = Column(Integer, ForeignKey("evaluation_sections.id",
+                                            ondelete="CASCADE"),
+                        nullable=False, index=True)
+    key = Column(String(80), nullable=False)
+    prompt = Column(Text, nullable=False)
+    guidance = Column(Text, nullable=True)
+    question_type = Column(String(20), nullable=False, default="text")
+    options_json = Column(Text, nullable=True)
+    weight = Column(Float, nullable=False, default=1.0)
+    severity_hint = Column(String(20), nullable=True)  # low|medium|high|critical
+    order_index = Column(Integer, nullable=False, default=0)
+    is_active = Column(Integer, nullable=False, default=1)
+
+    section = relationship("EvaluationSection", back_populates="questions")
+
+    __table_args__ = (UniqueConstraint("section_id", "key",
+                                       name="uq_eval_question_key"),)
+
+
+class EvaluationRun(Base):
+    """One evaluation session against a payment-capable agent."""
+    __tablename__ = "evaluation_runs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    catalog_id = Column(Integer, ForeignKey("evaluation_catalogs.id"),
+                        nullable=False, index=True)
+    target_agent_id = Column(String(120), nullable=False, index=True)
+    title = Column(String(300), nullable=False, default="")
+    status = Column(String(20), nullable=False, default="draft",
+                    index=True)  # draft|in_progress|completed|archived
+    overall_score = Column(Float, nullable=True)
+    residual_risk_summary = Column(Text, nullable=True)
+    created_by = Column(String(120), nullable=True)
+    completed_by = Column(String(120), nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=_now)
+    updated_at = Column(DateTime, default=_now, onupdate=_now)
+
+    catalog = relationship("EvaluationCatalog")
+    answers = relationship("EvaluationAnswer",
+                           cascade="all, delete-orphan",
+                           back_populates="run")
+
+
+class EvaluationAnswer(Base):
+    """One operator's answer to a question on a run."""
+    __tablename__ = "evaluation_answers"
+
+    id = Column(Integer, primary_key=True, index=True)
+    run_id = Column(Integer, ForeignKey("evaluation_runs.id",
+                                        ondelete="CASCADE"),
+                    nullable=False, index=True)
+    question_id = Column(Integer, ForeignKey("evaluation_questions.id"),
+                         nullable=False, index=True)
+    answer_value = Column(Text, nullable=True)  # JSON-encoded
+    risk_rating = Column(String(20), nullable=True)  # pass|partial|fail|na
+    evidence_url = Column(String(1000), nullable=True)
+    notes = Column(Text, nullable=True)
+    answered_by = Column(String(120), nullable=True)
+    answered_at = Column(DateTime, nullable=True)
+
+    run = relationship("EvaluationRun", back_populates="answers")
+    question = relationship("EvaluationQuestion")
+
+    __table_args__ = (UniqueConstraint("run_id", "question_id",
+                                       name="uq_eval_answer_run_q"),)
