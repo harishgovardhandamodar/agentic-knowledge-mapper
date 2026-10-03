@@ -1473,5 +1473,57 @@ class TestSessionApi(unittest.TestCase):
             ledger_mod.resolve_session = original
 
 
+class TestControlFlow(unittest.TestCase):
+    """The swarm control-flow view: hops, nested calls, swarm classification."""
+
+    def setUp(self):
+        self.run_id = fresh("control-flow")
+        with L.run(self.run_id) as ctx:
+            ctx.hop("security-orchestrator", "research-collector", "collect_research",
+                    {"top_k": 8}, {"evidence": ["e1"]}, task_id="t1",
+                    latency_ms=81)
+            ctx.hop("research-collector", "mcp-search", "search",
+                    {"q": "adversarial"}, {"hits": 3}, task_id="t1",
+                    latency_ms=20)
+            L.record_llm_call("qwen3.8:27b", "the prompt", "the output",
+                              intent="draft", latency_ms=300,
+                              tokens_in=120, tokens_out=40)
+
+    def _client(self):
+        from fastapi.testclient import TestClient
+        from app.main import app
+        c = TestClient(app)
+        c.__enter__()
+        self.addCleanup(lambda: c.__exit__(None, None, None))
+        return c
+
+    def test_control_flow_lists_hops_and_calls(self):
+        r = self._client().get(f"/api/ledger/runs/{self.run_id}/control-flow")
+        self.assertEqual(r.status_code, 200, r.text)
+        d = r.json()
+        self.assertEqual(d["counts"]["hops"], 2)
+        self.assertGreaterEqual(d["counts"]["calls"], 1)
+        hops = d["hops"]
+        self.assertEqual(hops[0]["from"], "security-orchestrator")
+        self.assertEqual(hops[0]["to"], "research-collector")
+        self.assertEqual(hops[0]["intent"], "collect_research")
+        self.assertEqual(hops[0]["task_id"], "t1")
+        self.assertIn("swarm", d["agents"][0])
+        # extended traceability: the call keeps model + token counts
+        calls = [c for c in d["calls"] if c["kind"] == "llm.call"]
+        self.assertTrue(calls)
+        self.assertEqual(calls[0]["model"], "qwen3.8:27b")
+        self.assertEqual(calls[0]["tokens_in"], 120)
+        self.assertEqual(calls[0]["prompt_hash"][:10],
+                         L.text_digest("the prompt")[:10])
+        # orchestration roles are derived
+        by_name = {a["name"]: a for a in d["agents"]}
+        self.assertEqual(by_name["security-orchestrator"]["role"],
+                         "orchestrator")
+        self.assertEqual(by_name["security-orchestrator"]["swarm"],
+                         "assessment")
+        self.assertEqual(by_name["research-collector"]["swarm"], "knowledge")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

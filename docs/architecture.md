@@ -54,6 +54,12 @@ a dependency it calls or a dataset it reads. Risk Console and Leadership
 Dashboard are **presentation layers** over the same FastAPI — no new scoring,
 no forked business logic: every number is a read from stored rows.
 
+Inside the Mapper, the **Fox Security Research Core** (see
+[fox-core.md](fox-core.md)) is the switchable orchestration engine: four
+swarms of agent roles over MCP tools, sharing the same deterministic spine as
+the Classic `security_agent` path, with the ledger recording which core served
+each run.
+
 Do not confuse containers with **app tabs** in the mapper's own UI. AI
 Standards is a separate container that the Mapper *iframes*; the other six
 tabs — Mapper, AI Security, **Leadership Dashboard**, **Risk Console** (also at

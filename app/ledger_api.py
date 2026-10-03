@@ -168,6 +168,88 @@ def get_timeline_csv(run_id: str, min_severity: str = Query(None)):
                              f'attachment; filename="ledger-{run_id}.csv"'})
 
 
+@router.get("/runs/{run_id}/control-flow")
+def get_control_flow(run_id: str):
+    """Swarm control flow for one run: every agent↔orchestrator handoff with
+    the model/MCP calls made under it, and the swarm each agent belongs to.
+
+    Extended traceability, not a summary: each hop keeps its seq, task_id,
+    trace, latency, payload summaries and input refs; each call keeps its
+    model/tool, token counts, prompt hash and gateway request id -- so a
+    reviewer can walk the orchestration hop by hop and prove which model
+    produced which step."""
+    _require_run(run_id)
+    from . import swarm as _swarm
+    tl = L.timeline(run_id, limit=2000)
+    hops: list[dict] = []
+    calls: list[dict] = []
+    agents: dict[str, dict] = {}
+    for e in tl["events"]:
+        kind = e["kind"]
+        d = e.get("data") or {}
+        actor = e.get("actor") or ""
+        if kind == "agent.hop":
+            src = d.get("from") or actor
+            dst = d.get("to") or ""
+            hops.append({
+                "seq": e["seq"], "ts": e["ts"],
+                "from": src, "to": dst,
+                "intent": e.get("intent") or d.get("intent") or "",
+                "latency_ms": d.get("latency_ms", 0),
+                "task_id": d.get("task_id") or "",
+                "trace": e.get("trace") or "",
+                "input": d.get("input"),
+                "output": d.get("output"),
+                "input_refs": e.get("input_refs") or [],
+            })
+            for name in (src, dst):
+                if name:
+                    agents.setdefault(name, {
+                        "name": name,
+                        "swarm": _swarm.swarm_for_agent(name) or "shared",
+                        "role": ("orchestrator" if str(name).endswith("-orchestrator")
+                                 else "specialist"),
+                    })
+        elif kind in ("llm.call", "mcp.call"):
+            gw = d.get("gateway") or {}
+            calls.append({
+                "seq": e["seq"], "ts": e["ts"], "kind": kind,
+                "actor": actor,
+                "intent": e.get("intent") or "",
+                "trace": e.get("trace") or "",
+                "latency_ms": d.get("latency_ms", 0),
+                "model": d.get("model") or "",
+                "tool": d.get("tool") or "",
+                "server": d.get("server") or "",
+                "tokens_in": d.get("tokens_in"),
+                "tokens_out": d.get("tokens_out"),
+                "prompt_hash": d.get("prompt_hash"),
+                "prompt_chars": d.get("prompt_chars"),
+                "gateway_request_id": (gw.get("request_id")
+                                       if isinstance(gw, dict) else None),
+                "gateway_proof": (gw.get("proof")
+                                  if isinstance(gw, dict) else None),
+            })
+    # Group hops into delegation flows by task id (orchestrator chains).
+    by_task: dict[str, list] = {}
+    for h in hops:
+        by_task.setdefault(h["task_id"] or h["trace"], []).append(h)
+    flows = [{
+        "task_id": key,
+        "trace": hs[0]["trace"],
+        "orchestrator": hs[0]["from"],
+        "steps": [h["seq"] for h in hs],
+        "hops": len(hs),
+    } for key, hs in by_task.items()]
+    return {
+        "run_id": run_id,
+        "agents": sorted(agents.values(), key=lambda a: a["name"]),
+        "hops": hops, "calls": calls, "flows": flows,
+        "counts": {"hops": len(hops), "calls": len(calls),
+                   "flows": len(flows)},
+    }
+
+
 @router.get("/runs/{run_id}/violations")
 def get_violations(run_id: str):
     """Just the bad news: every block/warn, in order. This is the view a human

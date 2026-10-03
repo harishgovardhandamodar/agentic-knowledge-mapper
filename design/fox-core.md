@@ -284,7 +284,18 @@ flowchart TB
         end
     end
     subgraph TB2["TB2 · fox-services GPU node — axiom-1 (2× RTX 5080)"]
-        GW["OpenAI-compatible :8210/v1<br/>OpenShell broker · request proofs<br/>X-Service-Name attribution"]
+        direction TB
+        GW["Gateway :8210/v1<br/>X-Service-Name attribution"]
+        PII["PII scan — counts only<br/>values never stored"]
+        RED["Redaction — logs sanitized<br/>peer logs redacted by default"]
+        CRED["Credential verify — constant-time<br/>returns redacted form only"]
+        LLM["Local GPU model<br/>qwen3.8:27b"]
+        OS["OpenShell broker<br/>sandboxed fetch · egress policy"]
+        GW --> PII
+        PII --> RED
+        RED --> LLM
+        PII -. "opt" .-> CRED
+        GW --> OS
     end
     subgraph TB3["TB3 · The open internet"]
         WEB["RSS · arXiv · DuckDuckGo · NVD / CIRCL"]
@@ -297,25 +308,28 @@ flowchart TB
     MCP -->|"request_approval · append_event"| L
     API -->|"every model call recorded"| L
     MCP -->|"prompt + completion, inside LAN"| GW
-    GW -->|"only queries + page urls"| WEB
-    MCP -->|"search terms + page urls via broker"| GW
+    GW -->|"digest proof + request id (counts, no values)"| API
+    LLM -->|"completion"| GW
+    OS -->|"only queries + page urls"| WEB
+    MCP -->|"search terms + page urls via broker"| OS
 
     classDef note fill:#fbfcfd,stroke:#c8d0da,stroke-dasharray:4 3,font-style:italic,color:#57606a
     class GW note
 ```
 
-| Boundary | Crosses under the Fox core | Never crosses |
-|---|---|---|
-| TB0 → TB1 | the person's intent, session id, actor name (loopback HTTP) | model credentials, browser secrets |
-| TB1a | app-generated claims: who ran, what model, digests, approvals | prompt/output text (redacted to digests) |
-| TB1 → TB2 | prompt + completion for the chosen local model | corpus, credentials, pack constants |
-| TB1/TB2 → TB3 | search terms and page URLs, on the broker's behalf | the corpus, any secret, model weights |
-| TB1 → TB1a | `task_id`, event chain, proof hashes, verdicts | anything redacted by `ledger._redact` |
+| Boundary | What flows | What fox-services does with it | Why it must flow | Never crosses |
+|---|---|---|---|---|
+| TB0 → TB1 | the person's intent, session id, actor name (loopback HTTP) | — (not seen by fox-services) | the app must know who asked and what for, so it can mandate, redact and ledger the run | model credentials, browser secrets |
+| TB1 → TB1a | `task_id`, event chain, proof hashes, verdicts | — (ledger, same app) | the audit must replay who ran, which model, and what was approved | prompt/output text (redacted to digests) |
+| TB1 → TB2 | prompt + completion for the chosen local model | **PII-scan** (records field counts only), **redacts** logs, attributes to `X-Service-Name`, returns a **digest proof** + request id; optional **credential verify** returns the redacted form only | the LLM plans, judges and drafts; it runs only on the local GPU node inside the LAN | corpus, credentials, pack constants (values never stored) |
+| TB2 → TB3 | search terms and page URLs | routed through the **OpenShell broker sandbox** with an egress policy | collection must reach public sources (RSS, arXiv, web) to gather evidence | the corpus, any secret, model weights |
+| TB1a | app-generated claims: who ran, what model, digests, approvals | — (ledger crosses no boundary) | the ledger is the single provable record | anything redacted by `ledger._redact` |
 
 The only path that can reach TB3 is through the fox-services node (TB2), and
-it carries queries/URLs — never the corpus or credentials. The ledger (TB1a)
-crosses no boundary at all; it is read by the same app, and its export is
-verifiable offline without any network.
+it carries queries/URLs — never the corpus or credentials. Inside TB2 every
+prompt is PII-scanned (counts only) and its logs redacted before it reaches
+the local GPU model, so the value never persists; the ledger (TB1a) crosses
+no boundary at all, and its export is verifiable offline without any network.
 
 ## Privacy design elements
 

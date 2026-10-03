@@ -15,7 +15,17 @@ from . import agents as A
 # Swarm definitions: long-lived agent types, many short-lived tasks
 SWARMS = {
     "knowledge": ["collector-orchestrator", "research-collector", "explainer", "drift-judge"],
-    "assessment": ["security-orchestrator", "model-eval-orchestrator", "control-analyst", "model-mitigation-analyst", "threat-intel", "model-adv-intel", "provider-posture", "report-writer"],
+    "assessment": ["security-orchestrator", "model-eval-orchestrator", "control-analyst",
+                   "model-mitigation-analyst", "threat-intel", "model-adv-intel",
+                   "provider-posture", "report-writer",
+                   # model-assessment workflows (agents.py run_model_a2a_workflow,
+                   # run_model_adversarial_a2a_workflow, run_hypothesis_a2a_workflow)
+                   "model-orchestrator", "adversary-orchestrator",
+                   "model-profiler", "model-internals", "model-privacy",
+                   "model-reporter", "model-adversary", "misuse-scout",
+                   "model-adoption-analyst", "hypothesis-analyst",
+                   "hypothesis-verifier", "hypothesis-reporter",
+                   "mitigation-advisor", "experiment-planner"],
     "risk": ["risk-orchestrator", "risk-intake", "risk-triage", "risk-treatment", "risk-monitor", "risk-governance", "risk-reporter"],
     "portfolio": ["manager-orchestrator", "synthesizer"],
 }

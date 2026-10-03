@@ -5142,6 +5142,8 @@ function designZoomStep(d) {
    human actions, claims. Chain integrity is re-derived on demand rather than
    trusted, so "verified" here means recomputed from the stored hashes. */
 let auditRunId = null;
+let auditFlowOpen = false;
+let auditFlowCache = null;
 let auditEvents = [];
 let auditFilter = '';
 let auditExpanded = new Set();
@@ -5486,6 +5488,8 @@ function renderSessionTimeline(tl) {
 async function selectAuditRun(runId) {
   auditRunId = runId;
   auditExpanded = new Set();
+  auditFlowOpen = false;
+  auditFlowCache = null;
   document.querySelectorAll('.audit-run').forEach(b =>
     b.classList.toggle('active', b.dataset.rid === runId));
   await renderAudit();
@@ -5531,7 +5535,9 @@ async function renderAudit() {
       </div>
       <button class="btn btn-ghost btn-sm" onclick="selectAuditRun('${escHtml(auditRunId)}')"><i class="fas fa-rotate"></i> Re-verify</button>
       <button class="btn btn-ghost btn-sm" onclick="exportAuditRun()"><i class="fas fa-download"></i> Export</button>
+      <button class="btn btn-ghost btn-sm${auditFlowOpen ? ' on' : ''}" data-audit-flowbtn onclick="toggleAuditFlow()" title="Swarm control flow: agent↔orchestrator handoffs with the model/MCP calls under each"><i class="fas fa-project-diagram"></i> Swarm control flow</button>
     </div>
+    <div id="auditFlow"${auditFlowOpen ? '' : ' hidden'}></div>
     ${findings.length ? `<div class="audit-sub" style="color:var(--red)">Integrity findings</div>${findings.map(auditFinding).join('')}` : ''}
     ${drift.findings.length ? `<div class="audit-sub">Drift signals</div>${drift.findings.map(auditDrift).join('')}` : ''}
     ${mine.length ? `<div class="audit-sub">Approvals waiting on a human</div>${mine.map(auditApproval).join('')}` : ''}
@@ -5590,6 +5596,79 @@ function auditClaim(c) {
     </button>
     <div id="contam-${escHtml((c.claim_hash || '').slice(0, 16))}"></div>
   </div>`;
+}
+
+const SWARM_COLORS = { knowledge: '#2ca6a4', assessment: '#4a7bd1', risk: '#e8890c', portfolio: '#8a63d2', shared: '#8a94a6' };
+
+async function toggleAuditFlow() {
+  auditFlowOpen = !auditFlowOpen;
+  const btn = document.querySelector('[data-audit-flowbtn]');
+  if (btn) btn.classList.toggle('on', auditFlowOpen);
+  const box = document.getElementById('auditFlow');
+  if (!box) return;
+  box.hidden = !auditFlowOpen;
+  if (auditFlowOpen) loadAuditFlow();
+}
+
+async function loadAuditFlow() {
+  const box = document.getElementById('auditFlow');
+  if (!box || box.hidden) return;
+  if (auditFlowCache) { box.innerHTML = auditFlowCache; return; }
+  box.innerHTML = '<div class="audit-empty"><i class="fas fa-spinner fa-spin"></i> Assembling swarm control flow…</div>';
+  try {
+    const d = await auditFetch(`/runs/${encodeURIComponent(auditRunId)}/control-flow`);
+    auditFlowCache = renderAuditFlow(d);
+    const live = document.getElementById('auditFlow');
+    if (live) live.innerHTML = auditFlowCache;
+  } catch (e) {
+    box.innerHTML = `<div class="audit-empty">Control flow unavailable: ${escHtml(e.message)}</div>`;
+  }
+}
+
+function renderAuditFlow(d) {
+  const counts = d.counts || {};
+  if (!(counts.hops || counts.calls)) {
+    return '<div class="audit-empty">No swarm traffic on this run — no A2A hops or model/MCP calls recorded.</div>';
+  }
+  const col = a => SWARM_COLORS[a.swarm] || '#8a94a6';
+  const legend = (d.agents || []).length
+    ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin:6px 0 10px;">` +
+      (d.agents || []).map(a =>
+        `<span class="audit-chip" style="color:${col(a)};border-color:${col(a)}">${escHtml(a.name)}<span style="opacity:.7"> · ${escHtml(a.swarm)} · ${escHtml(a.role)}</span></span>`).join('') + '</div>'
+    : '';
+  const bySeq = {};
+  (d.hops || []).forEach(h => { bySeq[h.seq] = h; });
+  const callsByTrace = {};
+  (d.calls || []).forEach(c => { (callsByTrace[c.trace || ''] = callsByTrace[c.trace || ''] || []).push(c); });
+  const flowHtml = (d.flows || []).map(f => {
+    const hops = (f.steps || []).map(s => bySeq[s]).filter(Boolean);
+    const calls = callsByTrace[f.trace || ''] || [];
+    const strip = hops.map(h =>
+      `<span class="mgr-step done"><span class="mgr-dot">●</span><span>` +
+      `<strong>${escHtml(h.from)} → ${escHtml(h.to)}</strong><br/>` +
+      `<span class="std-note">${escHtml(h.intent || '')}${h.latency_ms ? ' · ' + h.latency_ms + 'ms' : ''} · seq ${h.seq}</span></span></span>`
+    ).join('<span class="mgr-link"></span>');
+    const callRows = calls.map(c =>
+      `<div class="mgr-ev"><span class="mgr-t">seq ${c.seq}</span><span class="mgr-dot done">●</span>` +
+      `<span class="mgr-evbody"><span class="std-pill">${escHtml(c.kind)}</span> ` +
+      `<strong>${escHtml(c.kind === 'llm.call' ? (c.model || c.actor) : ((c.server || 'mcp') + '.' + (c.tool || c.actor)))}</strong>` +
+      `${c.intent ? ' — ' + escHtml(c.intent) : ''}` +
+      `${c.latency_ms ? ' · ' + c.latency_ms + 'ms' : ''}` +
+      `${c.kind === 'llm.call' && c.tokens_in != null ? ' · ' + (c.tokens_in || 0) + '→' + (c.tokens_out || 0) + ' tok' : ''}` +
+      `${c.prompt_hash ? ' · <span class="audit-hash">' + escHtml(c.prompt_hash.slice(0, 16)) + '…</span>' : ''}` +
+      `${c.gateway_request_id ? ' · <span class="audit-hash" title="gateway request id">' + escHtml(c.gateway_request_id.slice(0, 20)) + '…</span>' : ''}</span></div>`).join('');
+    const orch = (d.agents || []).find(a => a.name === f.orchestrator) || {};
+    return `<div style="border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:10px;">` +
+      `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:6px;">` +
+      `<strong style="color:${col(orch)}">${escHtml(f.orchestrator || 'task')}</strong>` +
+      `<span class="audit-hash">task ${escHtml(f.task_id || '')}</span>` +
+      `<span class="mgr-pill done">${hops.length} hop${hops.length === 1 ? '' : 's'}</span>` +
+      `<span class="mgr-pill done">${calls.length} model/MCP call${calls.length === 1 ? '' : 's'}</span></div>` +
+      `<div class="mgr-strip">${strip}</div>` +
+      (callRows ? `<div style="margin-top:6px;">${callRows}</div>` : '') + '</div>';
+  }).join('');
+  return `<div class="audit-sub">Swarm control flow · ${counts.flows} delegation${counts.flows === 1 ? '' : 's'} · ${counts.hops} hop${counts.hops === 1 ? '' : 's'} · ${counts.calls} model/MCP call${counts.calls === 1 ? '' : 's'} <span style="text-transform:none">— orchestrators → specialists, with the calls made under each</span></div>` +
+    legend + (flowHtml || '<div class="audit-empty">No A2A hops recorded.</div>');
 }
 
 function renderAuditEvents() {
