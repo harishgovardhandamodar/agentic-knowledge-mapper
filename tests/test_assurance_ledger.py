@@ -680,5 +680,94 @@ class TestSiemExport(unittest.TestCase):
         self.assertIsNotNone(blob["chain"]["prev_hash"])
 
 
+class TestReScoreTriggers(unittest.TestCase):
+    """§13.5/Phase 3: a residual is stale when its evidence or architecture
+    basis changed after the assessment was written."""
+
+    def setUp(self):
+        from app.models import (AgentRun, Artifact, Investigation,
+                                SecurityAssessment)
+        init_db()  # idempotent; creates tables after models are imported
+        for m in (SecurityAssessment, AgentRun, Artifact, Investigation,
+                  lg.LedgerEvent, lg.LedgerRun):
+            self._clean(m)
+        self.db = SessionLocal()
+        inv = Investigation(title="re-score", keywords="k", description="d",
+                            sources="web")
+        self.db.add(inv)
+        self.db.commit()
+        self.db.refresh(inv)
+        self.inv_id = inv.id
+
+    def _clean(self, model):
+        db = SessionLocal()
+        try:
+            db.query(model).delete()
+            db.commit()
+        finally:
+            db.close()
+
+    def tearDown(self):
+        self.db.close()
+
+    def _assessment(self, *, gates_open=None, clean=False, days_ago=10):
+        from datetime import datetime, timedelta, timezone
+        from app.models import SecurityAssessment
+        ens = {"assessed": True, "evidence_confidence": 0.31,
+               "evidence_gate": ({"gated_threats": []} if clean
+                                 else {"gated_threats": ["T02"]}),
+               "architecture_gate": ({"gate_blocked_applied": False,
+                                      "open_items": []} if clean
+                                     else {"gate_blocked_applied": True,
+                                           "open_items": ["retention"]}),
+               "gates_open": ([] if clean else (gates_open
+                                                or ["evidence_threshold"])),
+               "decision": {"decision": "reject_until_architecture_gate_closed"}}
+        rec = SecurityAssessment(
+            investigation_id=self.inv_id, run_id=1, product_name="copilot",
+            product_family="copilot", exposure="restricted_data",
+            inherent_pct=100.0, residual_pct=35.4, evidence_confidence=0.31,
+            assurance_json=json.dumps(ens),
+            scoring_json=json.dumps({"assessment_path": "standard"}),
+            markdown="# stub",
+            created_at=datetime.now(timezone.utc) - timedelta(days=days_ago))
+        self.db.add(rec)
+        self.db.commit()
+        self.db.refresh(rec)
+        return rec
+
+    def _accepted_artifact(self, days_ago=2):
+        from datetime import datetime, timedelta, timezone
+        from app.models import Artifact
+        art = Artifact(investigation_id=self.inv_id, title="new evidence",
+                       artifact_type="research", source="vendor",
+                       review="accepted",
+                       created_at=datetime.now(timezone.utc)
+                       - timedelta(days=days_ago))
+        self.db.add(art)
+        self.db.commit()
+        return art
+
+    def test_evidence_accepted_after_scoring_is_a_trigger(self):
+        rec = self._assessment()
+        self._accepted_artifact(days_ago=2)  # after the 10-day-old assessment
+        out = AL.re_score_triggers(db=self.db)
+        self.assertEqual(out["count"], 1)
+        self.assertIn("accepted after scoring", out["triggers"][0]["reason"])
+        self.assertEqual(out["triggers"][0]["assessment_id"], rec.id)
+
+    def test_an_assessment_with_no_open_gates_is_not_a_trigger(self):
+        self._assessment(clean=True)
+        self._accepted_artifact()
+        out = AL.re_score_triggers(db=self.db)
+        self.assertEqual(out["count"], 0)
+
+    def test_evidence_accepted_before_scoring_is_not_a_trigger(self):
+        self._accepted_artifact(days_ago=20)  # before the assessment
+        self._assessment(days_ago=10)
+        out = AL.re_score_triggers(db=self.db)
+        self.assertEqual(out["count"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()

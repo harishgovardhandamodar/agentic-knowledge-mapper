@@ -2530,6 +2530,62 @@ def assurance_siem_export(limit: int = 40, db: Session = Depends(get_db)):
     return PlainTextResponse("\n".join(lines), media_type="application/x-ndjson")
 
 
+@app.get("/api/assurance/ledger/re-score-triggers")
+def assurance_re_score_triggers(investigation_id: Optional[int] = None,
+                                db: Session = Depends(get_db)):
+    """Assessments whose evidence or architecture basis changed after scoring.
+
+    Phase 3: the ledger watches for the event that makes a residual stale --
+    an artifact accepted after the assessment, or an architecture explainer
+    run that finished after it -- and names the row that should be re-scored.
+    """
+    from . import assurance_ledger as _al
+    return _al.re_score_triggers(db=db, investigation_id=investigation_id)
+
+
+@app.post("/api/assurance/assessments/{assessment_id}/re-score")
+def assurance_re_score(assessment_id: int,
+                       request: Request,
+                       db: Session = Depends(get_db)):
+    """Re-queue an assessment from its stored row, so the next run reflects
+    the evidence or architecture that changed since it was scored.
+
+    The signed row is never edited: a re-score is a new run that supersedes
+    it, which is what keeps the history immutable.
+    """
+    import json as _json
+
+    from . import assurance_ledger as _al, security_agent as _sa
+    rec = _assessment_or_404(assessment_id, db)
+    triggers = _al.re_score_triggers(db=db)["triggers"]
+    reason = next((t["reason"] for t in triggers
+                   if t["assessment_id"] == rec.id), None)
+    if reason is None:
+        raise HTTPException(409, "No evidence or architecture change recorded "
+                                 "since this assessment was scored")
+    scoring = _json.loads(rec.scoring_json or "{}") or {}
+    controls = _json.loads(rec.controls_json or "{}") or {}
+    params = {
+        "product_name": rec.product_name or "",
+        "product_url": rec.product_url or "",
+        "exposure": rec.exposure or "confidential_data",
+        "use_case": rec.use_case or "",
+        "workflow_text": rec.workflow_text or "",
+        "focus": _json.loads(rec.focus_json or "[]"),
+        "doc_urls": _json.loads(rec.doc_urls_json or "[]"),
+        "declared_controls": controls.get("active_controls", []),
+        "assessment_mode": (scoring.get("assessment_path")
+                            if scoring.get("assessment_path") != "standard"
+                            else ""),
+        "require_approval": bool(getattr(rec, "require_approval", 0)),
+    }
+    actor = request.headers.get("X-AKM-Actor") or "system"
+    new_run = _sa.launch_security_assessment(rec.investigation_id, params,
+                                             requested_by=actor)
+    return {"queued_run_id": new_run, "supersedes_assessment_id": rec.id,
+            "reason": reason}
+
+
 # ------------------------------------- leadership dashboard endpoints -----
 
 @app.get("/api/leadership/board")

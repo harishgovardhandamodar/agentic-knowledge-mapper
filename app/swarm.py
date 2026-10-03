@@ -349,6 +349,70 @@ def policy_enforcement_point(*, exposure: str, architecture_gate: dict[str, Any]
     }
 
 
+def policy_engine(*, exposure: str, architecture_gate: dict[str, Any],
+                  evidence_gate: dict[str, Any],
+                  forensics: Optional[dict[str, Any]] = None,
+                  threat_pack_stale: Optional[bool] = None,
+                  min_evidence_confidence: float = 0.0,
+                  evidence_confidence: Optional[float] = None,
+                  sources: Optional[Iterable[str]] = None,
+                  allowed_sources: Optional[Iterable[str]] = None,
+                  budget_used: Optional[dict[str, float]] = None,
+                  budget: Optional[dict[str, float]] = None) -> dict[str, Any]:
+    """Full policy-as-code at the orchestrator.
+
+    One evaluation covers both decisions the swarm must make under policy --
+    *may a residual be emitted* (the scoring gate) and *may a research call
+    fire* (source scope and budget). Every rule is a declarative entry with an
+    id, so the orchestrator logs exactly which rule decided the run and an
+    auditor reads the whole policy surface from one structure. A rule that
+    fails is a reason, not an exception: no downstream agent can skip the
+    check by calling the scorer directly.
+    """
+    pep = policy_enforcement_point(
+        exposure=exposure, architecture_gate=architecture_gate,
+        evidence_gate=evidence_gate, forensics=forensics,
+        threat_pack_stale=threat_pack_stale,
+        min_evidence_confidence=min_evidence_confidence,
+        evidence_confidence=evidence_confidence)
+    rules: list[dict[str, Any]] = list(pep["checks"])
+
+    if sources or allowed_sources:
+        denied = [s for s in (sources or [])
+                  if not check_scope("fetch", s, allowed_sources)["allowed"]]
+        rules.append({
+            "id": "source_scope",
+            "passed": not denied,
+            "severity": "block",
+            "detail": (", ".join(denied) if denied else "all sources in allow-list"),
+            "open_items": denied,
+        })
+    if budget_used:
+        b = budget_allows(budget_used, budget)
+        rules.append({
+            "id": "research_budget",
+            "passed": b["allowed"],
+            "severity": "block",
+            "detail": (f"exceeded: {', '.join(b['exceeded']) or 'none'}"),
+            "open_items": b["exceeded"],
+        })
+
+    blocked = [r for r in rules if not r["passed"] and r["severity"] == "block"]
+    warned = [r for r in rules if not r["passed"] and r["severity"] == "warn"]
+    return {
+        "rules": rules,
+        "allowed": not blocked,
+        "restricted_tier": pep["restricted_tier"],
+        "blocked_by": [r["id"] for r in blocked],
+        "warnings": [r["id"] for r in warned],
+        "decision": ("blocked" if blocked
+                     else "allowed_with_penalty" if warned else "allowed"),
+        "confidence_penalty": round(0.1 * len(warned), 2),
+        "note": ("Every rule is a declarative entry the orchestrator logs by id, "
+                 "so 'who decided, under which rule' is a lookup, not a guess."),
+    }
+
+
 #: Kinds that describe a role acting. Everything else in the ledger -- gates,
 #: attestations, decisions -- carries an actor too, and folding those in made
 #: the engine that wrote a gate look like a role nobody wrote a contract for.

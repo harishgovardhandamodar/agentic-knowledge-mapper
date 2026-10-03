@@ -925,3 +925,102 @@ def export_siem_events(run_ids: Optional[Iterable[str]] = None, *,
     finally:
         if own:
             db.close()
+
+
+# -------------------------------------------------- automated re-scoring ----
+
+def re_score_triggers(db=None, *, investigation_id: Optional[int] = None) -> dict[str, Any]:
+    """Which assessments changed their evidence or architecture basis after
+    they were scored, so their residual is stale and should be re-scored.
+
+    An assessment is immutable by design, so a trigger is a signal to run the
+    *next* assessment, never an edit to the signed row. Two reasons are
+    watched on the current row per product/path:
+
+    - ``evidence_change``: an artifact was accepted after the assessment was
+      written while the row still carries evidence-gate or attestation gaps.
+    - ``architecture_change``: an explainer/architecture run completed after
+      the assessment, so the checklist it was blocked on has moved.
+    """
+    from datetime import datetime, timezone
+
+    from .models import AgentRun, Artifact, SecurityAssessment
+
+    own = db is None
+    if own:
+        from .database import SessionLocal
+
+        db = SessionLocal()
+    try:
+        q = db.query(SecurityAssessment)
+        if investigation_id:
+            q = q.filter(SecurityAssessment.investigation_id == int(investigation_id))
+
+        def _dt(value):
+            if value is None:
+                return None
+            if value.tzinfo is None:
+                return value.replace(tzinfo=timezone.utc)
+            return value
+
+        def _latest(rows):
+            best: dict[tuple, Any] = {}
+            for rec in rows:
+                path = (json.loads(rec.scoring_json or "{}") or {}).get(
+                    "assessment_path")
+                key = (rec.investigation_id,
+                       (rec.product_name or rec.product_family or "").strip().lower(),
+                       path)
+                prev = best.get(key)
+                prev_dt = _dt(prev.created_at) if prev else datetime.min.replace(tzinfo=timezone.utc)
+                cur_dt = _dt(rec.created_at) or datetime.min.replace(tzinfo=timezone.utc)
+                if prev is None or cur_dt > prev_dt:
+                    best[key] = rec
+            return best.values()
+
+        triggers: list[dict[str, Any]] = []
+        for rec in _latest(q.all()):
+            created = _dt(rec.created_at)
+            if not created:
+                continue
+            ens = json.loads(rec.assurance_json or "{}") or {}
+            gates_open = ens.get("gates_open") or []
+            gated = (ens.get("evidence_gate") or {}).get("gated_threats") or []
+            arch_open = (ens.get("architecture_gate") or {}).get("open_items") or []
+            if not (gates_open or gated or arch_open):
+                continue
+            accepted = db.query(Artifact).filter(
+                Artifact.investigation_id == rec.investigation_id,
+                Artifact.review == "accepted").all()
+            accepted_after = [a for a in accepted
+                              if (_dt(a.created_at) or created) > created]
+            reason = None
+            if accepted_after:
+                reason = (f"{len(accepted_after)} artifact(s) accepted after "
+                          "scoring")
+            else:
+                later_runs = db.query(AgentRun).filter(
+                    AgentRun.investigation_id == rec.investigation_id,
+                    AgentRun.trigger == "explainer_gap",
+                    AgentRun.status == "done").all()
+                if any((_dt(r.finished_at) or created) > created for r in later_runs):
+                    reason = "architecture explainer run completed after scoring"
+            if reason:
+                triggers.append({
+                    "assessment_id": rec.id,
+                    "investigation_id": rec.investigation_id,
+                    "product": rec.product_name or "",
+                    "created_at": created.isoformat(),
+                    "reason": reason,
+                    "gates_open": gates_open[:8],
+                })
+        triggers.sort(key=lambda t: t["assessment_id"])
+        return {
+            "triggers": triggers,
+            "count": len(triggers),
+            "note": ("An assessment is immutable: a trigger signals the next "
+                     "run, it never edits the signed row."),
+        }
+    finally:
+        if own:
+            db.close()

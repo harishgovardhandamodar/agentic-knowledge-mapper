@@ -314,6 +314,48 @@ class AssuranceApiCase(unittest.TestCase):
         self.assertIn("@timestamp", first)
         self.assertIn("run_id", first)
 
+    def test_re_score_trigger_endpoints(self):
+        from datetime import datetime, timedelta, timezone
+        rec = self._assessment()
+        # accepted evidence after scoring -> a trigger fires
+        art = Artifact(investigation_id=self.inv.id, title="new evidence",
+                       artifact_type="research", source="vendor",
+                       review="accepted",
+                       created_at=datetime.now(timezone.utc))
+        self.db.add(art)
+        self.db.commit()
+        r = self.client.get(
+            f"/api/assurance/ledger/re-score-triggers?investigation_id={self.inv.id}")
+        self.assertEqual(r.status_code, 200)
+        triggers = r.json()["triggers"]
+        self.assertTrue(any(t["assessment_id"] == rec.id for t in triggers))
+
+    def test_re_score_endpoint_queues_a_new_run(self):
+        from datetime import datetime, timedelta, timezone
+        from unittest import mock
+        from app import security_agent as _sa
+        rec = self._assessment()
+        art = Artifact(investigation_id=self.inv.id, title="new evidence",
+                       artifact_type="research", source="vendor",
+                       review="accepted",
+                       created_at=datetime.now(timezone.utc))
+        self.db.add(art)
+        self.db.commit()
+        with mock.patch.object(_sa, "launch_security_assessment",
+                              return_value=999):
+            r = self.client.post(
+                f"/api/assurance/assessments/{rec.id}/re-score")
+        self.assertEqual(r.status_code, 200)
+        body = r.json()
+        self.assertEqual(body["queued_run_id"], 999)
+        self.assertEqual(body["supersedes_assessment_id"], rec.id)
+        self.assertIn("accepted after scoring", body["reason"])
+
+    def test_re_score_endpoint_refuses_without_a_trigger(self):
+        rec = self._assessment()
+        r = self.client.post(f"/api/assurance/assessments/{rec.id}/re-score")
+        self.assertEqual(r.status_code, 409)
+
     def test_alerts_escalate_an_unquantified_restricted_tier(self):
         self._assessment()
         body = self.client.get(
