@@ -10,7 +10,7 @@ flowchart TB
     SW["Agent swarm<br/>role contracts · policy engine · critic"]
     LED["Ledger<br/>complete · immutable · 11 event classes"]
     SCORE["Scoring + Architecture gates + Evidence status"]
-    DASH["Leadership Dashboard → Assurance board<br/>decision-grade view"]
+    DASH["Executive brief — Security & Privacy<br/>assurance board + coverage + register + nodes + graph"]
     HUMAN["Human acceptance / rejection / exception<br/>identity + rationale"]
     SW -->|"every material action"| LED
     LED --> SCORE
@@ -30,8 +30,37 @@ Related: [architecture.md](../docs/architecture.md) ·
 |---|---|---|
 | `app/swarm.py` | Governed collective | role contracts, policy engine, topology, resume, critic, scope/budget |
 | `app/assurance_ledger.py` | Tamper-evident record | hash chain + 11 mandatory event classes + absence alerts |
-| `app/leadership.py` | Decision-grade view | residual always beside confidence and gate status |
-| `static/index.html` | The surface that renders it | Assurance board and Portfolio register are two labelled layers, not one blended view |
+| `app/leadership.py` | Decision-grade view | residual always beside confidence and gate status; coverage of investigations + experiments |
+| `app/fox_nodes.py` | Compute-estate view | declared trust boundary + hardware, live-probed status (down = data, unprobed = not guessed) |
+| `static/index.html` | The surface that renders it | four labelled sub-tabs — Assurance board, Portfolio register, Fox services nodes, Knowledge graph — never one blended view |
+
+## The Executive brief: four labelled surfaces
+
+The dashboard is a brief, not a dump: each sub-tab answers a different question
+about the same stored rows.
+
+- **Assurance board** — risk position by tier, the decision queue (verified
+  residual beside confidence, gate status and blast radius, age vs the SLA),
+  alerts, assurance health, exposure, system integrity, exceptions and the
+  change log, layered by persona lens (a lens changes emphasis, never the
+  underlying number). A **Global · all investigations** toggle reads the whole
+  portfolio.
+- **Coverage** (on the board) — of the investigations in scope, how many have
+  an assessment (unassessed named, not counted away); of the latest model
+  assessments, how many carry an experiment plan and how much of the
+  open-falsifier space those plans target. A **distribution** cuts the same
+  coverage by keywords, data exposure, use case (objective), focus / settings /
+  context, and model class; the registers list every investigation and every
+  experiment plan, folded by default.
+- **Portfolio register** — the older `/api/dashboard/*` risk register.
+- **Fox services nodes** — a trust-boundary map (dashed data-governance
+  perimeter with managed nodes inside, local/dev outside), each node's declared
+  hardware and max data tier, and a live status probe.
+- **Knowledge graph** — every artifact and relationship across every
+  investigation with investigation hub nodes; category/similarity clustering,
+  elastic-like search with filter-to-matches, explicit zoom, an edge-labels
+  toggle, and a hover/click overlay (hover = transient panel, click = modal with
+  the full record and navigable neighbours).
 
 ## Swarm: a governed graph, not a loose pipeline
 

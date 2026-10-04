@@ -45,7 +45,7 @@ Everything else is a dependency the app can work without:
 ```mermaid
 flowchart TB
     subgraph BROWSER["Browser — no build step, vanilla JS"]
-        SPA["static/index.html<br/>Classic Mapper + Security<br/>Leadership Dashboard pane"]
+        SPA["static/index.html<br/>Classic Mapper + Security<br/>Executive brief — Security & Privacy pane"]
         RC["static/console/index.html<br/>Risk Console shell<br/>persona presets · Risk Cards · charts · graphs"]
     end
     subgraph APP["FastAPI app :8204 — container agentic-knowledge-mapper"]

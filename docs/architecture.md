@@ -44,14 +44,13 @@ and they are not layers of one thing — they are peers with different jobs:
 |---|---|---|---|
 | **Agentic Knowledge Mapper** | 8204 | `/` (`static/index.html`) | investigations, graph, explainer, security | fox-services, standards dashboard, OpenShell, web |
 | **Risk Console** | 8204 | `/console` (`static/console/index.html`) | risk-first alternative GUI, same REST | same backend as Mapper (no fork) |
-| **Leadership Dashboard** | 8204 | `#dashboard` (pane) | availability / distribution / robustness | executive, scheduler |
+| **Executive brief — Security & Privacy** | 8204 | `#dashboard` (pane) | assurance board, coverage + distribution, portfolio register, fox-services nodes, knowledge graph | executive, scheduler |
 | **fox-services** | 8210 | `/v1/chat/completions` | LLM gateway (OpenAI-compatible) | local Ollama, mesh peers, OpenShell broker |
 | **AI Standards dashboard** | 5173 | `/` | browsable standards taxonomy | its own `data.json` |
 | **OpenShell broker** | 8210 (in fox-services) | `/broker/fetch` | sandboxed fetch, egress policy | Mapper's fetch requests |
 
 The mapper is the only one that holds research data. Everything else is either
-a dependency it calls or a dataset it reads. Risk Console and Leadership
-Dashboard are **presentation layers** over the same FastAPI — no new scoring,
+a dependency it calls or a dataset it reads. Risk Console and the Executive brief are **presentation layers** over the same FastAPI — no new scoring,
 no forked business logic: every number is a read from stored rows.
 
 Inside the Mapper, the **Fox Security Research Core** (see
@@ -62,7 +61,7 @@ each run.
 
 Do not confuse containers with **app tabs** in the mapper's own UI. AI
 Standards is a separate container that the Mapper *iframes*; the other six
-tabs — Mapper, AI Security, **Leadership Dashboard**, **Risk Console** (also at
+tabs — Mapper, AI Security, **Executive brief — Security & Privacy**, **Risk Console** (also at
 `/console`), Agentic Manager, and Design & Architecture — are pane switches
 inside `static/index.html` (Risk Console also served as a standalone shell at
 `/console` for the toggle). Design & Architecture additionally has no service of
@@ -128,7 +127,7 @@ flowchart TB
 
 | Container / module | Responsibility |
 |---|---|
-| `static/index.html` | Classic GUI: 7 apps (Mapper 9 views, Security 9 sub-tabs, Leadership Dashboard, Risk Console shell, Manager, Standards, Design & Architecture), sidebar, overlays, polling, mermaid + vis-network |
+| `static/index.html` | Classic GUI: 7 apps (Mapper 9 views, Security 9 sub-tabs, Executive brief — Security & Privacy with four sub-tabs, Risk Console shell, Manager, Standards, Design & Architecture), sidebar, overlays, polling, mermaid + vis-network |
 | `static/console/index.html` | Risk Console shell: persona presets, 10 areas, Risk Cards, Report Reader, charts (Chart.js), graphs (lite/risk/pathway), search suggest, saved views, master–detail, drawers |
 | `app/design_docs.py` | Fixed index over `design/`; serves a design document by id for the Design & Architecture tab |
 | `app/main.py` | FastAPI routes (~110 paths), request schemas, JSON serializers, `/console` + `/api/console/*` + `/api/search` |
@@ -138,7 +137,8 @@ flowchart TB
 | `app/assurance.py` | Assurance engine: declared vs verified residual, architecture/evidence/forensics gates, blast radius, injection cap and chains, decision frame, vendor questionnaire, canonical register keys |
 | `app/assurance_ledger.py` | Assurance events on the base ledger (gates, swarm, artifacts, lifecycle, tool, publication, model context), 11 mandatory event classes, §8.5 absence alerts, chain-integrity monitor, SIEM export, re-score triggers |
 | `app/swarm.py` | Swarm governance: per-role contracts, `policy_enforcement_point` + `policy_engine` (scoring gates + source scope + budget), topology/health views, resume-from-ledger, typed hand-offs, critic role |
-| `app/leadership.py` | Decision-grade dashboard: risk position (tier + confidence + verified share), decision queue, assurance health, exposure lens, system integrity, alerts, exceptions register, change log, persona-layered board |
+| `app/leadership.py` | Executive brief: risk position (tier + confidence + verified share), coverage of investigations + experiments with a distribution cut by keywords/tier/use case/focus/model class, decision queue, assurance health, exposure lens, system integrity, alerts, exceptions register, change log, persona-layered board, Markdown/PDF snapshot |
+| `app/fox_nodes.py` | Fox-services node registry: trust boundary + max data tier, declared hardware (CPU/GPU/RAM/storage), live status probes (broker, gateway /v1/models, HTTP; down = data, unprobed when no host configured) |
 | `app/dossier.py` | Report assembly: executive summary + 7 sections + model synthesis RM01-06 + W3 from stored rows, Markdown/HTML, Markdown+images bundle |
 | `app/mermaid_png.py` | Figure renderer: batch-draws mermaid sources to PNG via headless Chromium, cached by source hash |
 | `app/model_eval.py` | Model-engineering core: family/modality enums, attack taxonomy (`memorization`/`alignment_data_leakage` + subtypes `preference_memorization` etc., `method_general` 0.25), `adversarial_coverage_v1` + `adoption_risk_v1` (`preference_data_exposure` signal), method versions 2.0.0/1.1.0, fingerprints (no LLM, evalkit-pinned) |

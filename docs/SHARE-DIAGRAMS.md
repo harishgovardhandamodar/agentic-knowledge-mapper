@@ -14,7 +14,7 @@ flowchart TB
     subgraph GUI["GUI layer"]
         C["Classic Mapper :8204"]
         R["Risk Console :8204/console"]
-        D["Leadership Dashboard"]
+        D["Executive brief — Security & Privacy"]
     end
     subgraph APP["Agentic Knowledge Mapper (FastAPI)"]
         M["Investigation & security agents"]

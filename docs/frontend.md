@@ -9,7 +9,7 @@ Related: [architecture](architecture.md) · [agent-loop](agent-loop.md) ·
 
 ## View map
 
-`switchApp()` selects one of **seven apps** (Mapper, AI Security, Leadership Dashboard, Risk Console, Manager, Standards, Design); `switchView()` selects one of the
+`switchApp()` selects one of **seven apps** (Mapper, AI Security, Executive brief — Security & Privacy, Risk Console, Manager, Standards, Design); `switchView()` selects one of the
 **nine Mapper views**. This is the distinction that trips people up: AI
 Security, Agentic Manager, AI Standards and Design & Architecture are sibling
 *apps*, not tabs inside the Mapper, and the Mapper's own view list does not
@@ -20,7 +20,7 @@ flowchart TB
     APPS["Apps (switchApp)"]
     APPS --> AKM["akm — Mapper"]
     APPS --> SEC["security — AI Security"]
-    APPS --> DASH["dashboard — Leadership Dashboard<br/>availability / distribution / robustness"]
+    APPS --> DASH["dashboard — Executive brief — Security & Privacy<br/>assurance board · coverage · register · nodes · graph"]
     APPS --> CONS["console — Risk Console<br/>persona presets · Risk Cards · Report Reader<br/>/console route, same REST"]
     APPS --> MGR["manager — Agentic Manager"]
     APPS --> STD["standards — AI Standards<br/>(iframed service :5173)"]

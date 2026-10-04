@@ -13,9 +13,9 @@ Ollama or mesh peers — no external API keys).
 An **assurance layer** turns the security evaluation into a formal risk
 decision: the swarm runs under typed role contracts and a policy engine, the
 ledger records 11 mandatory event classes and raises an alert when one is
-*absent*, and a **leadership dashboard** renders residual risk with its
-confidence and gate status so a human can accept, reject, or grant a
-time-bounded exception — which is itself a ledger event.
+*absent*, and the **Executive brief — Security & Privacy** renders residual
+risk with its confidence and gate status so a human can accept, reject, or
+grant a time-bounded exception — which is itself a ledger event.
 
 ![Knowledge graph of the "frontier model" investigation, with legend](docs/screenshots/01-knowledge-graph.png)
 
@@ -113,11 +113,12 @@ review, explain), *AI Security* (assess, score, control), *Agentic Manager*
 (one command → N investigations + a summary), *AI Standards* (34
 frameworks × 10 pillars), and *Design & Architecture* (the eleven Mermaid
 design documents, rendered live rather than screenshotted). Mapper has nine
-views; Security has nine sub-tabs plus a **Leadership Dashboard** layer that
-answers "what is our residual exposure, where are the blocking gaps, what is
-waiting on us, and is the evaluation system itself healthy" from the same
-data the runs wrote; long jobs run through a persisted, lease-based job queue
-so a restart resumes rather than loses.
+views; Security has nine sub-tabs plus the **Executive brief — Security &
+Privacy** layer (Assurance board · Portfolio register · Fox services nodes ·
+Knowledge graph) that answers "what is our residual exposure, where are the
+blocking gaps, what is waiting on us, and is the evaluation system itself
+healthy" from the same data the runs wrote; long jobs run through a
+persisted, lease-based job queue so a restart resumes rather than loses.
 
 ## GUI tour
 
@@ -166,17 +167,24 @@ compare-highlight, and click-through to the artifact overlay are built in.
 
 Pending/accepted/rejected triage with relevance ring, the agent's reason,
 sentiment, tags, and source links. Accept/reject/delete per item; accepting
-feeds the knowledge graph, rejecting dims the node.
+feeds the knowledge graph, rejecting dims the node. The queue now folds into
+**collapsible groups** — Needs review and Drift flagged open by default,
+Accepted and Rejected collapsed with their counts kept in the header, and an
+expand/collapse-all control — so a long run's triage is scannable instead of a
+wall of cards.
 
-![Review queue with relevance rings and accept/reject](docs/screenshots/02-review-queue.png)
+![Review queue folded into collapsible review-state groups](docs/screenshots/32-review-collapsible.png)
 
 ### Artifacts
 
 The *collected* view, as opposed to the *triage* view: every artifact the
 investigation holds, filterable by type, review state, source, and drift, with
 the collection timeline, what each was collected for, and how the actors
-divided the work. Artifacts flagged off-brief by drift detection stay here
-with a **drift** pill — flagged, dimmed, never silently deleted.
+divided the work. The three sections — actor involvement, collection timeline,
+and the full row table — are collapsible (the table starts folded once it is
+long enough to be worth folding), with expand/collapse-all in the banner.
+Artifacts flagged off-brief by drift detection stay here with a **drift** pill —
+flagged, dimmed, never silently deleted.
 
 ![Collected artifacts with collection timeline and filters](docs/screenshots/14-artifacts-collection.png)
 
@@ -353,10 +361,10 @@ confidence and gate status, and a human accept / reject / exception is a ledger
 event — see [design/security-scoring.md](design/security-scoring.md) for the
 full formulas and a worked example.
 
-#### Leadership Dashboard: two labelled layers
+#### Executive brief — Security & Privacy: four labelled surfaces
 
-The tab carries both surfaces, because they answer different questions and were
-previously conflated:
+The tab carries four surfaces, because they answer different questions and
+were previously conflated:
 
 - **Assurance board** (default) — the §9 leadership layer. Risk position by data
   tier with each tier's evidence confidence; the decision queue with verified
@@ -365,8 +373,9 @@ previously conflated:
   system integrity; the exception register; and the change log. One switcher
   picks the lens (Executive / CISO / DPO / Legal / Audit / Security Engineering)
   — a lens changes emphasis and ordering, never the underlying number, and the
-  residual position stays on screen for every lens. The board auto-refreshes
-  every 60 seconds and stops polling when the tab is hidden.
+  residual position stays on screen for every lens. A **Global · all
+  investigations** toggle reads the whole portfolio in one view. The board
+  auto-refreshes every 60 seconds and stops polling when the tab is hidden.
 
   Eight KPI tiles lead, each showing the denominator its count is a fraction of —
   "2 open" and "2 open of 3" are different conversations. The charts are
@@ -376,10 +385,49 @@ previously conflated:
   bands, gate items and swarm success by role. Every point carries a `<title>`,
   so the figures survive a screenshot into a slide deck. Queue columns sort
   client-side, the header sticks, and residual severity is coloured against the
-  worst row on the board rather than an absolute threshold — 40% residual is
-  routine on a Restricted tier and alarming on a Public one.
+  worst row on the board rather than an absolute threshold.
+
+  **Coverage** is a first-class section: of the investigations in scope, how
+  many have at least one assessment (unassessed ones are named, not counted
+  away), and of the latest model assessments, how many carry an experiment plan
+  and how much of the open-falsifier space those plans target. A **coverage
+  distribution** cuts the same coverage figure by keywords, data exposure,
+  use case (objective), focus / settings / context, and model class — each row
+  is covered/total with its percent, and theme/topic are carried by keywords and
+  focus, objective by use case. The registers behind the aggregates (every
+  investigation and every experiment plan) fold away as tables. The Markdown /
+  PDF snapshot (`GET /api/leadership/board.md`, `…/board.pdf`, downloaded as
+  `executive-brief-<scope>.pdf`) carries the same coverage section and the
+  registers when global, so the printed brief matches the screen.
+
+  ![Executive brief: assurance board, global view](docs/screenshots/28-executive-brief.png)
+
+  ![Coverage section with the distribution cut by keywords, tier, use case, focus and model class](docs/screenshots/29-executive-brief-coverage.png)
+
 - **Portfolio register** — the older risk-register dashboard
   (`/api/dashboard/*`): availability, distribution, robustness, and attention.
+- **Fox services nodes** — the compute estate the pipeline runs on, as a
+  **trust-boundary map**: a dashed *data-governance perimeter* holds the managed
+  nodes (axiom, axiom-dgx) and local/developer nodes sit outside it, each with
+  its live status (probed, so a down node is data not an error), role, max data
+  tier, and hardware (CPU/GPU/RAM/storage declared by the operator). Declared
+  posture is configuration, never fabricated; a node with no probe endpoint
+  reports `unprobed` rather than a guess.
+
+  ![Fox services nodes: trust-boundary map and hardware table](docs/screenshots/30-executive-brief-nodes.png)
+
+- **Knowledge graph** — the global knowledge graph: every artifact and every
+  relationship across every investigation (2,200+ artifacts, 100+ investigations
+  on a populated estate), with investigation hub nodes so "what collected what"
+  is visible. It fills the tab, clusters by **category** (artifact type) or
+  **similarity** (tag overlap), and has an **elastic-like search** over
+  label/title/investigation/type/tags with ranked, highlighted results, a
+  **filter-to-matches** mode, explicit **zoom** controls, an **edge-labels**
+  toggle, and a **hover/click overlay**: hover shows a transient detail panel,
+  clicking a node (or an edge) opens a modal with the full record, its edges and
+  navigable neighbours. Theme-aware colours and labels in both light and dark.
+
+  ![Global knowledge graph with search, zoom and edge labels](docs/screenshots/31-executive-brief-graph.png)
 
 Decisions are recorded from the board itself: each queue row carries accept /
 guardrails / reject / exception buttons that demand an actor and a rationale,
@@ -540,8 +588,11 @@ an action are provable afterwards:
 | GET | `/api/security/assessments/{id}/review-queue`, `…/ledger/integrity`, `…/evidence-pack` | Pending evidence, chain+coverage integrity, one-click audit package |
 | POST | `/api/security/assessments/{id}/decision` | Human accept / guardrails / reject / exception (→ ledger event) |
 | GET | `/api/leadership/board?persona=&exposure=&layer=&initiative_id=&window_days=`, `/api/leadership/risk-position`, `…/decision-queue`, `…/assurance-health`, `…/exposure`, `…/system-integrity`, `…/alerts`, `…/exceptions`, `…/change-log`, `…/personas` | Decision-grade dashboard views (Executive / CISO / DPO / Legal / Audit / Security Engineering), scoped by tier/layer/initiative |
-| GET | `/api/leadership/board.md?persona=`, `/api/leadership/board.pdf?persona=` | The whole board as one snapshot (scope, lens, generation time, every residual with its confidence); the PDF is rendered from that same Markdown, so screen and paper cannot drift |
+| GET | `/api/leadership/board.md?persona=`, `/api/leadership/board.pdf?persona=` | The whole board as one snapshot (scope, lens, generation time, every residual with its confidence, the coverage section and registers); the PDF is rendered from that same Markdown, so screen and paper cannot drift |
 | POST | `/api/leadership/alerts/{alert_id}/ack` | Acknowledge / snooze an alert, bound to the `finding_hash` the reader saw |
+| GET | `/api/leadership/infrastructure` | Fox-services nodes: declared trust boundary + hardware (CPU/GPU/RAM/storage), live-probed status (up / down / unprobed) |
+| GET | `/api/leadership/knowledge-graph` | The global knowledge graph: every artifact + relationship with investigation hub nodes, namespaced ids |
+| GET | `/api/leadership/knowledge-graph/clusters?mode=` | Global clustering: category (artifact type) \| similarity (tag overlap) across all investigations |
 | GET | `/api/assurance/ledger/integrity-monitor`, `…/siem-export`, `…/re-score-triggers` | Chain monitor, NDJSON SIEM stream, stale-residual triggers |
 | POST | `/api/assurance/assessments/{id}/re-score` | Re-queue a superseding run when its basis changed |
 | GET | `/api/agents/cards`, `/.well-known/agents` | A2A agent registry (fifteen cards) |
@@ -775,6 +826,11 @@ as rows (Markdown included); PDFs render on demand.
 | | | 25 | [Design & Architecture](docs/screenshots/25-design-architecture.png) |
 | | | 26 | [Design viewer, zoomed](docs/screenshots/26-design-viewer.png) |
 | | | 27 | [Executive summary sub-tab](docs/screenshots/27-summary-tab.png) |
+| | | 28 | [Executive brief (assurance board, global)](docs/screenshots/28-executive-brief.png) |
+| | | 29 | [Executive brief — coverage distribution](docs/screenshots/29-executive-brief-coverage.png) |
+| | | 30 | [Fox services nodes — trust-boundary map](docs/screenshots/30-executive-brief-nodes.png) |
+| | | 31 | [Global knowledge graph](docs/screenshots/31-executive-brief-graph.png) |
+| | | 32 | [Review queue, collapsible groups](docs/screenshots/32-review-collapsible.png) |
 
 ## Structure
 
@@ -790,6 +846,12 @@ agentic-knowledge-mapper/
 │   ├── security.py        # threat/control catalog, scoring, report engine
 │   ├── threatpack.py      # version, fingerprint, CVSS mapping
 │   ├── evalkit.py         # pinned scoring cases + invariants (CI gate)
+│   ├── leadership.py      # executive brief: risk position, decision queue,
+│   │                      #   coverage (+ distribution), assurance health,
+│   │                      #   exposure lens, system integrity, alerts,
+│   │                      #   exceptions, change log, markdown/pdf snapshot
+│   ├── fox_nodes.py       # fox-services node registry: trust boundary,
+│   │                      #   hardware, live status probes
 │   ├── manager.py         # command parsing, fan-out, summary compilation
 │   ├── standards_matrix.py # relevance-ranked framework score matrix
 │   ├── cve.py             # CVE collection and enrichment (NVD → CIRCL → unknown)
@@ -817,9 +879,9 @@ agentic-knowledge-mapper/
 │   └── database.py        # SQLite WAL engine + additive migrations
 ├── design/                # nine diagram documents (see design/README.md)
 ├── docs/                  # written documentation with Mermaid diagrams
-│   └── screenshots/       # 24 GUI captures used above
-├── static/index.html      # GUI (all CSS/JS inline, ~5.9k lines, no build step)
-├── tests/                 # 26 pytest suites (ledger, proofs, approvals, jobs,
+│   └── screenshots/       # 32 GUI captures used above
+├── static/index.html      # GUI (all CSS/JS inline, ~7k lines, no build step)
+├── tests/                 # 30+ pytest suites (ledger, proofs, approvals, jobs,
 │                          #   security, explainer, writeguard, standards, …)
 ├── docker-compose.yml     # port 8204
 ├── Dockerfile

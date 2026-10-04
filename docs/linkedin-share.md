@@ -57,7 +57,7 @@ data, and everything else is a presentation layer or a dependency it calls:
 |---|---|---|
 | Agentic Knowledge Mapper | 8204 | investigations, graph, security, manager |
 | Risk Console | 8204 `/console` | risk-first alternative GUI (same REST) |
-| Leadership Dashboard | 8204 `#dashboard` | availability / distribution / robustness |
+| Executive brief — Security & Privacy | 8204 `#dashboard` | assurance board + coverage, register, fox-services nodes, knowledge graph |
 | fox-services | 8210 | LLM gateway + OpenShell broker (GPU node) |
 | AI Standards dashboard | 5173 | browsable standards taxonomy |
 | OpenShell broker | in fox-services | sandboxed page fetching, egress policy |

@@ -26,7 +26,7 @@ repository; a screenshot of a diagram that has since changed would not be.
 | 08 | [privacy.md](privacy.md) | privacy: trust boundaries, data flow, redaction | What data exists, where it can go, and what provably cannot leave |
 | 09 | [controls.md](controls.md) | control catalogue | Every governance, integrity, and privacy control, with where it is enforced |
 | 10 | [risk-console.md](risk-console.md) | alternative GUI · personas · risk-first | How the parallel Risk Console presents the same backend for researchers to CISOs |
-| 11 | [assurance.md](assurance.md) | closed-loop: swarm → ledger → dashboard → decision | How residual risk becomes an organisational decision, not a research output |
+| 11 | [assurance.md](assurance.md) | closed-loop: swarm → ledger → brief → decision | How residual risk becomes an organisational decision — the Executive brief (assurance board + coverage/distribution, register, fox-services nodes, knowledge graph) — not a research output |
 | 12 | [security-scoring.md](security-scoring.md) | scoring: catalog + model paths · aggregation · assurance overlay | How AKM computes inherent / residual / verified scores, and what makes them honest |
 
 ## Diagram kind → file
