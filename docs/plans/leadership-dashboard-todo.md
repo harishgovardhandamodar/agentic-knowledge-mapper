@@ -152,13 +152,60 @@ zero responses.
 **13 · Live updates.** The board polls every 60s, pausing on a hidden tab or
 when another app is open.
 
-**14 · Board export.** `GET /api/leadership/board.md` renders the whole board as
-one Markdown snapshot carrying scope, persona lens, generation time, and every
-residual beside its confidence.
+**14 · Board export.** `GET /api/leadership/board.md` and `board.pdf` render the
+whole board as one snapshot carrying scope, persona lens, generation time, and
+every residual beside its confidence. The PDF is built from the exported Markdown
+rather than a second template, so the page a board member reads and the page a
+regulator is handed cannot drift; a missing reportlab is a 503 with the
+install hint, not a 500. JSON is `/api/leadership/board` itself.
 
 **15 · Drill-downs.** Queue rows carry their own links (one-page summary,
 evidence pack, vendor questionnaire, exception re-evaluation); the UI opens the
 link the backend chose rather than guessing a route.
+
+### GUI and charts
+
+The board reads as a report first and a dashboard second, which is the wrong
+order for the person who has to decide something on it.
+
+- **KPI strip, not a row of spans.** Eight tiles lead the board, each with the
+  denominator that makes the count mean something: assessments in scope, open
+  decisions as a share of them, over-SLA rows as a share of the queue, open
+  blocking alerts, rows blocked on architecture, the evidenced share of claimed
+  reduction, controls evidenced, and ledger chains intact.
+- **Charts with honest axes.** `portfolio_series` is a *dated* series with the
+  worst row in each bucket beside the mean, so the line has an x-axis and a
+  reader can see that the last point is six months old. The y axis starts at
+  zero. A bucket with no scored assessment is omitted, never zero-filled —
+  drawing a zero for a quiet fortnight is the single most misleading thing this
+  chart could do.
+- **Verified beside declared, per tier.** The gap between the two bars is the
+  whole point of the assurance layer, so they are never merged into one figure.
+- **Horizontal bars** for confidence bands, open gate items, least-evidenced
+  controls and swarm success by role — a vertical bar chart with rotated labels
+  is unreadable at this size.
+- **Severity is relative.** Residual colour ramps against the worst row on the
+  board, because 40% residual is routine on a Restricted tier and alarming on a
+  Public one, and the reader already knows which tier they are looking at.
+- **Client-side column sorting** with a sticky header; nulls sink, because an
+  unknown age is not "the youngest", it is an absence of information.
+- **Alerts grouped by category** and collapsed, because the question a reader
+  brings to an alert list is "is this about the evidence, the architecture or
+  the SLA?", and a flat list makes them re-read every line.
+- **The risk position is the anchor for every lens.** Emphasis reorders and adds
+  sections; it cannot remove the residual position, because a lens that hides
+  the headline number would be reporting something different rather than viewing
+  the same thing differently.
+
+`tests/test_leadership_render.py` runs the real page JavaScript in Node against
+a DOM shim, for a full board, an empty portfolio, a half-scored row, a
+tier-filtered board and every persona lens. It asserts the render does not throw,
+that no literal `undefined` or `NaN` reaches the page, and that every
+`onclick`/`onchange` handler the templates wire up actually exists. It also pins
+the alert status literals in the markup against the vocabulary
+`acknowledge_alert` validates — which is how a Reopen button wired to `'open'`
+instead of `'unacknowledged'` (a guaranteed 422 on click) became a test failure
+rather than a support ticket.
 
 ### Bugs the tests caught while implementing
 
@@ -174,3 +221,9 @@ link the backend chose rather than guessing a route.
   `decision_at` reported every such row as brand new.
 - The Markdown export double-printed `%` on two lines.
 - Alert snoozes were stored but never suppressed anything.
+- The board's Reopen button POSTed `status='open'`, which
+  `acknowledge_alert` refuses — the button was a guaranteed 422 on click, found
+  by a test that pins the markup's status literals against the backend's
+  accepted vocabulary.
+- Every persona lens that did not list `risk_position` in its emphasis rendered
+  the board with no residual position at all, including Legal and Audit.

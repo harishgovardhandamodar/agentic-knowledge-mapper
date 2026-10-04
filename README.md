@@ -361,18 +361,31 @@ previously conflated:
 - **Assurance board** (default) — the §9 leadership layer. Risk position by data
   tier with each tier's evidence confidence; the decision queue with verified
   residual, confidence, gate status, blast radius and age against a 14-day SLA;
-  alerts you can acknowledge or snooze; assurance health; exposure; system
-  integrity; the exception register; and the change log. One switcher picks the
-  lens (Executive / CISO / DPO / Legal / Audit / Security Engineering) — a lens
-  changes emphasis, never the underlying number. The board auto-refreshes every
-  60 seconds and stops polling when the tab is hidden.
+  alerts you can acknowledge, snooze or reopen; assurance health; exposure;
+  system integrity; the exception register; and the change log. One switcher
+  picks the lens (Executive / CISO / DPO / Legal / Audit / Security Engineering)
+  — a lens changes emphasis and ordering, never the underlying number, and the
+  residual position stays on screen for every lens. The board auto-refreshes
+  every 60 seconds and stops polling when the tab is hidden.
+
+  Eight KPI tiles lead, each showing the denominator its count is a fraction of —
+  "2 open" and "2 open of 3" are different conversations. The charts are
+  hand-drawn SVG with no charting dependency: a dated residual line (axis at
+  zero, empty buckets left empty rather than drawn as zero), grouped
+  verified-beside-declared bars per tier, and horizontal bars for confidence
+  bands, gate items and swarm success by role. Every point carries a `<title>`,
+  so the figures survive a screenshot into a slide deck. Queue columns sort
+  client-side, the header sticks, and residual severity is coloured against the
+  worst row on the board rather than an absolute threshold — 40% residual is
+  routine on a Restricted tier and alarming on a Public one.
 - **Portfolio register** — the older risk-register dashboard
   (`/api/dashboard/*`): availability, distribution, robustness, and attention.
 
 Decisions are recorded from the board itself: each queue row carries accept /
 guardrails / reject / exception buttons that demand an actor and a rationale,
-and an expiry for an exception. `GET /api/leadership/board.md` renders the same
-board as a single Markdown snapshot for an archive or a regulator.
+and an expiry for an exception. `GET /api/leadership/board.md` (and
+`board.pdf`) render the same board as a single snapshot for an archive or a
+regulator.
 
 ### Agentic Manager
 
@@ -527,7 +540,7 @@ an action are provable afterwards:
 | GET | `/api/security/assessments/{id}/review-queue`, `…/ledger/integrity`, `…/evidence-pack` | Pending evidence, chain+coverage integrity, one-click audit package |
 | POST | `/api/security/assessments/{id}/decision` | Human accept / guardrails / reject / exception (→ ledger event) |
 | GET | `/api/leadership/board?persona=&exposure=&layer=&initiative_id=&window_days=`, `/api/leadership/risk-position`, `…/decision-queue`, `…/assurance-health`, `…/exposure`, `…/system-integrity`, `…/alerts`, `…/exceptions`, `…/change-log`, `…/personas` | Decision-grade dashboard views (Executive / CISO / DPO / Legal / Audit / Security Engineering), scoped by tier/layer/initiative |
-| GET | `/api/leadership/board.md?persona=` | The whole board as one Markdown snapshot (scope, lens, generation time, every residual with its confidence) |
+| GET | `/api/leadership/board.md?persona=`, `/api/leadership/board.pdf?persona=` | The whole board as one snapshot (scope, lens, generation time, every residual with its confidence); the PDF is rendered from that same Markdown, so screen and paper cannot drift |
 | POST | `/api/leadership/alerts/{alert_id}/ack` | Acknowledge / snooze an alert, bound to the `finding_hash` the reader saw |
 | GET | `/api/assurance/ledger/integrity-monitor`, `…/siem-export`, `…/re-score-triggers` | Chain monitor, NDJSON SIEM stream, stale-residual triggers |
 | POST | `/api/assurance/assessments/{id}/re-score` | Re-queue a superseding run when its basis changed |

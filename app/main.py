@@ -2654,6 +2654,63 @@ def leadership_board_markdown(investigation_id: Optional[int] = None,
     return PlainTextResponse(md, media_type="text/markdown; charset=utf-8")
 
 
+def _board_posture(rp: dict) -> str:
+    """One line for the PDF cover, from figures the board already reports."""
+    conf = (rp.get("evidence_confidence") or {}).get("mean_pct")
+    tiers = len(rp.get("tiers") or [])
+    assessed = rp.get("assessments") or 0
+    share = (rp.get("verified_vs_declared") or {}).get("verified_share_pct")
+    parts = [f"{assessed} assessment{'s' if assessed != 1 else ''} across "
+             f"{tiers} tier{'s' if tiers != 1 else ''}"]
+    if conf is not None:
+        parts.append(f"mean evidence confidence {conf}%")
+    if share is not None:
+        parts.append(f"{share}% of the claimed reduction is evidence-backed")
+    return "; ".join(parts)
+
+
+@app.get("/api/leadership/board.pdf")
+def leadership_board_pdf(investigation_id: Optional[int] = None,
+                         window_days: int = 90, persona: str = "executive",
+                         initiative_id: Optional[int] = None,
+                         layer: Optional[str] = None,
+                         exposure: Optional[str] = None,
+                         db: Session = Depends(get_db)):
+    """The same snapshot as a PDF, built from the same Markdown.
+
+    Rendering the exported Markdown rather than a second template is the point:
+    the page a board member reads and the page a regulator is handed are the
+    same document, so they cannot drift apart.
+    """
+    from . import leadership as _ld
+    try:
+        md = _ld.export_markdown(db, investigation_id, window_days=window_days,
+                                 persona=persona, initiative_id=initiative_id,
+                                 layer=layer, exposure=exposure)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    rp = _ld.risk_position(db, investigation_id, window_days=window_days,
+                           initiative_id=initiative_id, layer=layer,
+                           exposure=exposure)
+    try:
+        pdf = sec_engine.build_pdf(md, title="Leadership assurance board", meta={
+            "product": investigation_id and f"Investigation {investigation_id}"
+                     or "Portfolio-wide assurance board",
+            "exposure_label": persona,
+            "posture": _board_posture(rp),
+            "report_name": "Leadership assurance board",
+        })
+    except RuntimeError as exc:
+        # Missing reportlab is a deployment gap, not a bad request: say so in
+        # the message rather than returning a 500 with a stack trace.
+        raise HTTPException(503, str(exc))
+    from fastapi.responses import Response
+    name = f"assurance-board-{investigation_id or 'portfolio'}.pdf"
+    return Response(content=pdf, media_type="application/pdf",
+                    headers={"Content-Disposition":
+                             f'attachment; filename="{name}"'})
+
+
 @app.get("/api/leadership/personas")
 def leadership_personas(db: Session = Depends(get_db)):
     """The persona lenses and what each one emphasises."""

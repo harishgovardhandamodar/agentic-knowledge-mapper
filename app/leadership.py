@@ -465,6 +465,7 @@ def risk_position(db, investigation_id: Optional[int] = None, *,
         "top_threats_by_tier": tier_threats,
         "trend": trend,
         "trend_windows": _trend_windows(rows),
+        "portfolio_series": _portfolio_series(rows, window_days),
         # The per-tier trend has to use the window the caller asked for.
         # Hard-coding 90 here meant a 365-day board reported per-tier movement
         # over a different period than its own headline trend.
@@ -619,6 +620,53 @@ def _tier_trends(rows: list[Any], window_days: int = 90) -> list[dict[str, Any]]
     return out
 
 
+def _portfolio_series(rows: list[Any], window_days: int,
+                      buckets: int = 24) -> list[dict[str, Any]]:
+    """A dated residual+confidence series for charting.
+
+    ``_sparkline`` folds values into fixed-width buckets with no dates, which is
+    the right shape for a 12-glyph hint and the wrong shape for a chart: a line
+    with no x-axis cannot show that the last point is six months old. Every point
+    here carries the window it covers, so the renderer can label the axis and a
+    reader can see how much history actually exists.
+
+    A bucket with no assessments is omitted rather than zero-filled. Drawing a
+    zero for a quiet fortnight would read as "risk fell to nothing", which is the
+    single most misleading thing this chart could do.
+    """
+    cutoff = _now() - timedelta(days=max(1, window_days))
+    edges: list[datetime] = []
+    span = max(1, window_days)
+    for i in range(buckets + 1):
+        edges.append(cutoff + timedelta(days=span * i / float(buckets)))
+    acc: list[dict[str, list[float]]] = [{"v": [], "c": []} for _ in range(buckets)]
+    for rec in rows:
+        created, v, cf = _row_point(rec)
+        if created is None or created < cutoff:
+            continue
+        idx = int((created - cutoff).total_seconds()
+                  / max(1.0, (edges[-1] - edges[0]).total_seconds()) * buckets)
+        idx = min(buckets - 1, max(0, idx))
+        if v is not None:
+            acc[idx]["v"].append(v)
+        if cf is not None:
+            acc[idx]["c"].append(cf * 100.0 if cf <= 1.0 else cf)
+    out: list[dict[str, Any]] = []
+    for i, slot in enumerate(acc):
+        vv, cc = slot["v"], slot["c"]
+        if not vv and not cc:
+            continue
+        out.append({
+            "bucket_start": edges[i].date().isoformat(),
+            "samples": len(vv) or len(cc),
+            "mean_verified_residual_pct": (round(sum(vv) / len(vv), 1)
+                                           if vv else None),
+            "mean_confidence_pct": (round(sum(cc) / len(cc), 1) if cc else None),
+            "worst_residual_pct": round(max(vv), 1) if vv else None,
+        })
+    return out
+
+
 def _sparkline(values: list[float], buckets: int = 12) -> list[Optional[int]]:
     """Residual values folded into a fixed-width series for a sparkline.
 
@@ -712,6 +760,16 @@ def decision_queue(db, investigation_id: Optional[int] = None, *,
             "architecture_gate": a["architecture_gate"].get("banner"),
             "architecture_open_items": a["architecture_gate"].get("open_items") or [],
             "blast_radius": radius.get("summary"),
+            # The numeric figures beside the summary sentence. Without them a
+            # client can only sort a blast-radius column as text, which orders
+            # "1,000" after "90,000".
+            "records_at_risk": (int(radius["records_at_risk"])
+                                if radius.get("records_at_risk") is not None
+                                else None),
+            "privileged_users": (int(radius["privileged_users"])
+                                 if radius.get("privileged_users") is not None
+                                 else None),
+            "max_payload_mb": radius.get("max_payload_mb"),
             "quantified": radius.get("quantified"),
             "forensics_band": (a.get("forensics") or {}).get("band"),
             "recommended_decision": a.get("decision_derived"),
@@ -1938,6 +1996,21 @@ def export_markdown(db, investigation_id: Optional[int] = None, *,
     L.append(f"- Trend ({sc['window_days']}d window): {tr.get('direction', 'unknown')} "
              f"· delta {_num(tr.get('delta'))} points")
     L.append("")
+    series = rp.get("portfolio_series") or []
+    if series:
+        # The printed snapshot carries the same dated series the chart draws, so
+        # the page a regulator reads can be checked against the screen.
+        L.append("Dated residual and confidence (the charted series):")
+        L.append("")
+        L.append("| From | Mean verified residual | Worst in bucket | Mean confidence | Assessments |")
+        L.append("|---|---:|---:|---:|---:|")
+        for pt in series:
+            L.append(f"| {pt.get('bucket_start')} | "
+                     f"{_pct_or_dash(pt.get('mean_verified_residual_pct'))} | "
+                     f"{_pct_or_dash(pt.get('worst_residual_pct'))} | "
+                     f"{_pct_or_dash(pt.get('mean_confidence_pct'))} | "
+                     f"{pt.get('samples', 0)} |")
+        L.append("")
     if rp.get("architecture_gaps"):
         L.append("Open architecture gate items:")
         for g in rp["architecture_gaps"][:10]:

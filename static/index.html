@@ -9,13 +9,13 @@
 <style>
 :root {
   --bg: #0d1117; --bg2: #161b22; --bg3: #21262d; --border: #30363d;
-  --text: #f0f6fc; --text2: #8b949e; --accent: #58a6ff;
+  --text: #f0f6fc; --text2: #8b949e; --text3: #6e7681; --accent: #58a6ff;
   --green: #3fb950; --orange: #d29922; --red: #f85149; --purple: #bc8cff; --teal: #56d4dd;
   --graph-bg: #0a0e14;
 }
 html.light {
   --bg: #f6f8fa; --bg2: #ffffff; --bg3: #eaeef2; --border: #d0d7de;
-  --text: #1f2328; --text2: #656d76; --accent: #0969da;
+  --text: #1f2328; --text2: #656d76; --text3: #8c959f; --accent: #0969da;
   --green: #1a7f37; --orange: #bd561d; --red: #cf222e; --purple: #8250df; --teal: #096b7a;
   --graph-bg: #f0f2f5;
 }
@@ -675,6 +675,68 @@ td.std-threat .std-name { font-weight: 600; display: block; font-size: 11.5px; }
 .std-legend { display: flex; gap: 10px; flex-wrap: wrap; font-size: 11px; color: var(--text2); align-items: center; }
 .std-note { font-size: 11.5px; color: var(--text2); }
 .std-err { padding: 18px; text-align: center; font-size: 12.5px; color: var(--text2); }
+
+/* ---- leadership board: KPI strip, charts, sortable queue ------------- */
+/* The strip replaces a run of loose spans. A board reader should get the
+   position in one glance, and each tile has to say what it is counting --
+   "3 open" means nothing without knowing open out of what. */
+.lb-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(132px, 1fr)); gap: 8px; margin: 8px 0 10px; }
+.lb-kpi { background: var(--bg3); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; min-width: 0; }
+.lb-kpi-v { font-size: 19px; font-weight: 800; line-height: 1.15; font-variant-numeric: tabular-nums; }
+.lb-kpi-v.red { color: var(--red, #d9534f); }
+.lb-kpi-v.amber { color: var(--orange, #d29922); }
+.lb-kpi-v.green { color: var(--green, #3fb950); }
+.lb-kpi-v.muted { color: var(--text2); }
+.lb-kpi-l { font-size: 10.5px; color: var(--text2); text-transform: uppercase; letter-spacing: 0.4px; margin-top: 2px; }
+.lb-kpi-sub { font-size: 10.5px; color: var(--text3); margin-top: 2px; }
+/* A meter under the number: the tile gives the figure, the meter gives the
+   denominator, which is the part a bare count hides. */
+.lb-kpi-bar { height: 4px; border-radius: 2px; background: var(--bg2); margin-top: 6px; overflow: hidden; }
+.lb-kpi-bar > span { display: block; height: 100%; border-radius: 2px; background: var(--accent); }
+.lb-kpi-bar > span.red { background: var(--red, #d9534f); }
+.lb-kpi-bar > span.amber { background: var(--orange, #d29922); }
+.lb-kpi-bar > span.green { background: var(--green, #3fb950); }
+
+.lb-charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 10px; margin: 8px 0 4px; }
+.lb-chart { background: var(--bg3); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px 8px; min-width: 0; }
+.lb-chart-h { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin-bottom: 2px; }
+.lb-chart-t { font-size: 11.5px; font-weight: 700; color: var(--text); }
+.lb-chart-n { font-size: 10.5px; color: var(--text3); }
+.lb-chart svg { display: block; width: 100%; height: auto; overflow: visible; }
+.lb-chart .lb-axis { stroke: var(--border); stroke-width: 1; }
+.lb-chart .lb-grid { stroke: var(--border); stroke-width: 1; stroke-dasharray: 2 3; opacity: 0.6; }
+.lb-chart text { fill: var(--text3); font-size: 9px; }
+.lb-chart .lb-val { fill: var(--text2); font-size: 9px; font-weight: 700; }
+.lb-chart-legend { display: flex; gap: 10px; flex-wrap: wrap; font-size: 10.5px; color: var(--text2); margin-top: 4px; }
+.lb-chart-legend i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
+/* Hover targets have to be real targets: a 2px line is not clickable, so each
+   point carries a transparent hit area sized for a finger, not for a cursor. */
+.lb-hit { fill: transparent; cursor: pointer; }
+.lb-hit:hover + .lb-dot, .lb-hit:focus + .lb-dot { r: 4; }
+.lb-tip { position: fixed; z-index: 90; pointer-events: none; background: var(--bg2); border: 1px solid var(--accent); border-radius: 6px; padding: 5px 8px; font-size: 11px; color: var(--text); box-shadow: 0 4px 14px rgba(0,0,0,0.35); max-width: 260px; }
+
+/* Residual severity: the same 0-100 figure means different things by tier, so
+   the ramp is relative to the tier's own worst row rather than absolute. */
+.lb-sev { display: inline-block; min-width: 46px; text-align: right; font-variant-numeric: tabular-nums; font-weight: 700; }
+.lb-sev.s1 { color: var(--green, #3fb950); }
+.lb-sev.s2 { color: #8bc34a; }
+.lb-sev.s3 { color: var(--orange, #d29922); }
+.lb-sev.s4 { color: #e8703a; }
+.lb-sev.s5 { color: var(--red, #d9534f); }
+
+.lb-h { cursor: pointer; user-select: none; white-space: nowrap; }
+.lb-h:hover { color: var(--accent); }
+.lb-h .lb-arrow { color: var(--accent); font-size: 9px; margin-left: 2px; }
+.lb-qtable { max-height: 460px; overflow-y: auto; }
+.lb-qtable thead th { position: sticky; top: 0; z-index: 2; }
+.lb-empty { padding: 14px; text-align: center; font-size: 11.5px; color: var(--text2); border: 1px dashed var(--border); border-radius: 8px; }
+.lb-seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.lb-seg > button { background: var(--bg3); border: none; color: var(--text2); font: inherit; font-size: 11px; font-weight: 600; padding: 4px 10px; cursor: pointer; }
+.lb-seg > button + button { border-left: 1px solid var(--border); }
+.lb-seg > button.on { background: rgba(88,166,255,0.14); color: var(--accent); }
+.lb-meter { height: 5px; border-radius: 3px; background: var(--bg2); overflow: hidden; margin-top: 3px; min-width: 40px; }
+.lb-meter > span { display: block; height: 100%; border-radius: 3px; }
+.lb-sub { font-size: 10.5px; color: var(--text3); margin-top: 2px; }
 /* audience highlights */
 .sec-audbar { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
 .sec-aud-chip { background: var(--bg3); border: 1px solid var(--border); border-radius: 999px; color: var(--text2); font: inherit; font-size: 11.5px; padding: 5px 12px; cursor: pointer; display: flex; align-items: center; gap: 6px; }
@@ -9422,7 +9484,14 @@ function secLeadRender() {
     exceptions: secLeadExceptionsHtml,
     change_log: secLeadChangeLogHtml,
   };
-  const sections = (b.emphasis || []).map(k => (render[k] ? render[k](b[k] || {}) : '')).join('');
+  // The persona chooses emphasis, not membership of the headline. A board whose
+  // whole subject is residual risk cannot hide the residual position from the
+  // Legal or Audit lens -- that would be a lens quietly changing what is being
+  // reported. So risk_position is always the anchor and the lens only reorders
+  // and adds around it.
+  const order = ['risk_position'].concat(
+    (b.emphasis || []).filter(k => k !== 'risk_position'));
+  const sections = order.map(k => (render[k] ? render[k](b[k] || {}) : '')).join('');
   const badge = document.getElementById('dashTabBadge');
   const a = b.alerts || {};
   if (badge) {
@@ -9439,19 +9508,13 @@ function secLeadHeaderHtml(b) {
   const dec = rp.decisions || {};
   const a = b.alerts || {};
   const q = b.decision_queue || {};
-  const bits = [
-    `${rp.assessments || 0} assessment(s)`,
-    `${dec.open || 0} open`,
-    `${dec.blocked_on_architecture || 0} gate-blocked`,
-    `${dec.accepted || 0} accepted`,
-    `${q.over_sla_total || 0} over SLA`,
-  ];
   return `<div class="sec-card" style="margin-bottom:8px;">
     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
       <h3 style="font-size:13px;margin:0;"><i class="fas fa-scale-balanced" style="color:var(--teal);"></i> Assurance board <span class="std-note" style="font-weight:400;">· ${escHtml(b.persona_label || '')} lens</span></h3>
       <span class="std-note">${escHtml(b.persona_blurb || '')}</span>
       <span style="flex:1"></span>
-      <button class="btn btn-ghost btn-sm" onclick="secLeadExport()" title="The whole board as one Markdown snapshot"><i class="fas fa-file-arrow-down"></i> Snapshot .md</button>
+      <button class="btn btn-ghost btn-sm" onclick="secLeadExport('md')" title="The whole board as one Markdown snapshot"><i class="fas fa-file-arrow-down"></i> Snapshot .md</button>
+      <button class="btn btn-ghost btn-sm" onclick="secLeadExport('pdf')" title="The same snapshot as a PDF, rendered from that Markdown. Needs reportlab on the server; returns 503 with the install hint if it is missing."><i class="fas fa-file-pdf"></i> Snapshot .pdf</button>
     </div>
     <div class="std-filters" style="margin-bottom:8px;">
       <label class="std-note" for="secLeadPersona">Lens</label>
@@ -9466,15 +9529,78 @@ function secLeadHeaderHtml(b) {
       <select id="secLeadSla" aria-label="Decision SLA in days" onchange="secLeadOffset=0;secLeadLoad(true)">
         <option value="7">7d</option><option value="14" selected>14d</option><option value="30">30d</option><option value="90">90d</option>
       </select>
-      <label class="std-note" style="display:flex;gap:4px;align-items:center;"><input type="checkbox" id="secLeadShowAck" onchange="secLeadLoad(true)"> show acknowledged</label>
+      <label class="std-note" style="display:flex;gap:4px;align-items:center;" title="Also shows alerts that were snoozed, with their end date."><input type="checkbox" id="secLeadShowAck" onchange="secLeadLoad(true)"> show acknowledged &amp; snoozed</label>
       <span class="std-note" id="secLeadLive" style="margin-left:auto;"></span>
     </div>
-    <div style="font-size:11.5px;display:flex;gap:14px;flex-wrap:wrap;">
-      ${bits.map(x => `<span>${escHtml(x)}</span>`).join('')}
-      <span>${a.blocking || 0} blocking alert(s)</span>
-    </div>
-    <div class="std-note" style="margin-top:6px;">${escHtml(b.contract ? b.contract.note : '')}</div>
+    <div class="lb-kpis">${secLeadKpis(b)}</div>
+    <div class="std-note" style="margin-top:2px;">${escHtml(b.contract ? b.contract.note : '')}</div>
   </div>`;
+}
+
+// The strip answers "where do we stand" before any table does. Every tile that
+// could be read as a bare count carries the denominator it is a fraction of,
+// because "2 open" and "2 open of 3" are different conversations.
+function secLeadKpis(b) {
+  const rp = b.risk_position || {}, dec = rp.decisions || {}, q = b.decision_queue || {},
+        a = b.alerts || {}, h = b.assurance_health || {}, c = rp.controls || {},
+        conf = rp.evidence_confidence || {}, vvd = rp.verified_vs_declared || {};
+  const tierTotals = (rp.tiers || []).reduce((n, t) => n + (t.count || 0), 0);
+  const pct = (n, d) => (d ? Math.round(100 * n / d) : null);
+  const tile = [];
+
+  tile.push(lbKpi(tierTotals, 'assessments in scope',
+    { sub: tierTotals ? (rp.tiers || []).map(t => `${t.count} ${String(t.tier).replace(/_/g, ' ')}`).join(' · ') : 'nothing in this scope',
+      tone: tierTotals ? '' : 'muted' }));
+
+  const open = dec.open || 0;
+  tile.push(lbKpi(open, 'open decisions',
+    { tone: open ? 'amber' : 'green',
+      barPct: pct(open, tierTotals),
+      barTone: open ? 'amber' : 'green',
+      sub: tierTotals ? `${pct(open, tierTotals)}% of ${tierTotals} in scope` : 'nothing in this scope' }));
+
+  const overSla = q.over_sla_total || 0;
+  tile.push(lbKpi(overSla, `over the ${q.sla_days || 14}d SLA`,
+    { tone: overSla ? 'red' : 'green',
+      barPct: q.count ? pct(overSla, q.count) : null,
+      barTone: overSla ? 'red' : 'green',
+      sub: q.count ? `of ${q.count} queued rows` : 'queue empty' }));
+
+  const blocking = a.open_blocking || 0;
+  tile.push(lbKpi(blocking, 'open blocking alerts',
+    { tone: blocking ? 'red' : 'green',
+      sub: `${a.warnings || 0} warning(s) · ${a.acknowledged || 0} acknowledged` }));
+
+  const gateBlocked = dec.blocked_on_architecture || 0;
+  tile.push(lbKpi(gateBlocked, 'blocked on architecture',
+    { tone: gateBlocked ? 'amber' : 'green',
+      barPct: pct(gateBlocked, tierTotals),
+      sub: (rp.architecture_gaps || []).length
+        ? `top gap: ${(rp.architecture_gaps[0] || {}).item} (${(rp.architecture_gaps[0] || {}).assessments})`
+        : 'no open gate items' }));
+
+  const share = vvd.verified_share_pct;
+  tile.push(lbKpi(share === null || share === undefined ? '—' : share + '%',
+    'reduction is evidence-backed',
+    { tone: share === null || share === undefined ? 'muted' : share >= 70 ? 'green' : share >= 40 ? 'amber' : 'red',
+      barPct: share,
+      barTone: share === null || share === undefined ? '' : share >= 70 ? 'green' : share >= 40 ? 'amber' : 'red',
+      sub: `${vvd.verified_reduction_pct_points || 0} of ${vvd.claimed_reduction_pct_points || 0} points claimed` }));
+
+  const evRate = c.verified_pct;
+  tile.push(lbKpi(evRate === null || evRate === undefined ? '—' : evRate + '%',
+    'controls evidenced',
+    { tone: evRate === null || evRate === undefined ? 'muted' : evRate >= 70 ? 'green' : 'amber',
+      barPct: evRate,
+      sub: `${c.declared || 0} declared · ${c.unknown || 0} unknown` }));
+
+  const chains = h.ledger || {};
+  const intact = chains.chains_intact || 0, checked = chains.runs_checked || 0;
+  tile.push(lbKpi(checked ? `${intact}/${checked}` : '—', 'ledger chains intact',
+    { tone: !checked ? 'muted' : intact === checked ? 'green' : 'red',
+      sub: checked ? (intact === checked ? 'every checked chain verifies' : 'a chain does not verify — see integrity') : 'no chains checked yet' }));
+
+  return tile.join('');
 }
 
 function secLeadFootHtml(b) {
@@ -9493,63 +9619,202 @@ function secLeadFootHtml(b) {
 }
 
 // ---- A. risk position -----------------------------------------------------
+let lbChartMode = 'residual', lbQueueSort = null;
+
 function secLeadRiskHtml(rp) {
-  const tiers = (rp.tiers || []).map(t => {
+  const tiers = rp.tiers || [];
+  // Severity is scaled against the worst residual actually on this board, so
+  // the colour ramp means "relative to what you are looking at" rather than an
+  // absolute threshold that would paint every Public-tier row green.
+  const worst = Math.max(...tiers.map(t => Number(t.mean_verified_residual) || 0), 0) || 0;
+  const rows = tiers.map(t => {
     const tr = (rp.tier_trends || []).find(x => x.tier === t.tier) || {};
+    const delta = tr.delta_pct_points;
     return `<tr>
-      <td>${escHtml(String(t.tier).replace(/_/g, ' '))}</td>
+      <td><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:${LB_TIER_COLORS[t.tier] || 'var(--accent)'};margin-right:6px;"></span>${escHtml(String(t.tier).replace(/_/g, ' '))}</td>
       <td style="text-align:right;">${t.count}</td>
-      <td style="text-align:right;">${secLeadNum(t.mean_verified_residual, '%')}</td>
+      <td style="text-align:right;">${lbSev(t.mean_verified_residual, worst)}</td>
       <td style="text-align:right;">${secLeadNum(t.mean_declared_residual, '%')}</td>
       <td style="text-align:right;">${secLeadNum(t.mean_forensics)}</td>
-      <td style="text-align:right;">${t.quantified || 0}/${t.count}</td>
-      <td style="text-align:right;">${t.blocked || 0}</td>
-      <td>${secLeadSpark(tr.series)}<span class="std-note">${tr.delta_pct_points === null || tr.delta_pct_points === undefined ? 'no prior window' : (tr.delta_pct_points > 0 ? '+' : '') + tr.delta_pct_points + ' pts'}</span></td>
+      <td style="text-align:right;">${t.quantified || 0}/${t.count}
+        ${t.count && t.quantified < t.count ? `<div class="lb-meter" title="${t.count - t.quantified} of ${t.count} have no quantified blast radius"><span style="width:${Math.round(100 * t.quantified / t.count)}%;background:var(--accent);"></span></div>` : ''}</td>
+      <td style="text-align:right;">${t.blocked || 0}
+        ${t.blocked ? `<div class="lb-meter" title="${t.blocked} of ${t.count} blocked on the architecture gate"><span style="width:${Math.round(100 * t.blocked / t.count)}%;background:var(--orange);"></span></div>` : ''}</td>
+      <td>${secLeadSpark(tr.series)}${delta === null || delta === undefined
+        ? '<span class="std-note">no prior window</span>'
+        : `<span class="std-note" style="color:${delta > 0 ? 'var(--red, #d9534f)' : delta < 0 ? 'var(--green, #3fb950)' : 'inherit'};">${delta > 0 ? '+' : ''}${delta} pts</span>`}</td>
     </tr>`;
   }).join('');
-  const tw = (rp.trend_windows || []).map(w =>
-    `<span style="display:inline-flex;gap:4px;align-items:baseline;margin-right:12px;">
+
+  const tw = (rp.trend_windows || []).map(w => {
+    const color = w.direction === 'worsening' ? 'var(--red, #d9534f)'
+      : w.direction === 'improving' ? 'var(--green, #3fb950)' : 'var(--text3)';
+    return `<span style="display:inline-flex;gap:4px;align-items:baseline;margin-right:14px;" title="${escHtml(String(w.direction).replace(/_/g, ' '))} · ${w.samples} in window, ${w.prior_samples} before">
        <b>${w.window_days}d</b>
        <span style="color:var(--text2);">${secLeadNum(w.mean_residual_pct, '%')}</span>
-       <span style="color:${w.direction === 'worsening' ? 'var(--red, #d9534f)' : w.direction === 'improving' ? 'var(--green, #5cb85c)' : 'var(--text3)'}">${escHtml(w.direction.replace(/_/g, ' '))}</span>
+       <span style="color:${color};font-weight:700;">${escHtml(String(w.direction).replace(/_/g, ' '))}</span>
        <span style="color:var(--text3);font-size:10.5px;">n=${w.samples}</span>
-     </span>`).join('');
-  const vvd = rp.verified_vs_declared || {};
-  const conf = rp.evidence_confidence || {};
+     </span>`;
+  }).join('');
+
+  const vvd = rp.verified_vs_declared || {}, conf = rp.evidence_confidence || {};
+  const barRows = tiers.map(t => ({
+    label: String(t.tier).replace(/_/g, ' '),
+    a: t.mean_verified_residual, b: t.mean_declared_residual,
+  }));
+  const confBars = Object.entries(conf.distribution || {}).map(([k, v]) => ({
+    label: k, value: v,
+    color: parseInt(k, 10) < 40 ? 'var(--red, #d9534f)'
+      : parseInt(k, 10) < 70 ? 'var(--orange, #d29922)' : 'var(--green, #3fb950)',
+  }));
+  const gapBars = (rp.architecture_gaps || []).slice(0, 8).map(g => ({
+    label: String(g.item), value: g.assessments, color: 'var(--orange, #d29922)',
+  }));
+
+  const series = rp.portfolio_series || [];
+  const chart = lbChartMode === 'confidence'
+    ? lbLineChart(series, { series: 'confidence',
+        aria: 'Mean evidence confidence over time',
+        empty: 'No scored rows in this window.' })
+    : lbLineChart(series, { aria: 'Mean verified residual over time' });
+
   const byTier = (rp.top_threats_by_tier || []).map(tb =>
     `<div style="margin-bottom:6px;">
-       <b style="font-size:11.5px;">${escHtml(String(tb.tier).replace(/_/g, ' '))}</b>
-       <span class="std-note">${tb.distinct_threats} distinct threat(s)${tb.forced_to_inherent ? ` · <span style="color:var(--text2);">${tb.forced_to_inherent} forced to inherent (evidence gate held it)</span>` : ''}</span>
+       <b style="font-size:11.5px;color:${LB_TIER_COLORS[tb.tier] || 'var(--text)'}">${escHtml(String(tb.tier).replace(/_/g, ' '))}</b>
+       <span class="std-note">${tb.distinct_threats} distinct threat(s)${tb.forced_to_inherent ? ` · <span style="color:var(--orange);">${tb.forced_to_inherent} forced to inherent (evidence gate held it)</span>` : ''}</span>
        <div>${(tb.threats || []).map(t =>
-         `<div style="font-size:11.5px;">${escHtml(String(t.threat_id || ''))} — ${secLeadNum(t.verified_residual, '%')} verified ${t.coverage_confidence_pct === null || t.coverage_confidence_pct === undefined ? '' : `· ${t.coverage_confidence_pct}% coverage`}${t.forced_to_inherent ? ' · <b>forced to inherent</b>' : ''} <button class="btn btn-ghost btn-sm" onclick="secLeadOpenAssessment(${t.assessment_id})">open</button></div>`).join('') || '<span class="std-note">none scored</span>'}</div>
+         `<div style="font-size:11.5px;display:flex;gap:6px;align-items:baseline;">
+            <span style="flex:0 0 62px;color:var(--text2);">${escHtml(String(t.threat_id || ''))}</span>
+            <span style="flex:1;">${secLeadMeter(t.verified_residual, worst)}</span>
+            <span style="flex:0 0 46px;text-align:right;">${secLeadNum(t.verified_residual, '%')}</span>
+            ${t.coverage_confidence_pct === null || t.coverage_confidence_pct === undefined ? '' : `<span class="std-note" style="flex:0 0 52px;text-align:right;">${t.coverage_confidence_pct}% cov</span>`}
+            ${t.forced_to_inherent ? '<span class="std-note" style="color:var(--orange);">inherent</span>' : ''}
+            <button class="btn btn-ghost btn-sm" onclick="secLeadOpenAssessment(${t.assessment_id})">open</button>
+          </div>`).join('') || '<span class="std-note">none scored</span>'}</div>
      </div>`).join('');
-  const gaps = (rp.architecture_gaps || []).map(g =>
-    `<li>${escHtml(String(g.item))} <span class="std-note">(${g.assessments} assessment(s))</span></li>`).join('');
+
   return `<div class="sec-card" style="margin-bottom:8px;">
     <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;">
       <h3 style="font-size:13px;margin:0;"><i class="fas fa-chart-column" style="color:var(--teal);"></i> Risk position</h3>
       <span class="std-note">Verified residual by data tier. Public and Restricted never average into one number.</span>
     </div>
     <div class="std-filters" style="margin:6px 0;">${tw || '<span class="std-note">No trend history yet — the direction is unknown, not flat.</span>'}</div>
+
+    <div class="lb-charts">
+      <div class="lb-chart">
+        <div class="lb-chart-h">
+          <span class="lb-chart-t">${lbChartMode === 'confidence' ? 'Evidence confidence over time' : 'Verified residual over time'}</span>
+          <span class="lb-chart-n">${series.length} bucket(s) with data · axis starts at zero</span>
+          <span style="flex:1"></span>
+          <span class="lb-seg">
+            <button class="${lbChartMode === 'residual' ? 'on' : ''}" onclick="secLeadChartMode('residual')">Residual</button>
+            <button class="${lbChartMode === 'confidence' ? 'on' : ''}" onclick="secLeadChartMode('confidence')">Confidence</button>
+          </span>
+        </div>
+        ${chart}
+        ${lbChartMode === 'residual' && series.length
+          ? lbLegend([{ color: 'var(--accent)', label: 'mean verified residual' },
+                      { color: 'var(--purple)', label: 'mean evidence confidence (own axis)' }])
+          : ''}
+        <div class="lb-chart-n" style="margin-top:4px;">Gaps are gaps: a bucket with no scored assessment is left empty rather than drawn as zero.</div>
+      </div>
+      <div class="lb-chart">
+        <div class="lb-chart-h">
+          <span class="lb-chart-t">Verified beside declared, per tier</span>
+          <span class="lb-chart-n">the gap is what evidence is missing</span>
+        </div>
+        ${lbGroupedBars(barRows, { aria: 'Verified residual beside declared residual, per data tier' })}
+        ${lbLegend([{ color: 'var(--accent)', label: 'verified' }, { color: 'var(--text3)', label: 'declared (vendor claim)' }])}
+      </div>
+      <div class="lb-chart">
+        <div class="lb-chart-h">
+          <span class="lb-chart-t">Evidence confidence distribution</span>
+          <span class="lb-chart-n">${secLeadNum(conf.mean_pct, '%')} mean</span>
+        </div>
+        ${lbBars(confBars, { empty: 'No confidence recorded for anything in scope.', labelWidth: 60 })}
+        <div class="lb-chart-h" style="margin-top:8px;">
+          <span class="lb-chart-t">Open architecture gate items</span>
+        </div>
+        ${gapBars.length ? lbBars(gapBars, { labelWidth: 130 })
+          : '<div class="lb-chart-n">No open gate items in scope.</div>'}
+      </div>
+    </div>
+
     <div class="std-note">Mean verified ${secLeadNum(vvd.mean_verified_residual_pct, '%')} vs declared ${secLeadNum(vvd.mean_declared_residual_pct, '%')} ·
       <b>${secLeadNum(vvd.verified_share_pct, '%')}</b> of the claimed reduction is evidenced (${vvd.verified_reduction_pct_points} of ${vvd.claimed_reduction_pct_points} points) ·
       mean evidence confidence ${secLeadNum(conf.mean_pct, '%')}</div>
     <div style="overflow-x:auto;margin-top:6px;"><table class="sec-table">
       <tr><th>Tier</th><th style="text-align:right;">N</th><th style="text-align:right;">Verified</th><th style="text-align:right;">Declared</th><th style="text-align:right;">Forensics</th><th style="text-align:right;">Radius quantified</th><th style="text-align:right;">Gate-blocked</th><th>Trend</th></tr>
-      ${tiers || '<tr><td colspan="8">No assessments in scope.</td></tr>'}
+      ${rows || '<tr><td colspan="8">No assessments in scope.</td></tr>'}
     </table></div>
     ${conf.distribution ? `<div style="font-size:11.5px;margin-top:6px;">Confidence distribution: ${Object.entries(conf.distribution).map(([k, v]) => `${escHtml(k)} <b>${v}</b>`).join(' · ')}</div>` : ''}
     ${byTier ? `<div style="margin-top:8px;"><b style="font-size:11.5px;">Dominant threats per tier</b><div>${byTier}</div></div>` : ''}
-    ${gaps ? `<div style="margin-top:6px;"><b style="font-size:11.5px;">Open architecture gate items</b><ul style="font-size:11.5px;margin:2px 0;padding-left:18px;">${gaps}</ul></div>` : ''}
   </div>`;
 }
 
+function secLeadMeter(v, worst) {
+  if (v === null || v === undefined) return '<span class="std-note">—</span>';
+  const w = worst ? Math.max(2, Math.round(100 * Number(v) / worst)) : 2;
+  const color = w >= 85 ? 'var(--red, #d9534f)' : w >= 65 ? '#e8703a'
+    : w >= 45 ? 'var(--orange, #d29922)' : w >= 25 ? '#8bc34a' : 'var(--green, #3fb950)';
+  return `<span class="lb-meter" style="width:100%;"><span style="width:${w}%;background:${color};"></span></span>`;
+}
+
+function secLeadChartMode(m) {
+  lbChartMode = (m === 'confidence') ? 'confidence' : 'residual';
+  secLeadRender();
+}
+
 // ---- B. decision queue ----------------------------------------------------
+// Client-side column sorting. The server already sorts by residual/age/
+// confidence; this adds the ones a CISO actually reaches for next (blast radius,
+// state) without a round trip, and it degrades to the server order on first
+// paint so the two never disagree about what "sorted by residual" means.
+const LB_QUEUE_COLS = {
+  product: { label: 'Product', get: r => (r.product || '').toLowerCase(), num: false },
+  verified: { label: 'Verified residual', get: r => Number(r.verified_residual_pct), num: true },
+  confidence: { label: 'Confidence', get: r => Number(r.evidence_confidence_pct), num: true },
+  state: { label: 'State / gate', get: r => String(r.state || ''), num: false },
+  blast: { label: 'Blast radius', get: r => (r.quantified === false ? -1 : Number(r.records_at_risk) || 0), num: true },
+  age: { label: 'Age', get: r => (r.age_days === null || r.age_days === undefined ? -1 : Number(r.age_days)), num: true },
+  recommended: { label: 'Recommended', get: r => String(r.recommended_decision || ''), num: false },
+};
+
+function secLeadSortBy(col) {
+  lbQueueSort = (lbQueueSort && lbQueueSort.col === col)
+    ? { col, dir: lbQueueSort.dir === 'desc' ? 'asc' : 'desc' } : { col, dir: 'desc' };
+  secLeadRender();
+}
+
+function secLeadSorted(rows) {
+  if (!lbQueueSort) return rows || [];
+  const spec = LB_QUEUE_COLS[lbQueueSort.col];
+  if (!spec) return rows || [];
+  const sign = lbQueueSort.dir === 'asc' ? 1 : -1;
+  // Stable enough for a table, and nulls always sink: an unknown age is not
+  // "the youngest", it is an absence of information.
+  return (rows || []).slice().sort((a, b) => {
+    const av = spec.get(a), bv = spec.get(b);
+    const an = av === null || av === undefined || (spec.num && Number.isNaN(av));
+    const bn = bv === null || bv === undefined || (spec.num && Number.isNaN(bv));
+    if (an && bn) return 0;
+    if (an) return 1;
+    if (bn) return -1;
+    if (spec.num) return (av - bv) * sign;
+    return String(av).localeCompare(String(bv)) * sign;
+  });
+}
+
 function secLeadQueueHtml(q) {
   const st = q.states || {};
-  const states = Object.entries(st).map(([k, v]) =>
-    `<span class="std-pill" title="${escHtml(k.replace(/_/g, ' '))}">${escHtml(String(k).replace(/_/g, ' '))} ${v}</span>`).join(' ');
-  const rows = (q.items || []).map(r => {
+  const stateOrder = Object.entries(st).sort((a, b) => b[1] - a[1]);
+  const statePills = stateOrder.map(([k, v]) =>
+    `<span class="std-pill" title="${escHtml(String(k).replace(/_/g, ' '))}: ${v} assessment(s)">${escHtml(String(k).replace(/_/g, ' '))} ${v}</span>`).join(' ');
+  // The worst residual on the page sets the ramp, matching the risk card so a
+  // percentage means the same thing in both places.
+  const rows_src = q.items || [];
+  const worst = Math.max(...rows_src.map(r => Number(r.verified_residual_pct) || 0), 0) || 0;
+  const rows = secLeadSorted(rows_src).map(r => {
     const over = r.over_sla;
     const acts = `<div style="display:flex;gap:4px;flex-wrap:wrap;">
       <button class="btn btn-ghost btn-sm" title="Accept the verified residual" onclick="secLeadDecide(${r.assessment_id},'accept')">Accept</button>
@@ -9559,25 +9824,39 @@ function secLeadQueueHtml(q) {
       <button class="btn btn-ghost btn-sm" onclick="secLeadOpenAssessment(${r.assessment_id})" title="One-page summary and evidence">Open</button>
       ${r.vendor_questionnaire_available ? `<button class="btn btn-ghost btn-sm" onclick="secLeadOpenJson('${escHtml(r.vendor_questionnaire_link)}')" title="Questions to send the vendor, with the threat each one unblocks">Vendor Q</button>` : ''}
     </div>`;
+    const rec = r.recommended_decision;
+    const recTone = rec === 'accept' ? 'var(--green, #3fb950)'
+      : rec === 'reject' ? 'var(--red, #d9534f)'
+      : rec === 'exception' ? 'var(--orange, #d29922)' : 'var(--text2)';
     return `<tr${over ? ' style="border-left:3px solid var(--red, #d9534f);"' : ''}>
       <td><b>${escHtml(r.product || '(unnamed)')}</b>
         ${r.investigation_title ? `<div class="std-note">${escHtml(r.investigation_title)}</div>` : ''}
-        <div class="std-note">${escHtml(String(r.tier || '').replace(/_/g, ' '))}${r.layer ? ' · ' + escHtml(r.layer) : ''}${r.forensics_band ? ' · forensics ' + escHtml(r.forensics_band) : ''}</div></td>
-      <td>${secLeadNum(r.verified_residual_pct, '%')}
-        <div class="std-note">declared ${secLeadNum(r.declared_residual_pct, '%')}</div></td>
-      <td>${secLeadNum(r.evidence_confidence_pct, '%')}</td>
-      <td>${escHtml(r.state.replace(/_/g, ' '))}
+        <div class="std-note"><span style="display:inline-block;width:7px;height:7px;border-radius:2px;background:${LB_TIER_COLORS[r.tier] || 'var(--accent)'};margin-right:4px;"></span>${escHtml(String(r.tier || '').replace(/_/g, ' '))}${r.layer ? ' · ' + escHtml(r.layer) : ''}${r.forensics_band ? ' · forensics ' + escHtml(r.forensics_band) : ''}</div></td>
+      <td style="text-align:right;">${lbSev(r.verified_residual_pct, worst)}
+        <div class="lb-sub">declared ${secLeadNum(r.declared_residual_pct, '%')}</div></td>
+      <td style="text-align:right;">${secLeadNum(r.evidence_confidence_pct, '%')}
+        ${r.evidence_confidence_pct === null || r.evidence_confidence_pct === undefined ? '' : `<div class="lb-meter" title="Evidence confidence ${r.evidence_confidence_pct}%"><span style="width:${Math.round(r.evidence_confidence_pct)}%;background:${r.evidence_confidence_pct < 40 ? 'var(--red, #d9534f)' : r.evidence_confidence_pct < 70 ? 'var(--orange, #d29922)' : 'var(--green, #3fb950)'};"></span></div>`}</td>
+      <td>${escHtml(String(r.state || '').replace(/_/g, ' '))}
         ${r.architecture_gate ? `<div class="std-note">${escHtml(String(r.architecture_gate))}</div>` : ''}
-        ${(r.architecture_open_items || []).length ? `<div class="std-note">${escHtml(r.architecture_open_items.join(', '))}</div>` : ''}</td>
-      <td>${r.blast_radius ? escHtml(r.blast_radius) : (r.quantified === false ? '<span style="color:var(--text2);">not quantified</span>' : '<span class="std-note">—</span>')}</td>
-      <td>${r.age_days === null || r.age_days === undefined ? '<span class="std-note">unknown</span>' : r.age_days + 'd'}${over ? ' <span style="color:var(--red, #d9534f);font-weight:700;">OVER SLA</span>' : ''}
+        ${(r.architecture_open_items || []).length ? `<div class="std-note" title="Open architecture items">${escHtml(r.architecture_open_items.join(', '))}</div>` : ''}</td>
+      <td>${r.blast_radius ? escHtml(r.blast_radius) : (r.quantified === false ? '<span style="color:var(--orange);" title="No records-at-risk figure was produced">not quantified</span>' : '<span class="std-note">—</span>')}</td>
+      <td style="text-align:right;">${r.age_days === null || r.age_days === undefined ? '<span class="std-note">unknown</span>' : r.age_days + 'd'}${over ? `<div class="lb-sub" style="color:var(--red, #d9534f);font-weight:700;">OVER ${q.sla_days || 14}d SLA</div>` : ''}
         ${r.recorded_decision ? `<div class="std-note">signed: ${escHtml(String(r.recorded_decision).replace(/_/g, ' '))}${r.decision_actor ? ' by ' + escHtml(r.decision_actor) : ''}</div>` : ''}
         ${r.expires_at ? `<div class="std-note">expires ${escHtml(String(r.expires_at).slice(0, 10))}</div>` : ''}</td>
-      <td>${r.recommended_decision ? `<span class="std-note">${escHtml(String(r.recommended_decision).replace(/_/g, ' '))}</span>` : '<span class="std-note">—</span>'}
+      <td>${rec ? `<span style="color:${recTone};font-weight:600;">${escHtml(String(rec).replace(/_/g, ' '))}</span>` : '<span class="std-note">—</span>'}
         ${r.recommended_headline ? `<div class="std-note">${escHtml(r.recommended_headline)}</div>` : ''}</td>
       <td>${acts}</td>
     </tr>`;
   }).join('');
+
+  const th = (key, right) => {
+    const spec = LB_QUEUE_COLS[key];
+    const on = lbQueueSort && lbQueueSort.col === key;
+    const arrow = on ? `<span class="lb-arrow">${lbQueueSort.dir === 'asc' ? '▲' : '▼'}</span>` : '';
+    return `<th class="lb-h" style="${right ? 'text-align:right;' : ''}" onclick="secLeadSortBy('${key}')"
+      title="Sort by ${escHtml(spec.label.toLowerCase())}" aria-sort="${on ? (lbQueueSort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}">${escHtml(spec.label)}${arrow}</th>`;
+  };
+
   const q2 = q;
   return `<div class="sec-card" style="margin-bottom:8px;">
     <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;">
@@ -9585,21 +9864,23 @@ function secLeadQueueHtml(q) {
       <span class="std-note">Every row shows the verified residual with its evidence confidence and gate status.</span>
     </div>
     <div class="std-filters" style="margin:6px 0;">
-      <select id="secLeadSort" aria-label="Sort queue" onchange="secLeadOffset=0;secLeadLoad(true)"></select>
+      <select id="secLeadSort" aria-label="Sort queue" onchange="secLeadOffset=0;lbQueueSort={col:this.value,dir:'desc'};secLeadLoad(true)"></select>
       <select id="secLeadStates" aria-label="Filter by decision state" multiple size="1" style="min-width:150px;height:auto;" onchange="secLeadOffset=0;secLeadLoad(true)"></select>
       <select id="secLeadLimit" aria-label="Rows per page" onchange="secLeadOffset=0;secLeadLoad(true)">
         <option value="10">10 rows</option><option value="25" selected>25 rows</option><option value="50">50 rows</option><option value="100">100 rows</option>
       </select>
-      <button class="btn btn-ghost btn-sm" onclick="secLeadPage(-1)" ${q2.offset ? '' : 'disabled'}><i class="fas fa-chevron-left"></i></button>
+      <button class="btn btn-ghost btn-sm" onclick="secLeadPage(-1)" ${q2.offset ? '' : 'disabled'} aria-label="Previous page"><i class="fas fa-chevron-left"></i></button>
       <span class="std-note">${q2.offset + 1}–${q2.offset + (q2.returned || 0)} of ${q2.count}</span>
-      <button class="btn btn-ghost btn-sm" onclick="secLeadPage(1)" ${q2.has_more ? '' : 'disabled'}><i class="fas fa-chevron-right"></i></button>
-      ${(q2.over_sla_total || 0) ? `<span style="color:var(--red, #d9534f);">${q2.over_sla_total} over the ${q2.sla_days}d SLA</span>` : ''}
-      <span class="std-note">${states}</span>
+      <button class="btn btn-ghost btn-sm" onclick="secLeadPage(1)" ${q2.has_more ? '' : 'disabled'} aria-label="Next page"><i class="fas fa-chevron-right"></i></button>
+      ${(q2.over_sla_total || 0) ? `<span style="color:var(--red, #d9534f);font-weight:700;">${q2.over_sla_total} over the ${q2.sla_days}d SLA</span>` : ''}
+      ${lbQueueSort ? `<button class="btn btn-ghost btn-sm" onclick="lbQueueSort=null;secLeadRender()" title="Return to the server order"><i class="fas fa-xmark"></i> clear sort</button>` : ''}
+      <span class="std-note">${statePills}</span>
     </div>
-    <div style="overflow-x:auto;"><table class="sec-table">
-      <tr><th>Product</th><th>Verified residual</th><th>Confidence</th><th>State / gate</th><th>Blast radius</th><th>Age</th><th>Recommended</th><th>Decision</th></tr>
+    ${stateOrder.length ? `<div style="margin:2px 0 6px;">${lbBars(stateOrder.map(([k, v]) => ({ label: String(k).replace(/_/g, ' '), value: v })), { labelWidth: 120 })}</div>` : ''}
+    <div style="overflow-x:auto;"><div class="lb-qtable"><table class="sec-table">
+      <tr>${th('product')}${th('verified', true)}${th('confidence', true)}${th('state')}${th('blast')}${th('age', true)}${th('recommended')}<th></th></tr>
       ${rows || '<tr><td colspan="8">Nothing is waiting on a decision in this scope.</td></tr>'}
-    </table></div>
+    </table></div></div>
   </div>`;
 }
 
@@ -9616,8 +9897,6 @@ function secLeadPage(dir) {
 function secLeadHealthHtml(h) {
   const c = h.controls || {}, f = h.forensics || {}, lg = h.ledger || {},
         st = h.stalled_runs || {}, oe = h.overdue_evidence || {}, tc = h.time_to_close || {};
-  const least = (c.least_evidenced || []).map(x =>
-    `<li>${escHtml(x.control_id)} — ${x.evidenced} evidenced, ${x.not} not</li>`).join('');
   const blocking = (lg.blocking_alerts || []).map(a =>
     `<li><b>${escHtml(String(a.condition || ''))}</b> <span class="std-note">${escHtml(String(a.why_it_matters || ''))}</span></li>`).join('');
   const ev = tc.evidence_reviews || {}, ag = tc.architecture_gaps || {};
@@ -9640,7 +9919,13 @@ function secLeadHealthHtml(h) {
       <span>Evidence reviews pending: ${ev.pending_count || 0} (mean ${secLeadNum(ev.mean_pending_days)}d, max ${secLeadNum(ev.max_pending_days)}d)</span>
       <span>Assessments with no attestation: ${c.assessments_without_attestation || 0}</span>
     </div>
-    ${least ? `<div style="margin-top:6px;"><b style="font-size:11.5px;">Least-evidenced controls</b><ul style="font-size:11.5px;margin:2px 0;padding-left:18px;">${least}</ul></div>` : ''}
+    ${(c.least_evidenced || []).length ? `<div class="lb-chart" style="margin-top:8px;">
+      <div class="lb-chart-h"><span class="lb-chart-t">Least-evidenced controls</span>
+        <span class="lb-chart-n">unevidenced count in red — these are the controls carrying no primary artifact</span></div>
+      ${lbBars((c.least_evidenced || []).map(x => ({ label: x.control_id, value: x.not,
+        suffix: `of ${x.evidenced + x.not} checks`, color: 'var(--red, #d9534f)' })),
+        { labelWidth: 120 })}
+    </div>` : ''}
     ${blocking ? `<div style="margin-top:6px;"><b style="font-size:11.5px;color:var(--red, #d9534f);">Ledger blocking alerts</b><ul style="font-size:11.5px;margin:2px 0;padding-left:18px;">${blocking}</ul></div>` : ''}
     ${(st.explainer_gap_open || 0) ? `<div style="margin-top:6px;"><b style="font-size:11.5px;">${st.explainer_gap_open} interrupted explainer_gap run(s), ${st.explainer_gap_failed || 0} failed</b> <span class="std-note">${escHtml(st.note || '')}</span></div>` : ''}
   </div>`;
@@ -9695,37 +9980,82 @@ function secLeadIntegrityHtml(s) {
     </div>
     <div class="std-note" style="margin-top:4px;">${escHtml(sw.rate_note || '')}</div>
     ${roles ? `<div style="overflow-x:auto;margin-top:6px;"><table class="sec-table"><tr><th>Role</th><th style="text-align:right;">Attempts</th><th style="text-align:right;">Failures</th><th style="text-align:right;">Gate-caused</th><th style="text-align:right;">Success rate</th></tr>${roles}</table></div>` : ''}
+    ${roles ? `<div class="lb-chart" style="margin-top:8px;">
+      <div class="lb-chart-h"><span class="lb-chart-t">Swarm success rate by role</span>
+        <span class="lb-chart-n">gate-caused failures are shown separately: a blocked run is the gate working, not the fabric failing</span></div>
+      ${lbBars((sw.roles || []).filter(r => (r.attempts || 0) > 0).map(r => ({
+        label: r.role, value: r.success_rate, display: r.success_rate === null || r.success_rate === undefined ? '—' : r.success_rate,
+        suffix: `${r.failures || 0}/${r.attempts || 0} failed`,
+        color: (r.success_rate !== null && r.success_rate !== undefined && r.success_rate < 80) ? 'var(--red, #d9534f)' : 'var(--green, #3fb950)',
+      })), { labelWidth: 120 })}
+    </div>` : ''}
     ${packs ? `<div style="overflow-x:auto;margin-top:6px;"><table class="sec-table"><tr><th>Product</th><th>Pack</th><th>Currency</th><th></th></tr>${packs}</table></div>` : ''}
     <div class="std-note" style="margin-top:4px;">${escHtml(tp.note || '')}</div>
   </div>`;
 }
 
 // ---- alerts ---------------------------------------------------------------
+// Alerts are grouped by category rather than listed as one flat run. The
+// question a reader brings to an alert list is "is this about the evidence, the
+// architecture, or the SLA?", and a flat list makes them re-read every line to
+// answer it.
 function secLeadAlertsHtml(a) {
-  const items = (a.alerts || []).map(x => {
+  const all = a.alerts || [];
+  const order = { block: 0, warning: 1, info: 2 };
+  const groups = {};
+  all.forEach(x => {
+    const key = x.category || 'other';
+    (groups[key] = groups[key] || []).push(x);
+  });
+  const catLabels = {
+    decision_sla: 'Decision SLA', architecture_gate: 'Architecture gate',
+    evidence_confidence: 'Evidence confidence', blast_radius: 'Blast radius',
+    ledger_integrity: 'Ledger integrity', pack_currency: 'Threat-pack currency',
+    stale_finding: 'Changed finding', other: 'Other',
+  };
+  const groupKeys = Object.keys(groups).sort((a, b) => {
+    const sa = Math.min.apply(null, groups[a].map(x => order[x.severity] === undefined ? 3 : order[x.severity]));
+    const sb = Math.min.apply(null, groups[b].map(x => order[x.severity] === undefined ? 3 : order[x.severity]));
+    return sa - sb || (groups[b].length - groups[a].length);
+  });
+  const card = (x) => {
     const sev = x.severity === 'block' ? 'var(--red, #d9534f)' : 'var(--text2)';
     return `<div class="std-row" style="border-left:3px solid ${sev};padding-left:8px;margin-bottom:6px;${x.acknowledged ? 'opacity:.6;' : ''}">
       <div style="display:flex;gap:6px;align-items:baseline;flex-wrap:wrap;">
+        <span class="std-sev ${x.severity === 'block' ? 'critical' : 'low'}">${escHtml(String(x.severity || '').toUpperCase())}</span>
         <b style="font-size:11.5px;">${escHtml(x.title)}</b>
-        <span class="std-note">${escHtml(x.category || '')}${x.age_days === null || x.age_days === undefined ? '' : ` · ${x.age_days}d`}</span>
+        ${x.age_days === null || x.age_days === undefined ? '' : `<span class="std-note">${x.age_days}d old</span>`}
         <span style="flex:1"></span>
-        <button class="btn btn-ghost btn-sm" onclick="secLeadAck('${escHtml(x.id)}','acknowledged')">Ack</button>
-        <button class="btn btn-ghost btn-sm" onclick="secLeadAck('${escHtml(x.id)}','snoozed')" title="Hide for 7 days; it returns if the finding is still true">Snooze 7d</button>
+        ${x.acknowledged ? '' : `<button class="btn btn-ghost btn-sm" onclick="secLeadAck('${escHtml(x.id)}','acknowledged')" title="Record that you have seen it. The finding is unchanged.">Ack</button>
+        <button class="btn btn-ghost btn-sm" onclick="secLeadAck('${escHtml(x.id)}','snoozed')" title="Hide for 7 days; it returns if the finding is still true">Snooze 7d</button>`}
+        ${x.suppressed ? `<button class="btn btn-ghost btn-sm" onclick="secLeadAck('${escHtml(x.id)}','unacknowledged')" title="Return this alert to the open list">Reopen</button>` : ''}
         ${x.link ? `<button class="btn btn-ghost btn-sm" onclick="secLeadOpenJson('${escHtml(x.link)}')">Open</button>` : ''}
       </div>
       <div style="font-size:11.5px;color:var(--text2);">${escHtml(x.detail || '')}</div>
       ${x.action ? `<div class="std-note">Next: ${escHtml(x.action)}</div>` : ''}
-      ${x.acknowledged ? `<div class="std-note">Acknowledged by ${escHtml(String(x.acknowledged_by || ''))}${x.acknowledged_at ? ' · ' + escHtml(String(x.acknowledged_at).slice(0, 16)) : ''}${x.acknowledgement_stale ? ' · finding has changed since' : ''}</div>` : ''}
+      ${x.acknowledged ? `<div class="std-note">Acknowledged by ${escHtml(String(x.acknowledged_by || ''))}${x.acknowledged_at ? ' · ' + escHtml(String(x.acknowledged_at).slice(0, 16)) : ''}${x.acknowledgement_stale ? ' · finding has changed since, so this does not count as answered' : ''}${x.acknowledgement_note ? ' · ' + escHtml(x.acknowledgement_note) : ''}</div>` : ''}
     </div>`;
+  };
+  const body = groupKeys.map(k => {
+    const items = groups[k].slice().sort((x, y) => (y.age_days || 0) - (x.age_days || 0));
+    const blocking = items.filter(x => x.severity === 'block').length;
+    return `<details${k === groupKeys[0] ? ' open' : ''} style="margin-bottom:8px;">
+      <summary style="cursor:pointer;font-size:11.5px;font-weight:600;color:var(--text2);">
+        ${escHtml(catLabels[k] || k)} — ${items.length} item(s)${blocking ? `, <span style="color:var(--red, #d9534f);">${blocking} blocking</span>` : ''}
+      </summary>
+      <div style="padding-top:6px;">${items.map(card).join('')}</div>
+    </details>`;
   }).join('');
+  const ackChecked = document.getElementById('secLeadShowAck') && document.getElementById('secLeadShowAck').checked;
   return `<div class="sec-card" style="margin-bottom:8px;">
     <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;">
-      <h3 style="font-size:13px;margin:0;"><i class="fas fa-bell" style="color:var(--teal);"></i> Alerts (${(a.alerts || []).length})</h3>
+      <h3 style="font-size:13px;margin:0;"><i class="fas fa-bell" style="color:var(--teal);"></i> Alerts (${all.length})</h3>
       <span class="std-note"><b style="${a.open_blocking ? 'color:var(--red, #d9534f);' : ''}">${a.open_blocking || 0}</b> open blocking · ${a.warnings || 0} warning(s) · ${a.acknowledged || 0} acknowledged</span>
       <span style="flex:1"></span>
-      <label class="std-note" style="display:flex;gap:4px;align-items:center;"><input type="checkbox" id="secLeadShowAck2" ${document.getElementById('secLeadShowAck') && document.getElementById('secLeadShowAck').checked ? 'checked' : ''} onchange="secLeadSyncAck(this.checked)"> show acknowledged</label>
+      <label class="std-note" style="display:flex;gap:4px;align-items:center;" title="Suppressed alerts stay on the record: they are dimmed and keep their actor and end date, rather than disappearing."><input type="checkbox" id="secLeadShowAck2" ${ackChecked ? 'checked' : ''} onchange="secLeadSyncAck(this.checked)"> show acknowledged &amp; snoozed</label>
     </div>
-    <div style="margin-top:6px;">${items || '<span class="std-note">Nothing needs a person right now. That is a finding, not an absence of checks.</span>'}</div>
+    ${all.length ? `<div style="margin-top:6px;">${body}</div>`
+      : '<div class="std-note" style="margin-top:6px;">Nothing needs a person right now. That is a finding, not an absence of checks.</div>'}
   </div>`;
 }
 
@@ -9885,7 +10215,7 @@ function secLeadOpenJson(path) {
   window.open(path.startsWith('/api') ? path : `${API}${path}`, '_blank');
 }
 
-function secLeadExport() {
+function secLeadExport(fmt) {
   const sc = secLeadScope();
   const p = new URLSearchParams();
   const inv = secDashInv();
@@ -9897,7 +10227,11 @@ function secLeadExport() {
   // The exported document has to be about the tier the reader is looking at,
   // not the whole portfolio behind it.
   if (sc.exposure) p.set('exposure', sc.exposure);
-  window.open(`${API}/leadership/board.md?${p.toString()}`, '_blank');
+  // Both formats are offered rather than feature-detected: the server answers
+  // a missing reportlab with a 503 carrying the install hint, which is more
+  // useful than a button that silently does nothing on some deployments.
+  window.open(`${API}/leadership/board.${fmt === 'pdf' ? 'pdf' : 'md'}?${p.toString()}`,
+              '_blank');
 }
 
 // Live refresh. The board is a position that changes while you are reading it,
@@ -9918,6 +10252,238 @@ function secLeadPollStop() {
 }
 
 // ---- small helpers --------------------------------------------------------
+// ---- chart primitives ----------------------------------------------------
+// Hand-rolled SVG rather than a chart library: the board needs four chart
+// shapes, the app already ships no chart dependency, and a bundle that can
+// mis-render a residual as a smooth curve through unevidenced buckets is worse
+// than no chart. Every one of these draws only what the backend sent, keeps
+// missing buckets missing, and labels its own axis.
+//
+// Shared conventions:
+// - the y axis always starts at zero. A truncated axis exaggerates every
+//   difference, which is precisely the error this dashboard exists to stop.
+// - a gap in the data is a gap in the line, never a straight segment across it.
+// - every point has a <title>, so the figure is readable without a hover and
+//   survives a screenshot into a slide deck.
+const LB_W = 640, LB_H = 170, LB_PAD_L = 34, LB_PAD_R = 10,
+      LB_PAD_T = 10, LB_PAD_B = 22;
+const LB_TIER_COLORS = {
+  restricted_data: '#f85149', confidential_data: '#d29922',
+  internal: '#58a6ff', public: '#3fb950',
+};
+
+function lbScale(domain, range) {
+  const [d0, d1] = domain, [r0, r1] = range;
+  const span = (d1 - d0) || 1;
+  return v => r0 + ((v - d0) / span) * (r1 - r0);
+}
+
+function lbNiceMax(v) {
+  if (v <= 0) return 10;
+  const mag = Math.pow(10, Math.floor(Math.log10(v)));
+  return Math.ceil(v / mag) * mag;
+}
+
+function lbTooltip(html, evt) {
+  let el = document.getElementById('lbTip');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'lbTip';
+    el.className = 'lb-tip';
+    document.body.appendChild(el);
+  }
+  el.innerHTML = html;
+  el.style.display = 'block';
+  const pad = 14;
+  const x = Math.min(window.innerWidth - el.offsetWidth - pad,
+                     Math.max(pad, evt.clientX + 12));
+  const y = Math.max(pad, evt.clientY - el.offsetHeight - 10);
+  el.style.left = x + 'px';
+  el.style.top = y + 'px';
+}
+
+function lbHideTip() {
+  const el = document.getElementById('lbTip');
+  if (el) el.style.display = 'none';
+}
+
+function lbAxisTicks(max, count) {
+  const out = [];
+  for (let i = 0; i <= count; i++) out.push(Math.round((max / count) * i));
+  return out;
+}
+
+// Residual + confidence over time. Two axes are needed because the figures mean
+// different things (risk left vs belief in the evidence), so they are drawn as
+// two clearly labelled series rather than one blended number.
+function lbLineChart(points, opts) {
+  opts = opts || {};
+  const width = opts.width || LB_W, height = opts.height || LB_H;
+  if (!points || !points.length) {
+    return `<div class="lb-empty">${escHtml(opts.empty || 'No history in this window. The direction is unknown, not flat.')}</div>`;
+  }
+  const val = (p, key) => {
+    const v = p[key];
+    return (v === null || v === undefined || !Number.isFinite(Number(v))) ? null : Number(v);
+  };
+  const padL = opts.padL || LB_PAD_L, padR = opts.padR || LB_PAD_R;
+  const iw = width - padL - padR, ih = height - LB_PAD_T - LB_PAD_B;
+  const resKey = opts.series === 'confidence' ? 'mean_confidence_pct'
+    : 'mean_verified_residual_pct';
+  const resLabel = opts.series === 'confidence' ? 'evidence confidence'
+    : 'verified residual';
+  const resColor = opts.series === 'confidence' ? 'var(--purple)' : 'var(--accent)';
+
+  const withRes = points.map(p => [p, val(p, resKey)]).filter(x => x[1] !== null);
+  const withConf = points.map(p => [p, val(p, 'mean_confidence_pct')]).filter(x => x[1] !== null);
+  const resMax = lbNiceMax(Math.max(...withRes.map(x => x[1]), 1));
+  const confMax = lbNiceMax(Math.max(...withConf.map(x => x[1]), 1));
+
+  // The x scale spans the points that exist, so the last point is always at the
+  // right edge; the caption carries the window so a short history cannot read
+  // as a full one.
+  const first = Date.parse(points[0].bucket_start + 'T00:00:00Z');
+  const last = Date.parse(points[points.length - 1].bucket_start + 'T00:00:00Z');
+  const x = lbScale([first, Math.max(last, first + 1)], [padL, padL + iw]);
+  const yRes = lbScale([0, resMax], [LB_PAD_T + ih, LB_PAD_T]);
+  const yConf = lbScale([0, confMax], [LB_PAD_T + ih, LB_PAD_T]);
+
+  // Move/line pairs: a null bucket breaks the path instead of interpolating
+  // across a stretch of time nobody assessed.
+  const path = (list, ys) => {
+    let d = '', pen = false;
+    list.forEach(([p, v]) => {
+      const px = x(Date.parse(p.bucket_start + 'T00:00:00Z')).toFixed(1);
+      const py = ys(v).toFixed(1);
+      d += (pen ? 'L' : 'M') + px + ' ' + py + ' ';
+      pen = true;
+    });
+    return d.trim();
+  };
+
+  const dots = (list, ys, color, label) => list.map(([p, v]) => {
+    const cx = x(Date.parse(p.bucket_start + 'T00:00:00Z'));
+    const cy = ys(v);
+    const worst = val(p, 'worst_residual_pct');
+    const tip = `${escHtml(String(p.bucket_start))}`
+      + `<br>${escHtml(label)}: <b>${v}%</b>`
+      + (worst === null ? '' : `<br>worst single row: ${worst}%`)
+      + `<br>assessments: ${p.samples}`;
+    return `<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="2.5" fill="${color}"><title>${tip}</title></circle>`;
+  }).join('');
+
+  const xLabels = points.filter((_, i) => i === 0 || i === points.length - 1
+    || i === Math.floor(points.length / 2)).map(p => {
+    const px = x(Date.parse(p.bucket_start + 'T00:00:00Z'));
+    const anchor = px < padL + 14 ? 'start' : px > width - padR - 14 ? 'end' : 'middle';
+    return `<text x="${px.toFixed(1)}" y="${height - 6}" text-anchor="${anchor}">${escHtml(String(p.bucket_start).slice(5))}</text>`;
+  }).join('');
+
+  const bothSeries = !opts.series && withConf.length > 0;
+  return `<svg viewBox="0 0 ${width} ${height}" role="img"
+      aria-label="${escHtml(opts.aria || (resLabel + ' over time'))}">
+    ${lbAxisTicks(resMax, 4).map(t => `<line class="lb-grid" x1="${padL}" x2="${width - padR}" y1="${yRes(t).toFixed(1)}" y2="${yRes(t).toFixed(1)}"/>
+      <text class="lb-val" x="${padL - 4}" y="${(yRes(t) + 3).toFixed(1)}" text-anchor="end">${t}</text>`).join('')}
+    <line class="lb-axis" x1="${padL}" x2="${width - padR}" y1="${LB_PAD_T + ih}" y2="${LB_PAD_T + ih}"/>
+    ${xLabels}
+    ${bothSeries ? `<path d="${path(withConf, yConf)}" fill="none" stroke="var(--purple)" stroke-width="1.5" stroke-dasharray="4 3" opacity="0.9"/>` : ''}
+    ${withRes.length ? `<path d="${path(withRes, yRes)}" fill="none" stroke="${resColor}" stroke-width="2"/>` : ''}
+    ${bothSeries ? dots(withConf, yConf, 'var(--purple)', 'evidence confidence') : ''}
+    ${dots(withRes, yRes, resColor, resLabel)}
+  </svg>`;
+}
+
+// Grouped bars: verified beside declared for the same row. The gap between the
+// two bars is the whole point of the assurance layer, so they are never merged.
+function lbGroupedBars(rows, opts) {
+  opts = opts || {};
+  if (!rows || !rows.length) {
+    return `<div class="lb-empty">${escHtml(opts.empty || 'Nothing to compare.')}</div>`;
+  }
+  const width = opts.width || LB_W, height = opts.height || 150;
+  const padL = 30, padR = 8, padT = 12, padB = 30;
+  const iw = width - padL - padR, ih = height - padT - padB;
+  const vals = rows.flatMap(r => [r.a || 0, r.b || 0]);
+  const max = lbNiceMax(Math.max(...vals, 1));
+  const y = lbScale([0, max], [padT + ih, padT]);
+  const slot = iw / rows.length;
+  const bw = Math.max(4, Math.min(16, slot * 0.3));
+  const bars = rows.map((r, i) => {
+    const cx = padL + slot * i + slot / 2;
+    const ha = y(r.a || 0), hb = y(r.b || 0);
+    return `<g><title>${escHtml(r.label)}: verified ${r.a === null || r.a === undefined ? '—' : r.a + '%'}, declared ${r.b === null || r.b === undefined ? '—' : r.b + '%'}</title>
+      <rect x="${(cx - bw - 1).toFixed(1)}" y="${ha.toFixed(1)}" width="${bw}" height="${Math.max(0, padT + ih - ha).toFixed(1)}" fill="var(--accent)" rx="2"/>
+      <rect x="${(cx + 1).toFixed(1)}" y="${hb.toFixed(1)}" width="${bw}" height="${Math.max(0, padT + ih - hb).toFixed(1)}" fill="var(--text3)" rx="2"/>
+      <text x="${cx.toFixed(1)}" y="${height - 16}" text-anchor="middle">${escHtml(String(r.label).slice(0, 14))}</text>
+      <text class="lb-val" x="${(cx - bw / 2 - 1).toFixed(1)}" y="${(ha - 3).toFixed(1)}" text-anchor="middle">${r.a === null || r.a === undefined ? '—' : r.a}</text>
+      <text x="${(cx + bw / 2 + 1).toFixed(1)}" y="${(hb - 3).toFixed(1)}" text-anchor="middle">${r.b === null || r.b === undefined ? '—' : r.b}</text>
+    </g>`;
+  }).join('');
+  return `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${escHtml(opts.aria || 'Verified beside declared residual')}">
+    ${lbAxisTicks(max, 4).map(t => `<line class="lb-grid" x1="${padL}" x2="${width - padR}" y1="${y(t).toFixed(1)}" y2="${y(t).toFixed(1)}"/>
+      <text class="lb-val" x="${padL - 4}" y="${(y(t) + 3).toFixed(1)}" text-anchor="end">${t}</text>`).join('')}
+    <line class="lb-axis" x1="${padL}" x2="${width - padR}" y1="${padT + ih}" y2="${padT + ih}"/>
+    ${bars}
+  </svg>`;
+}
+
+// Horizontal bars for a small labelled set (confidence bands, gate items,
+// decision states). Long category names need the horizontal orientation; a
+// vertical bar chart with rotated labels is unreadable at this size.
+function lbBars(items, opts) {
+  opts = opts || {};
+  const rows = (items || []).filter(i => i);
+  if (!rows.length) {
+    return `<div class="lb-empty">${escHtml(opts.empty || 'Nothing recorded.')}</div>`;
+  }
+  const max = Math.max(...rows.map(i => Number(i.value) || 0), 1);
+  return rows.map(i => {
+    const v = Number(i.value) || 0;
+    const pct = Math.max(2, Math.round(100 * v / max));
+    const color = i.color || 'var(--accent)';
+    return `<div style="display:flex;align-items:center;gap:8px;margin:3px 0;font-size:11px;">
+      <span style="flex:0 0 ${opts.labelWidth || 96}px;color:var(--text2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escHtml(i.label)}">${escHtml(i.label)}</span>
+      <span style="flex:1;height:9px;background:var(--bg2);border-radius:5px;overflow:hidden;">
+        <span style="display:block;height:100%;width:${pct}%;background:${color};border-radius:5px;"></span></span>
+      <b style="flex:0 0 34px;text-align:right;font-variant-numeric:tabular-nums;">${escHtml(String(i.display === undefined ? v : i.display))}</b>
+      ${i.suffix ? `<span class="lb-sub" style="flex:0 0 auto;">${escHtml(i.suffix)}</span>` : ''}
+    </div>`;
+  }).join('');
+}
+
+// A KPI tile. `bar` is optional and always shows a denominator: a count on its
+// own ("4 blocked") invites a reader to assume it is out of a handful.
+function lbKpi(value, label, opts) {
+  opts = opts || {};
+  const cls = opts.tone || 'muted';
+  const bar = (opts.barPct === null || opts.barPct === undefined) ? ''
+    : `<div class="lb-kpi-bar"><span class="${opts.barTone || ''}" style="width:${Math.max(0, Math.min(100, opts.barPct))}%"></span></div>`;
+  return `<div class="lb-kpi">
+    <div class="lb-kpi-v ${cls}">${value}</div>
+    <div class="lb-kpi-l">${escHtml(label)}</div>
+    ${opts.sub ? `<div class="lb-kpi-sub">${escHtml(opts.sub)}</div>` : ''}
+    ${bar}
+  </div>`;
+}
+
+// Residual severity is relative to the worst row on the board, not to an
+// absolute scale: 40% residual is routine on a Restricted tier and alarming on
+// a Public one, and the reader already knows which tier they are looking at.
+function lbSev(v, worst) {
+  if (v === null || v === undefined) return '<span class="std-note">—</span>';
+  const n = Number(v);
+  if (!Number.isFinite(n)) return '<span class="std-note">—</span>';
+  const rel = worst ? n / worst : 0;
+  const step = rel >= 0.85 ? 5 : rel >= 0.65 ? 4 : rel >= 0.45 ? 3 : rel >= 0.25 ? 2 : 1;
+  const names = { 5: 'the worst on this board', 4: 'among the highest', 3: 'mid-range', 2: 'low', 1: 'the lowest here' };
+  return `<span class="lb-sev s${step}" title="${escHtml(String(n) + '% residual — ' + names[step] + ' (worst here ' + worst + '%)')}">${secLeadNum(n, '%')}</span>`;
+}
+
+function lbLegend(items) {
+  return `<div class="lb-chart-legend">${items.map(i =>
+    `<span><i style="background:${i.color}"></i>${escHtml(i.label)}</span>`).join('')}</div>`;
+}
+
 function secLeadNum(v, suffix) {
   if (v === null || v === undefined) return '<span class="std-note">—</span>';
   const n = Number(v);

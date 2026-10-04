@@ -843,6 +843,60 @@ class TestAlertAcknowledgement(LeadershipTestBase):
         self.assertEqual(LD.alerts(self.db)["open_blocking"], 0)
 
 
+class TestPortfolioSeries(LeadershipTestBase):
+    """The charted series must be dated, not a fold of undated values."""
+
+    def _one(self, days_ago, residual=40.0, confidence=0.5, run_id=1):
+        return _row(self.db, self.inv.id, name=f"p{days_ago}",
+                    tier="restricted_data", run_id=run_id,
+                    verified=residual, confidence=confidence,
+                    days_ago=days_ago)
+
+    def test_every_point_carries_the_window_it_covers(self):
+        self._one(5)
+        self._one(40)
+        rows = LD.risk_position(self.db, self.inv.id, window_days=90)
+        series = rows["portfolio_series"]
+        self.assertTrue(series)
+        for pt in series:
+            self.assertIn("bucket_start", pt)
+            self.assertRegex(str(pt["bucket_start"]), r"^\d{4}-\d{2}-\d{2}$")
+
+    def test_a_quiet_period_is_omitted_rather_than_drawn_as_zero(self):
+        # One row now, one a year ago, and a 30-day window: the middle of the
+        # chart has no assessments at all.
+        self._one(1)
+        self._one(360)
+        rows = LD.risk_position(self.db, self.inv.id, window_days=30)
+        series = rows["portfolio_series"]
+        self.assertEqual(len(series), 1)
+        # A zero here would read as "risk fell to nothing".
+        self.assertNotEqual(series[0]["mean_verified_residual_pct"], 0)
+
+    def test_the_series_respects_the_window_it_was_asked_for(self):
+        self._one(200)
+        short = LD.risk_position(self.db, self.inv.id, window_days=30)
+        long = LD.risk_position(self.db, self.inv.id, window_days=365)
+        self.assertEqual(short["portfolio_series"], [])
+        self.assertEqual(len(long["portfolio_series"]), 1)
+
+    def test_the_series_reports_the_worst_row_not_only_the_mean(self):
+        # Same bucket (30d window / 24 buckets is ~1.25d wide), so the mean and
+        # the worst genuinely describe the same set of rows.
+        self._one(5, residual=10.0, run_id=1)
+        self._one(6, residual=80.0, run_id=2)
+        rows = LD.risk_position(self.db, self.inv.id, window_days=30)
+        pt = rows["portfolio_series"][0]
+        self.assertEqual(pt["worst_residual_pct"], 80.0)
+        self.assertLess(pt["mean_verified_residual_pct"], 80.0)
+
+    def test_confidence_travels_with_the_residual_on_the_same_point(self):
+        self._one(1, residual=40.0, confidence=0.75)
+        rows = LD.risk_position(self.db, self.inv.id, window_days=30)
+        pt = rows["portfolio_series"][0]
+        self.assertEqual(pt["mean_confidence_pct"], 75.0)
+
+
 class TestTrendWindows(LeadershipTestBase):
     def test_three_horizons_are_reported_with_their_sample_counts(self):
         for d, v in ((5, 60.0), (100, 40.0), (300, 20.0)):
@@ -1197,3 +1251,29 @@ class TestChangeLogPortfolio(LeadershipTestBase):
         self.assertEqual(len(body["current"]), 1)
         self.assertEqual(body["superseded_count"], 1)
         self.assertEqual(body["superseded"][0]["superseded_by_id"], newer.id)
+
+
+class TestExportCarriesTheChartSeries(LeadershipTestBase):
+    """The PDF/Markdown snapshot must be checkable against the screen."""
+
+    def _rows(self):
+        _row(self.db, self.inv.id, name="restricted copilot",
+             tier="restricted_data", run_id=1, verified=62.7, confidence=0.31,
+             days_ago=4)
+        _row(self.db, self.inv.id, name="public faq", tier="public", run_id=2,
+             verified=9.0, confidence=0.9, days_ago=30)
+
+    def test_the_export_prints_the_same_dated_series_the_chart_draws(self):
+        self._rows()
+        md = LD.export_markdown(self.db, window_days=90)
+        self.assertIn("Dated residual and confidence", md)
+        # Every charted bucket has to be readable as a row: an executive who
+        # disputes the line needs the numbers behind it in the export.
+        series = LD.risk_position(self.db, window_days=90)["portfolio_series"]
+        self.assertTrue(series)
+        for pt in series:
+            self.assertIn(str(pt["bucket_start"]), md)
+
+    def test_the_export_omits_the_series_table_when_there_is_no_history(self):
+        md = LD.export_markdown(self.db, window_days=90)
+        self.assertNotIn("Dated residual and confidence", md)
