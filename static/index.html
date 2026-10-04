@@ -964,8 +964,8 @@ body.pane-sec-top-collapsed .sec-topbar-sub { display: none; }
       <span class="app-tab-badge" id="secTabBadge" style="display:none;"></span>
     </button>
     <button class="app-tab" data-app="dashboard" onclick="switchApp('dashboard')" role="tab">
-      <i class="fas fa-gauge-high"></i> Leadership Dashboard
-      <span class="app-tab-sub">coverage · risk · robustness</span>
+      <i class="fas fa-gauge-high"></i> Executive brief
+      <span class="app-tab-sub">Security &amp; Privacy</span>
       <span class="app-tab-badge" id="dashTabBadge" style="display:none;"></span>
     </button>
     <button class="app-tab" data-app="manager" onclick="switchApp('manager')" role="tab">
@@ -1452,8 +1452,8 @@ body.pane-sec-top-collapsed .sec-topbar-sub { display: none; }
     <div class="sec-shell">
       <div class="sec-topbar">
         <div>
-          <h2><i class="fas fa-gauge-high"></i> Leadership Dashboard</h2>
-          <div class="sec-topbar-sub">Two layers: the assurance position (verified residual, decision queue, system health) and the portfolio register behind it.</div>
+          <h2><i class="fas fa-gauge-high"></i> Executive brief — Security &amp; Privacy</h2>
+          <div class="sec-topbar-sub">Security &amp; privacy in one brief: the assurance position (verified residual, decision queue, system health), portfolio coverage, the compute estate, and the collected knowledge graph.</div>
         </div>
         <div class="sec-topbar-right">
           <label for="dashInvSelect" style="font-size:11px;color:var(--text2);">Investigation</label>
@@ -4802,7 +4802,7 @@ let mgrNavOpen = {};
 const APP_TITLES = {
   akm: 'Agentic Knowledge Mapper',
   security: 'AI Security',
-  dashboard: 'Leadership Dashboard',
+  dashboard: 'Executive brief — Security & Privacy',
   manager: 'Agentic Manager',
   standards: 'AI Standards & Regulations',
   design: 'Design & Architecture',
@@ -9442,7 +9442,7 @@ async function secLoadDashboard(force) {
     return;
   }
   if (!force && secDashCache) { secDashRender(); return; }
-  if (body) body.innerHTML = '<div class="std-err">Loading the leadership dashboard…</div>';
+  if (body) body.innerHTML = '<div class="std-err">Loading the executive brief…</div>';
   const sc = secDashScope();
   const qs = `investigation_id=${inv}&window_days=${sc.window_days}`
     + (sc.initiative_id ? `&initiative_id=${sc.initiative_id}` : '')

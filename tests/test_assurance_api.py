@@ -596,7 +596,7 @@ class AssuranceApiCase(unittest.TestCase):
             f"/api/leadership/board.md?investigation_id={self.inv.id}&persona=ciso")
         self.assertEqual(r.status_code, 200)
         self.assertIn("text/markdown", r.headers["content-type"])
-        self.assertTrue(r.text.startswith("# Leadership board snapshot"))
+        self.assertTrue(r.text.startswith("# Executive brief — Security & Privacy"))
         self.assertIn("CISO", r.text)
 
     def test_board_pdf_export_is_served_as_a_pdf(self):
@@ -607,7 +607,7 @@ class AssuranceApiCase(unittest.TestCase):
         # A PDF that is not a PDF is the failure mode here: an HTML error page
         # saved as .pdf opens as a blank document in some viewers.
         self.assertTrue(r.content.startswith(b"%PDF-"), r.content[:40])
-        self.assertIn("assurance-board-portfolio.pdf",
+        self.assertIn("executive-brief-portfolio.pdf",
                       r.headers["content-disposition"])
 
     def test_board_pdf_export_refuses_an_unknown_scope_instead_of_widening_it(self):

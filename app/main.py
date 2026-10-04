@@ -2693,19 +2693,19 @@ def leadership_board_pdf(investigation_id: Optional[int] = None,
                            initiative_id=initiative_id, layer=layer,
                            exposure=exposure)
     try:
-        pdf = sec_engine.build_pdf(md, title="Leadership assurance board", meta={
+        pdf = sec_engine.build_pdf(md, title="Executive brief — Security & Privacy", meta={
             "product": investigation_id and f"Investigation {investigation_id}"
-                     or "Portfolio-wide assurance board",
+                     or "Portfolio-wide executive brief",
             "exposure_label": persona,
             "posture": _board_posture(rp),
-            "report_name": "Leadership assurance board",
+            "report_name": "Executive brief — Security & Privacy",
         })
     except RuntimeError as exc:
         # Missing reportlab is a deployment gap, not a bad request: say so in
         # the message rather than returning a 500 with a stack trace.
         raise HTTPException(503, str(exc))
     from fastapi.responses import Response
-    name = f"assurance-board-{investigation_id or 'portfolio'}.pdf"
+    name = f"executive-brief-{investigation_id or 'portfolio'}.pdf"
     return Response(content=pdf, media_type="application/pdf",
                     headers={"Content-Disposition":
                              f'attachment; filename="{name}"'})

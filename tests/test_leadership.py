@@ -1153,7 +1153,7 @@ class TestBoardExport(LeadershipTestBase):
         _row(self.db, self.inv.id, name="a", tier="internal", run_id=1,
              verified=40.0, confidence=0.5)
         md = LD.export_markdown(self.db, self.inv.id, persona="ciso")
-        self.assertIn("# Leadership board snapshot", md)
+        self.assertIn("# Executive brief — Security & Privacy", md)
         self.assertIn("CISO", md)
         self.assertIn(f"investigation={self.inv.id}", md)
         self.assertIn("Generated:", md)

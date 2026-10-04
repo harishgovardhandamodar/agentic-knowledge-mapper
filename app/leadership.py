@@ -2189,7 +2189,7 @@ def export_markdown(db, investigation_id: Optional[int] = None, *,
     ex = b["exceptions"]
     sc = b["scope"]
     L: list[str] = []
-    L.append("# Leadership board snapshot")
+    L.append("# Executive brief — Security & Privacy")
     L.append("")
     L.append(f"- Generated: {b['generated']}")
     L.append(f"- Persona lens: **{b['persona_label']}** — {b['persona_blurb']}")
