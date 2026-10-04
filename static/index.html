@@ -663,6 +663,26 @@ td.std-threat .std-name { font-weight: 600; display: block; font-size: 11.5px; }
 .std-covnum { font-size: 11px; font-weight: 700; min-width: 42px; text-align: right; }
 .std-rel { display: inline-block; font-size: 10px; font-weight: 700; color: var(--teal); background: rgba(88,166,255,0.14); border-radius: 4px; padding: 1px 6px; margin-left: 6px; white-space: nowrap; }
 .std-why { font-size: 10.5px; color: var(--text2); margin-top: 2px; }
+/* ---- collapsible sections ---------------------------------------------
+   Findings and artifacts are the two lists that grow without bound: one
+   investigation can collect hundreds of rows. Folding them keeps the pane
+   scannable without hiding anything -- the count stays in the header so a
+   folded section still reports what is inside it. */
+.fold { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 8px; background: var(--bg2); overflow: hidden; }
+.fold-head { width: 100%; display: flex; align-items: center; gap: 8px; background: none; border: none; color: var(--text); font: inherit; padding: 9px 12px; cursor: pointer; text-align: left; }
+.fold-head:hover { background: rgba(88,166,255,0.06); }
+.fold-head:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.fold-caret { color: var(--text2); font-size: 11px; transition: transform .15s ease; flex: none; }
+.fold.open > .fold-head .fold-caret { transform: rotate(90deg); }
+.fold-title { font-weight: 600; font-size: 12.5px; flex: 1; min-width: 0; }
+.fold-title .fold-hint { font-weight: 400; color: var(--text2); }
+.fold-count { font-size: 11px; color: var(--text2); background: var(--bg3); border-radius: 9px; padding: 1px 8px; flex: none; }
+.fold.tone-bad .fold-title { color: var(--red); }
+.fold.tone-warn .fold-title { color: var(--orange); }
+.fold-body { padding: 2px 12px 12px; font-size: 12px; }
+.fold-body[hidden] { display: none; }
+.fold-empty { color: var(--text2); font-size: 12px; padding: 4px 0; }
+
 .std-detail { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 8px; background: var(--bg2); overflow: hidden; }
 .std-detail.dim { opacity: 0.55; }
 .std-detail-head { width: 100%; display: flex; align-items: center; gap: 10px; background: none; border: none; color: inherit; font: inherit; padding: 10px 12px; cursor: pointer; text-align: left; }
@@ -1009,6 +1029,9 @@ body.pane-sec-top-collapsed .sec-topbar-sub { display: none; }
           <button class="filter-btn" data-rev="rejected">Rejected</button>
           <button class="filter-btn" data-rev="all">All</button>
           <button class="filter-btn" id="driftPill" title="Show only items flagged as off-brief drift">Drift</button>
+          <span style="flex:1"></span>
+          <button class="btn btn-ghost btn-sm" onclick="foldSetAll('#artList', true)" title="Open every group"><i class="fas fa-angle-double-down"></i></button>
+          <button class="btn btn-ghost btn-sm" onclick="foldSetAll('#artList', false)" title="Collapse every group"><i class="fas fa-angle-double-up"></i></button>
         </div>
         <div id="artList"></div>
       </div>
@@ -3047,34 +3070,55 @@ async function loadArtifacts() {
     list.innerHTML = '<div class="empty-state"><i class="fas fa-inbox"></i><br/>Nothing here. Run the agent to collect.</div>';
     return;
   }
-  list.innerHTML = data.items.map(a => {
-    const pct = Math.round((a.relevance || 0) * 100);
-    const col = pct >= 70 ? 'var(--green)' : pct >= 45 ? 'var(--orange)' : 'var(--text2)';
-    return `<div class="art-card">
-      <div class="row1">
-        <div class="rel-ring" style="background:${col}20;color:${col};border:2px solid ${col};">${pct}%</div>
-        <div class="ttl"><span class="type-badge" style="background:var(--bg3);color:var(--text2);">${a.artifact_type}</span>${a.drift ? ' <span class="drift-pill" title="Flagged as off-brief drift">drift</span>' : ''} ${a.title}</div>
-      </div>
-      ${a.relevance_reason ? `<div class="reason">“${a.relevance_reason}”</div>` : ''}
-      <div class="meta">
-        ${a.source ? `<span><i class="fas fa-globe"></i> ${a.source}</span>` : ''}
-        ${a.author ? `<span>${a.author}</span>` : ''}
-        ${a.sentiment != null ? `<span>sentiment ${Number(a.sentiment).toFixed(2)}</span>` : ''}
-        ${a.tags ? a.tags.split(',').map(t => `<span class="tag">${t.trim()}</span>`).join('') : ''}
-        ${a.url ? `<a href="${a.url}" target="_blank" rel="noopener" style="color:var(--accent);font-size:11px;"><i class="fas fa-external-link-alt"></i> source</a>` : ''}
-      </div>
-      <div class="actions">
-        <button class="btn btn-ghost btn-sm" onclick="focusNode(${a.id})" title="Show in graph"><i class="fas fa-project-diagram"></i></button>
-        ${a.review !== 'accepted' ? `<button class="btn btn-primary btn-sm" onclick="setReview(${a.id},'accepted')"><i class="fas fa-check"></i> Accept</button>` : ''}
-        ${a.review !== 'rejected' ? `<button class="btn btn-ghost btn-sm" onclick="setReview(${a.id},'rejected')"><i class="fas fa-times"></i> Reject</button>` : ''}
-        ${a.review !== 'pending' ? `<button class="btn btn-ghost btn-sm" onclick="setReview(${a.id},'pending')">Unreview</button>` : ''}
-        ${a.drift
-          ? `<button class="btn btn-ghost btn-sm" onclick="setDrift(${a.id},false)" title="Clear the drift flag"><i class="fas fa-undo"></i> Undrift</button>`
-          : `<button class="btn btn-ghost btn-sm" onclick="setDrift(${a.id},true)" title="Flag as off-brief drift"><i class="fas fa-wind"></i> Drift</button>`}
-        <button class="btn btn-danger btn-sm" onclick="deleteArtifact(${a.id})"><i class="fas fa-trash"></i></button>
-      </div>
-    </div>`;
-  }).join('');
+  // Fold the queue by review state so a long run does not dump every card
+  // at once. The actionable groups (pending, drift) start open; decided
+  // groups are collapsed but keep their count in the header. Every card
+  // lands in exactly one group -- drift wins over the review-state groups
+  // so the same item is not shown twice.
+  const groups = [
+    { key: `review:${currentInv}:pending`,  title: 'Needs review', icon: 'fa-inbox', tone: '', open: true,
+      items: data.items.filter(a => a.review === 'pending' && !a.drift) },
+    { key: `review:${currentInv}:drift`,    title: 'Drift flagged', icon: 'fa-wind', tone: 'warn', open: true,
+      items: data.items.filter(a => !!a.drift) },
+    { key: `review:${currentInv}:accepted`, title: 'Accepted', icon: 'fa-check', tone: '', open: false,
+      items: data.items.filter(a => a.review === 'accepted' && !a.drift) },
+    { key: `review:${currentInv}:rejected`, title: 'Rejected', icon: 'fa-xmark', tone: '', open: false,
+      items: data.items.filter(a => a.review === 'rejected' && !a.drift) },
+  ].filter(g => g.items.length);
+  list.innerHTML = groups.map(g => foldSection(g.key, g.title,
+    g.items.map(artifactCardHtml).join(''), {
+      open: g.open, count: g.items.length, unit: '', icon: g.icon, tone: g.tone,
+      hint: g.title === 'Needs review' ? 'relevance drives order' : undefined,
+    })).join('');
+}
+
+function artifactCardHtml(a) {
+  const pct = Math.round((a.relevance || 0) * 100);
+  const col = pct >= 70 ? 'var(--green)' : pct >= 45 ? 'var(--orange)' : 'var(--text2)';
+  return `<div class="art-card">
+    <div class="row1">
+      <div class="rel-ring" style="background:${col}20;color:${col};border:2px solid ${col};">${pct}%</div>
+      <div class="ttl"><span class="type-badge" style="background:var(--bg3);color:var(--text2);">${a.artifact_type}</span>${a.drift ? ' <span class="drift-pill" title="Flagged as off-brief drift">drift</span>' : ''} ${a.title}</div>
+    </div>
+    ${a.relevance_reason ? `<div class="reason">“${a.relevance_reason}”</div>` : ''}
+    <div class="meta">
+      ${a.source ? `<span><i class="fas fa-globe"></i> ${a.source}</span>` : ''}
+      ${a.author ? `<span>${a.author}</span>` : ''}
+      ${a.sentiment != null ? `<span>sentiment ${Number(a.sentiment).toFixed(2)}</span>` : ''}
+      ${a.tags ? a.tags.split(',').map(t => `<span class="tag">${t.trim()}</span>`).join('') : ''}
+      ${a.url ? `<a href="${a.url}" target="_blank" rel="noopener" style="color:var(--accent);font-size:11px;"><i class="fas fa-external-link-alt"></i> source</a>` : ''}
+    </div>
+    <div class="actions">
+      <button class="btn btn-ghost btn-sm" onclick="focusNode(${a.id})" title="Show in graph"><i class="fas fa-project-diagram"></i></button>
+      ${a.review !== 'accepted' ? `<button class="btn btn-primary btn-sm" onclick="setReview(${a.id},'accepted')"><i class="fas fa-check"></i> Accept</button>` : ''}
+      ${a.review !== 'rejected' ? `<button class="btn btn-ghost btn-sm" onclick="setReview(${a.id},'rejected')"><i class="fas fa-times"></i> Reject</button>` : ''}
+      ${a.review !== 'pending' ? `<button class="btn btn-ghost btn-sm" onclick="setReview(${a.id},'pending')">Unreview</button>` : ''}
+      ${a.drift
+        ? `<button class="btn btn-ghost btn-sm" onclick="setDrift(${a.id},false)" title="Clear the drift flag"><i class="fas fa-undo"></i> Undrift</button>`
+        : `<button class="btn btn-ghost btn-sm" onclick="setDrift(${a.id},true)" title="Flag as off-brief drift"><i class="fas fa-wind"></i> Drift</button>`}
+      <button class="btn btn-danger btn-sm" onclick="deleteArtifact(${a.id})"><i class="fas fa-trash"></i></button>
+    </div>
+  </div>`;
 }
 
 async function setReview(id, review) {
@@ -3155,21 +3199,26 @@ async function loadCollection() {
       <td style="white-space:nowrap">${i.collected_at ? new Date(i.collected_at).toLocaleDateString() : '—'}</td>
       <td>${escHtml(i.review || '—')}${i.drift ? ' <span class="drift-pill">drift</span>' : ''}</td>
     </tr>`).join('') || '<tr><td colspan="6">no artifacts collected</td></tr>';
+  const table = `<table class="audit-tbl">
+      <thead><tr><th>Title</th><th>Type</th><th>Purpose of collection</th><th>Actor</th><th>Collected</th><th>Status</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
   body.innerHTML = `
     <div class="audit-banner ok">
       <i class="fas fa-box-archive"></i>
       <span class="grow"><b>Collection</b> — ${ov.total} artifact${ov.total === 1 ? '' : 's'}<br>
         <span class="audit-hash">timeline · purpose · actor involvement</span></span>
+      <button class="btn btn-ghost btn-sm" onclick="foldSetAll('#collectionBody', true)" title="Open every section"><i class="fas fa-angle-double-down"></i> Expand</button>
+      <button class="btn btn-ghost btn-sm" onclick="foldSetAll('#collectionBody', false)" title="Collapse every section"><i class="fas fa-angle-double-up"></i> Collapse</button>
     </div>
-    <div class="audit-sub">Actor involvement</div>
-    ${actors}
-    <div class="audit-sub" style="margin-top:14px">Collection timeline</div>
-    ${days}
-    <div class="audit-sub" style="margin-top:14px">All artifacts</div>
-    <table class="audit-tbl">
-      <thead><tr><th>Title</th><th>Type</th><th>Purpose of collection</th><th>Actor</th><th>Collected</th><th>Status</th></tr></thead>
-      <tbody>${rows}</tbody>
-    </table>`;
+    ${foldSection(`collect:actors:${currentInv}`, 'Actor involvement', actors, { open: true, icon: 'fa-users' })}
+    ${foldSection(`collect:timeline:${currentInv}`, 'Collection timeline', days, { open: true, icon: 'fa-chart-simple', unit: 'days' })}
+    ${foldSection(`collect:table:${currentInv}`, 'All artifacts', table, {
+      // The row table is the one that grows without bound, so it starts
+      // folded once there are enough rows to be worth folding; a short
+      // investigation should still show its evidence without a click.
+      open: (ov.items || []).length <= 12, count: ov.total, unit: 'rows', icon: 'fa-table-list',
+    })}`;
 }
 
 let timelineData = null, compareResult = null, highlightOn = false;
@@ -3280,6 +3329,72 @@ let activeExpId = null, pollExpTimer = null, activeArticle = null;
 
 function escHtml(s) {
   return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+/* ---------- collapsible sections ----------
+   Findings and artifacts are the two lists in this app that grow without
+   bound, so they get folded rather than paginated away: nothing is dropped,
+   the reader decides what to open. State is remembered per section key --
+   these panes re-render on every poll, so a fold that reset on each
+   refresh would be unusable. */
+const FOLD_STORE = 'akm.folds';
+let _foldCache = null;
+
+function _foldAll() {
+  if (_foldCache) return _foldCache;
+  try { _foldCache = JSON.parse(localStorage.getItem(FOLD_STORE) || '{}') || {}; }
+  catch (e) { _foldCache = {}; }
+  return _foldCache;
+}
+function foldIsOpen(key, dflt) {
+  const v = _foldAll()[key];
+  return v === undefined ? !!dflt : !!v;
+}
+function _foldSet(key, open) {
+  const all = _foldAll();
+  all[key] = !!open;
+  try { localStorage.setItem(FOLD_STORE, JSON.stringify(all)); } catch (e) { /* private mode */ }
+}
+/* opts: {open, count, unit, tone, icon, hint} */
+function foldSection(key, title, bodyHtml, opts) {
+  const o = opts || {};
+  const open = foldIsOpen(key, o.open);
+  const n = o.count;
+  const count = (n === undefined || n === null) ? ''
+    : `<span class="fold-count">${n}${o.unit ? ' ' + escHtml(o.unit) : ''}</span>`;
+  const hint = o.hint ? `<span class="fold-hint"> · ${escHtml(o.hint)}</span>` : '';
+  return `<div class="fold${open ? ' open' : ''}${o.tone ? ' tone-' + o.tone : ''}" data-fold="${escHtml(key)}">` +
+    `<button class="fold-head" type="button" aria-expanded="${open}" onclick="foldToggle('${escHtml(key)}')">` +
+      `<i class="fas fa-chevron-right fold-caret"></i>` +
+      `${o.icon ? `<i class="fas ${escHtml(o.icon)}" style="color:var(--text2);font-size:11px;"></i>` : ''}` +
+      `<span class="fold-title">${escHtml(title)}${hint}</span>${count}` +
+    `</button>` +
+    `<div class="fold-body"${open ? '' : ' hidden'}>${bodyHtml}</div>` +
+  `</div>`;
+}
+function foldToggle(key) {
+  const el = document.querySelector(`[data-fold="${CSS.escape(key)}"]`);
+  if (!el) return;
+  const open = !el.classList.contains('open');
+  el.classList.toggle('open', open);
+  const body = el.querySelector('.fold-body');
+  if (body) body.hidden = !open;
+  const head = el.querySelector('.fold-head');
+  if (head) head.setAttribute('aria-expanded', String(open));
+  _foldSet(key, open);
+}
+/* Fold every section in a container to one state; used by the pane headers
+   so a reader can clear a long list without clicking each heading. */
+function foldSetAll(containerSel, open) {
+  document.querySelectorAll(`${containerSel} .fold`).forEach(el => {
+    const key = el.getAttribute('data-fold');
+    el.classList.toggle('open', open);
+    const body = el.querySelector('.fold-body');
+    if (body) body.hidden = !open;
+    const head = el.querySelector('.fold-head');
+    if (head) head.setAttribute('aria-expanded', String(open));
+    if (key) _foldSet(key, open);
+  });
 }
 function mdInline(s) {
   s = escHtml(s);
@@ -5631,8 +5746,8 @@ async function renderAudit() {
       <button class="btn btn-ghost btn-sm${auditFlowOpen ? ' on' : ''}" data-audit-flowbtn onclick="toggleAuditFlow()" title="Swarm control flow: agent↔orchestrator handoffs with the model/MCP calls under each"><i class="fas fa-project-diagram"></i> Swarm control flow</button>
     </div>
     <div id="auditFlow"${auditFlowOpen ? '' : ' hidden'}></div>
-    ${findings.length ? `<div class="audit-sub" style="color:var(--red)">Integrity findings</div>${findings.map(auditFinding).join('')}` : ''}
-    ${drift.findings.length ? `<div class="audit-sub">Drift signals</div>${drift.findings.map(auditDrift).join('')}` : ''}
+    ${findings.length ? foldSection(`audit:${auditRunId}:findings`, 'Integrity findings', findings.map(auditFinding).join(''), { open: false, count: findings.length, tone: 'bad', icon: 'fa-triangle-exclamation' }) : ''}
+    ${drift.findings.length ? foldSection(`audit:${auditRunId}:drift`, 'Drift signals', drift.findings.map(auditDrift).join(''), { open: false, count: drift.findings.length, tone: 'warn', icon: 'fa-wind' }) : ''}
     ${mine.length ? `<div class="audit-sub">Approvals waiting on a human</div>${mine.map(auditApproval).join('')}` : ''}
     <div class="audit-sub">Chain events
       <input id="auditFilter" placeholder="filter actor, kind or intent" style="background:var(--bg3);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:11px;padding:3px 7px;margin-left:8px;width:220px;"
@@ -5946,8 +6061,8 @@ async function secRenderAudit() {
       <button class="btn btn-ghost btn-sm" onclick="secRenderAudit()"><i class="fas fa-rotate"></i> Re-verify</button>
       <button class="btn btn-ghost btn-sm" onclick="secOpenInLedger()"><i class="fas fa-arrow-right"></i> Full ledger</button>
     </div>
-    ${findings.length ? `<div class="audit-sub" style="color:var(--red)">Integrity findings</div>${findings.map(auditFinding).join('')}` : ''}
-    ${drift.findings.length ? `<div class="audit-sub">Drift signals</div>${drift.findings.map(auditDrift).join('')}` : ''}
+    ${findings.length ? foldSection(`audit:${rid}:findings`, 'Integrity findings', findings.map(auditFinding).join(''), { open: false, count: findings.length, tone: 'bad', icon: 'fa-triangle-exclamation' }) : ''}
+    ${drift.findings.length ? foldSection(`audit:${rid}:drift`, 'Drift signals', drift.findings.map(auditDrift).join(''), { open: false, count: drift.findings.length, tone: 'warn', icon: 'fa-wind' }) : ''}
     <div class="audit-sub">Chain events
       <input placeholder="filter actor, kind or intent" style="background:var(--bg3);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:11px;padding:3px 7px;margin-left:8px;width:210px;"
              oninput="secAuditFilter=this.value.toLowerCase();secRenderAuditEvents()">
