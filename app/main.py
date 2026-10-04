@@ -2754,6 +2754,7 @@ def leadership_knowledge_graph(db: Session = Depends(get_db)):
         "type": a.artifact_type or "unknown",
         "relevance": round(a.relevance or 0, 2),
         "review": a.review or "pending", "drift": bool(a.drift),
+        "tags": a.tags or "",
         "investigation_id": a.investigation_id,
         "investigation": titles.get(a.investigation_id, "Unknown"),
     } for a in arts]

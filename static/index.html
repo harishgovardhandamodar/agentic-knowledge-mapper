@@ -702,6 +702,36 @@ td.std-threat .std-name { font-weight: 600; display: block; font-size: 11.5px; }
 .tb-outside-t { font-size: 11.5px; font-weight: 600; letter-spacing: 0.4px; text-transform: uppercase; color: var(--orange); margin-bottom: 8px; }
 .tb-note { font-size: 11px; color: var(--text2); margin-top: 8px; }
 
+/* ---- global knowledge graph: full-tab canvas, search, zoom, detail ------
+   The graph is the one leadership view that is a *surface* rather than a
+   table, so it gets the whole tab: a fixed-height card whose canvas flexes to
+   fill, a search box that finds rather than paginates, explicit zoom, and a
+   hover/click detail panel that pins what the cursor is over. */
+.gkg-card { height: calc(100vh - 216px); display: flex; flex-direction: column; }
+.gkg-toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.gkg-searchwrap { position: relative; display: flex; align-items: center; gap: 6px; }
+.gkg-searchwrap > i { position: absolute; left: 8px; pointer-events: none; }
+.gkg-results { position: absolute; top: 30px; left: 0; right: 0; z-index: 20;
+  max-height: 320px; overflow-y: auto; background: var(--bg1, #161b22);
+  border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.4); }
+.gkg-res-item { display: flex; align-items: center; gap: 8px; padding: 6px 9px; cursor: pointer;
+  font-size: 11.5px; border-bottom: 1px solid var(--border); }
+.gkg-res-item:last-child { border-bottom: none; }
+.gkg-res-item:hover, .gkg-res-item.sel { background: rgba(88,166,255,0.1); }
+.gkg-res-item mark { background: var(--orange, #f0ad4e); color: #000; border-radius: 2px; padding: 0 1px; }
+.gkg-res-item .gkg-res-meta { color: var(--text2); font-size: 10.5px; margin-left: auto; white-space: nowrap; }
+.gkg-canvas { flex: 1; min-height: 260px; position: relative; border: 1px solid var(--border);
+  border-radius: 8px; background: var(--bg2); overflow: hidden; }
+.gkg-detail { position: absolute; top: 8px; right: 8px; z-index: 15; width: 300px; max-height: calc(100% - 16px);
+  overflow-y: auto; background: var(--bg1, #161b22); border: 1px solid var(--border); border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0,0,0,.45); padding: 10px 12px; font-size: 11.5px; }
+.gkg-detail h4 { margin: 0 0 6px; font-size: 12.5px; }
+.gkg-detail .gkg-d-close { float: right; background: none; border: none; color: var(--text2); cursor: pointer; font-size: 12px; }
+.gkg-detail .gkg-d-row { margin: 3px 0; color: var(--text2); }
+.gkg-detail .gkg-d-row b { color: var(--text); }
+.gkg-detail .gkg-d-tag { display: inline-block; background: var(--bg3); border-radius: 8px; padding: 1px 7px; margin: 1px 3px 1px 0; font-size: 10.5px; color: var(--text2); }
+.gkg-zoom { display: flex; align-items: center; gap: 2px; }
+
 .std-detail { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 8px; background: var(--bg2); overflow: hidden; }
 .std-detail.dim { opacity: 0.55; }
 .std-detail-head { width: 100%; display: flex; align-items: center; gap: 10px; background: none; border: none; color: inherit; font: inherit; padding: 10px 12px; cursor: pointer; text-align: left; }
@@ -1486,27 +1516,38 @@ body.pane-sec-top-collapsed .sec-topbar-sub { display: none; }
         </div>
         </div>
         <div id="secLeadGraphCard" hidden>
-        <div class="sec-card">
-          <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;flex-wrap:wrap;">
-            <h3 style="font-size:13px;margin:0;"><i class="fas fa-project-diagram" style="color:var(--teal);"></i> Global knowledge graph</h3>
-            <span id="secLeadGraphLive" style="font-size:11px;color:var(--text2);"></span>
-            <span style="flex:1"></span>
-            <button class="btn btn-ghost btn-sm" onclick="secLeadGraphFit()" title="Fit view"><i class="fas fa-expand"></i> Fit</button>
+        <div class="sec-card gkg-card">
+          <div class="gkg-toolbar">
+            <div style="display:flex;align-items:center;gap:10px;min-width:0;">
+              <h3 style="font-size:13px;margin:0;white-space:nowrap;"><i class="fas fa-project-diagram" style="color:var(--teal);"></i> Global knowledge graph</h3>
+              <span id="secLeadGraphLive" style="font-size:11px;color:var(--text2);"></span>
+            </div>
+            <span class="gkg-searchwrap">
+              <i class="fas fa-magnifying-glass" style="font-size:11px;color:var(--text2);"></i>
+              <input id="secLeadGraphSearch" type="text" placeholder="Search all artifacts — elastic-like: rlhf, tabpfn, 'context leak'…"
+                     oninput="secLeadGraphSearchDebounce(this.value)" onkeydown="secLeadGraphSearchKeys(event)"
+                     style="background:var(--bg3);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:12px;padding:5px 9px 5px 24px;width:280px;" />
+              <span id="secLeadGraphResultCount" class="std-note" style="font-size:11px;"></span>
+              <div id="secLeadGraphResults" class="gkg-results" hidden></div>
+            </span>
+            <span class="gkg-zoom">
+              <button class="btn btn-ghost btn-sm" onclick="secLeadGraphZoom(-0.25)" title="Zoom out"><i class="fas fa-minus"></i></button>
+              <span id="secLeadGraphZoomLvl" class="std-note" style="font-size:11px;min-width:38px;text-align:center;">100%</span>
+              <button class="btn btn-ghost btn-sm" onclick="secLeadGraphZoom(0.25)" title="Zoom in"><i class="fas fa-plus"></i></button>
+              <button class="btn btn-ghost btn-sm" onclick="secLeadGraphZoomFit()" title="Fit view"><i class="fas fa-expand"></i> Fit</button>
+            </span>
             <button class="btn btn-ghost btn-sm" onclick="secLeadGraphPhysics()" title="Toggle physics"><i class="fas fa-arrows-alt"></i> Physics</button>
-            <button class="btn btn-ghost btn-sm" onclick="secLeadLoadGraph(true)"><i class="fas fa-rotate"></i> Refresh</button>
+            <button class="btn btn-ghost btn-sm" onclick="secLeadLoadGraph(true)" title="Reload from the server"><i class="fas fa-rotate"></i></button>
           </div>
-          <div class="cluster-bar">
+          <div class="cluster-bar" style="margin:8px 0;">
             <button class="cluster-btn active" data-secCluster="off" onclick="secLeadGraphSetCluster('off')"><i class="fas fa-circle"></i> Off</button>
             <button class="cluster-btn" data-secCluster="category" onclick="secLeadGraphSetCluster('category')"><i class="fas fa-layer-group"></i> Category</button>
             <button class="cluster-btn" data-secCluster="similarity" onclick="secLeadGraphSetCluster('similarity')"><i class="fas fa-hubspot"></i> Similarity</button>
+            <label class="std-note" style="display:flex;gap:4px;align-items:center;" title="Keep only nodes matching the search term and re-render, instead of just finding one."><input type="checkbox" id="secLeadGraphFilterMode" onchange="secLeadGraphApplyFilter()"> filter to matches</label>
+            <span style="flex:1"></span>
             <span class="cluster-count" id="secLeadGraphCount"></span>
           </div>
-          <div class="std-note" style="margin-bottom:6px;">
-            Every collected artifact across every investigation, with investigation hub nodes
-            and the relationships the agent recorded. Cluster by type or by tag overlap to
-            read the estate as a landscape rather than a hairball.
-          </div>
-          <div id="secLeadGraphCanvas" style="width:100%;height:560px;border:1px solid var(--border);border-radius:8px;background:var(--bg2);"></div>
+          <div id="secLeadGraphCanvas" class="gkg-canvas"><div id="secLeadGraphDetail" class="gkg-detail" hidden></div></div>
         </div>
         </div>
       </div>
@@ -9764,26 +9805,69 @@ function secLeadRenderNodes(d) {
 async function secLeadLoadGraph(force) {
   const canvas = document.getElementById('secLeadGraphCanvas');
   if (!canvas) return;
-  if (!force && secLeadGraphData) { secLeadRenderGraph(); return; }
+  if (!force && secLeadGraphData) { secLeadRenderGraph(secLeadGraphFilterSet()); return; }
   try {
     const r = await fetch(`${API}/leadership/knowledge-graph`, { cache: 'no-store' });
     const d = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
     secLeadGraphData = d;
-    secLeadRenderGraph();
+    secLeadGraphBuildIndex();
+    secLeadRenderGraph(secLeadGraphFilterSet());
   } catch (e) {
     canvas.innerHTML = `<div class="audit-empty">Could not load the global graph: ${escHtml(e.message || String(e))}. <button class="btn btn-ghost btn-sm" onclick="secLeadLoadGraph(true)"><i class="fas fa-rotate"></i> Retry</button></div>`;
   }
 }
 
-function secLeadRenderGraph() {
+function secLeadGraphBuildIndex() {
+  // Searchable corpus for the elastic-like finder: every node folded into one
+  // string of label + title + investigation + type + tags, kept lowercase.
+  secLeadGraphIndex = {};
+  (secLeadGraphData && secLeadGraphData.nodes || []).forEach(n => {
+    secLeadGraphIndex[n.id] = {
+      id: n.id, label: n.label || '', title: n.title || '',
+      investigation: n.investigation || '', type: n.type || '', tags: n.tags || '',
+      blob: [n.label, n.title, n.investigation, n.type, n.tags]
+        .join(' ').toLowerCase(),
+    };
+  });
+}
+
+function secLeadGraphFilterSet() {
+  // When "filter to matches" is on, only the nodes matching the current query
+  // survive, plus the investigation hubs of the matching artifacts so the
+  // result still reads as "what, and collected by whom".
+  if (!secLeadGraphFilterActive) return null;
+  const q = (document.getElementById('secLeadGraphSearch') || {}).value || '';
+  const ql = q.trim().toLowerCase();
+  if (!ql) return null;
+  const ids = new Set();
+  (secLeadGraphData && secLeadGraphData.nodes || []).forEach(n => {
+    if (secLeadGraphMatch(n, ql)) {
+      ids.add(n.id);
+      if (n.investigation_id) ids.add('inv:' + n.investigation_id);
+    }
+  });
+  return ids.size ? ids : new Set(['__none__']);
+}
+
+function secLeadGraphMatch(n, ql) {
+  const terms = ql.split(/[\s,]+/).filter(Boolean);
+  const blob = [n.label, n.title, n.investigation, n.type, n.tags]
+    .join(' ').toLowerCase();
+  return terms.every(t => blob.includes(t));
+}
+
+function secLeadRenderGraph(filterIds) {
   const canvas = document.getElementById('secLeadGraphCanvas');
   if (!canvas || !secLeadGraphData) return;
   const isLight = document.documentElement.className === 'light';
   const c = secLeadGraphData.counts || {};
   const live = document.getElementById('secLeadGraphLive');
-  if (live) live.textContent = `${c.artifacts || 0} artifacts · ${c.investigations || 0} investigations · ${c.relationships || 0} relationships${secLeadGraphData.generated ? ' · ' + escHtml(String(secLeadGraphData.generated)) : ''}`;
-  const visNodes = new vis.DataSet((secLeadGraphData.nodes || []).map(n => ({
+  const shown = filterIds ? filterIds.size : (secLeadGraphData.nodes || []).length;
+  if (live) live.textContent = `${c.artifacts || 0} artifacts · ${c.investigations || 0} investigations · ${c.relationships || 0} relationships` + (filterIds ? ` · showing ${shown}` : '') + (secLeadGraphData.generated ? ' · ' + escHtml(String(secLeadGraphData.generated)) : '');
+  const visNodes = new vis.DataSet((secLeadGraphData.nodes || [])
+    .filter(n => !filterIds || filterIds.has(n.id))
+    .map(n => ({
     id: n.id, label: n.label,
     title: `${n.title}\nInvestigation: ${n.investigation}\nRelevance: ${n.relevance}\nReview: ${n.review}`,
     color: {
@@ -9819,6 +9903,9 @@ function secLeadRenderGraph() {
       stabilization: false },
     interaction: { hover: true, tooltipDelay: 200, hideEdgesOnDrag: true },
   });
+  secLeadGraphNetwork.on('zoom', () => secLeadGraphZoomLvl());
+  secLeadGraphNetwork.on('hoverNode', params => { if (!secLeadGraphPinned) secLeadGraphShowDetail(params.node, false); });
+  secLeadGraphNetwork.on('blurNode', () => { if (!secLeadGraphPinned) secLeadGraphCloseDetail(false); });
   secLeadGraphNetwork.on('click', params => {
     if (!params.nodes.length) return;
     const sel = params.nodes[0];
@@ -9826,12 +9913,158 @@ function secLeadRenderGraph() {
       secLeadGraphNetwork.openCluster(sel);
       secLeadGraphClusterIds = secLeadGraphClusterIds.filter(x => x !== sel);
       secLeadGraphCount(secLeadGraphClusterIds.length);
+      return;
     }
+    secLeadGraphPinned = true;
+    secLeadGraphShowDetail(sel, true);
   });
+  secLeadGraphNetwork.on('deselectNode', () => {});
+  secLeadGraphZoomLvl();
   if (secLeadGraphMode !== 'off') {
     const m = secLeadGraphMode; secLeadGraphMode = 'off';
     secLeadGraphSetCluster(m);
   } else secLeadGraphCount(0);
+}
+
+function secLeadGraphDetailHtml(n) {
+  if (!n) return '<div class="gkg-d-row">Node not found.</div>';
+  const tags = String(n.tags || '').split(',').map(t => t.trim()).filter(Boolean);
+  const links = (secLeadGraphData && secLeadGraphData.edges || [])
+    .filter(e => e.from === n.id || e.to === n.id)
+    .slice(0, 12);
+  const neighborIds = new Set();
+  links.forEach(e => { neighborIds.add(e.from); neighborIds.add(e.to); });
+  neighborIds.delete(n.id);
+  const neighbors = [...neighborIds].map(id => secLeadGraphIndex[id]).filter(Boolean).slice(0, 8);
+  return `<button class="gkg-d-close" onclick="secLeadGraphCloseDetail(true)" title="Close (Esc)">&times;</button>
+    <h4><i class="fas ${n.type === 'investigation' ? 'fa-folder-tree' : 'fa-file-lines'}" style="color:${TYPE_COLORS[n.type] || '#666'};"></i> ${escHtml(n.label)}</h4>
+    <div class="gkg-d-row"><b>Type:</b> ${escHtml(n.type)}</div>
+    ${n.investigation ? `<div class="gkg-d-row"><b>Investigation:</b> ${escHtml(n.investigation)}</div>` : ''}
+    ${n.relevance !== undefined && n.relevance !== null ? `<div class="gkg-d-row"><b>Relevance:</b> ${Math.round(Number(n.relevance) * 100)}%</div>` : ''}
+    <div class="gkg-d-row"><b>Review:</b> ${escHtml(n.review)} ${n.drift ? '<span class="drift-pill">drift</span>' : ''}</div>
+    ${tags.length ? `<div class="gkg-d-row"><b>Tags:</b> ${tags.map(t => `<span class="gkg-d-tag">${escHtml(t)}</span>`).join('')}</div>` : ''}
+    ${n.title && n.title !== n.label ? `<div class="gkg-d-row" style="max-height:110px;overflow-y:auto;">${escHtml(n.title)}</div>` : ''}
+    ${links.length ? `<div class="gkg-d-row"><b>Links:</b> ${links.length} edge(s)</div>` : ''}
+    ${neighbors.length ? `<div class="gkg-d-row"><b>Near:</b> ${neighbors.map(x => `<a href="#" onclick="secLeadGraphJump('${escHtml(x.id)}');return false;">${escHtml(x.label.slice(0, 40))}</a>`).join(', ')}</div>` : ''}`;
+}
+
+function secLeadGraphShowDetail(id, pin) {
+  const panel = document.getElementById('secLeadGraphDetail');
+  if (!panel) return;
+  const n = (secLeadGraphData && secLeadGraphData.nodes || []).find(x => x.id === id);
+  if (!n) return;
+  if (pin) secLeadGraphPinned = true;
+  panel.innerHTML = secLeadGraphDetailHtml(n);
+  panel.hidden = false;
+}
+
+function secLeadGraphCloseDetail(force) {
+  if (!force) return; // blur keeps the panel when pinned
+  secLeadGraphPinned = false;
+  const panel = document.getElementById('secLeadGraphDetail');
+  if (panel) panel.hidden = true;
+}
+
+function secLeadGraphJump(id) {
+  secLeadGraphPinned = true;
+  secLeadGraphShowDetail(id, true);
+  if (secLeadGraphNetwork) {
+    try { secLeadGraphNetwork.focus(id, { scale: 1.6, animation: { duration: 400, easingFunction: 'easeInOutQuad' } }); } catch (e) {}
+    try { secLeadGraphNetwork.selectNodes([id]); } catch (e) {}
+  }
+}
+
+function secLeadGraphZoom(delta) {
+  if (!secLeadGraphNetwork) return;
+  if (delta > 0) secLeadGraphNetwork.zoomInBy(0.2);
+  else secLeadGraphNetwork.zoomOutBy(0.2);
+  secLeadGraphZoomLvl();
+}
+
+function secLeadGraphZoomFit() {
+  if (!secLeadGraphNetwork) return;
+  secLeadGraphNetwork.fit({ animation: true });
+  secLeadGraphZoomLvl();
+}
+
+function secLeadGraphZoomLvl() {
+  const el = document.getElementById('secLeadGraphZoomLvl');
+  if (!el || !secLeadGraphNetwork) return;
+  const s = secLeadGraphNetwork.getScale ? secLeadGraphNetwork.getScale() : 1;
+  el.textContent = Math.round(s * 100) + '%';
+}
+
+function secLeadGraphSearchDebounce(v) {
+  clearTimeout(secLeadGraphSearchTimer);
+  secLeadGraphSearchTimer = setTimeout(() => secLeadGraphSearch(v), 180);
+}
+
+function secLeadGraphSearchKeys(e) {
+  if (e.key === 'Escape') { secLeadGraphSearch(''); const inp = document.getElementById('secLeadGraphSearch'); if (inp) inp.value = ''; secLeadGraphApplyFilter(); }
+  const items = document.querySelectorAll('.gkg-res-item');
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    e.preventDefault();
+    if (!items.length) return;
+    const cur = secLeadGraphSelIdx;
+    secLeadGraphSelIdx = e.key === 'ArrowDown' ? (cur + 1) % items.length : (cur - 1 + items.length) % items.length;
+    items.forEach((el, i) => el.classList.toggle('sel', i === secLeadGraphSelIdx));
+    const sel = items[secLeadGraphSelIdx]; if (sel) sel.scrollIntoView({ block: 'nearest' });
+  } else if (e.key === 'Enter') {
+    const sel = items[secLeadGraphSelIdx]; if (sel) sel.click();
+  }
+}
+
+function secLeadGraphSearch(q) {
+  const wrap = document.getElementById('secLeadGraphResults');
+  const count = document.getElementById('secLeadGraphResultCount');
+  const ql = (q || '').trim().toLowerCase();
+  if (!ql || !secLeadGraphIndex) {
+    if (wrap) wrap.hidden = true;
+    if (count) count.textContent = '';
+    return;
+  }
+  const terms = ql.split(/[\s,]+/).filter(Boolean);
+  const scored = [];
+  for (const n of Object.values(secLeadGraphIndex)) {
+    if (!terms.every(t => n.blob.includes(t))) continue;
+    const label = n.label.toLowerCase();
+    let score = 0;
+    if (label === ql) score = 100;
+    else if (label.startsWith(ql)) score = 80;
+    else if (label.includes(ql)) score = 60;
+    else score = 30;
+    scored.push({ id: n.id, label: n.label, meta: `${n.type} · ${n.investigation}`, score });
+  }
+  scored.sort((a, b) => b.score - a.score || a.label.localeCompare(b.label));
+  secLeadGraphResults = scored.slice(0, 12);
+  if (count) count.textContent = scored.length ? `${scored.length} match${scored.length === 1 ? '' : 'es'}` : 'no matches';
+  if (!wrap) return;
+  wrap.innerHTML = secLeadGraphResults.length ? secLeadGraphResults.map((r, i) => {
+    const hl = secLeadGraphHighlight(r.label, ql);
+    return `<div class="gkg-res-item" data-id="${escHtml(r.id)}" onclick="secLeadGraphSelect('${escHtml(r.id)}')" onmouseenter="this.classList.add('sel');secLeadGraphSelIdx=${i}" onmouseleave="this.classList.remove('sel')">
+      <i class="fas fa-circle" style="font-size:8px;color:${TYPE_COLORS[r.type] || '#666'};"></i>
+      <span>${hl}</span><span class="gkg-res-meta">${escHtml(r.meta)}</span></div>`;
+  }).join('') : '<div class="gkg-res-item" style="cursor:default;">No matching artifacts.</div>';
+  wrap.hidden = false;
+  secLeadGraphSelIdx = 0;
+}
+
+function secLeadGraphHighlight(label, ql) {
+  const i = label.toLowerCase().indexOf(ql);
+  if (i < 0) return escHtml(label);
+  return escHtml(label.slice(0, i)) + '<mark>' + escHtml(label.slice(i, i + ql.length)) + '</mark>' + escHtml(label.slice(i + ql.length));
+}
+
+function secLeadGraphSelect(id) {
+  secLeadGraphJump(id);
+  const wrap = document.getElementById('secLeadGraphResults');
+  if (wrap) wrap.hidden = true;
+}
+
+function secLeadGraphApplyFilter() {
+  secLeadGraphFilterActive = !!document.getElementById('secLeadGraphFilterMode').checked;
+  if (secLeadGraphFilterActive) { const q = document.getElementById('secLeadGraphSearch').value; if (!q.trim()) secLeadGraphFilterActive = false; }
+  if (secLeadGraphData) secLeadRenderGraph(secLeadGraphFilterSet());
 }
 
 async function secLeadGraphSetCluster(mode) {
@@ -9884,7 +10117,6 @@ function secLeadGraphOpenAll() {
   secLeadGraphClusterIds = [];
 }
 
-function secLeadGraphFit() { secLeadGraphNetwork?.fit({ animation: true }); }
 function secLeadGraphPhysics() {
   const on = secLeadGraphNetwork?.getOptions?.()?.physics?.enabled;
   secLeadGraphNetwork?.setOptions({ physics: { enabled: !on } });
@@ -9893,6 +10125,7 @@ function secLeadGraphCount(n) {
   const el = document.getElementById('secLeadGraphCount');
   if (el) el.textContent = n ? `${n} cluster${n === 1 ? '' : 's'}` : '';
 }
+
 
 // Sections are emitted in the order the persona asks for. A lens, not a
 // different number: every persona reads the same rows.
