@@ -1714,9 +1714,21 @@ let driftOnly = false;
 let overlayOpen = false;
 
 const TYPE_COLORS = {
-  news: '#58a6ff', paper: '#3fb950', book: '#f0b429', essay: '#bc8cff',
-  tweet: '#5ce0e6', interview: '#f85a5a', research: '#da8fff', projection: '#f0b429',
-  cve: '#ff6b1a', investigation: '#8250df',
+  // collection kinds
+  news: '#58a6ff', paper: '#3fb950', book: '#d29922', essay: '#bc8cff',
+  tweet: '#5ce0e6', interview: '#ff7b72', research: '#ff9bce', projection: '#e3b341',
+  concept: '#79c0ff', source: '#8b949e', blog: '#f0b429', article: '#7ee787',
+  document: '#a5d6ff', report: '#aff5b4', webpage: '#f778ba', video: '#f0883e',
+  podcast: '#d2a8ff', infographic: '#ffa657', dataset: '#56d364', tool: '#a371f7',
+  code: '#7ee787', slide: '#f85149', image: '#e3b341',
+  // security / knowledge-base kinds
+  cve: '#ff6b1a', adversarial_paper: '#ff7b72', benchmark: '#79c0ff',
+  known_issue: '#ffa657', model_card: '#d2a8ff', weights_release: '#e3b341',
+  model: '#bc8cff', model_family: '#a371f7', attack: '#f85149',
+  experiment: '#7ee787', control_mm: '#5ce0e6', data_domain: '#79c0ff',
+  deployment: '#aff5b4', cve_advisory: '#ff6b1a',
+  // hub nodes
+  investigation: '#8250df',
 };
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -2905,10 +2917,10 @@ function renderGraph() {
     label: n.label,
     title: `${n.title}\nRelevance: ${n.relevance}\nReview: ${n.review}\nTags: ${n.tags}`,
     color: {
-      background: TYPE_COLORS[n.type] || '#666',
-      border: TYPE_COLORS[n.type] || '#666',
+      background: TYPE_COLORS[n.type] || '#8b949e',
+      border: TYPE_COLORS[n.type] || '#8b949e',
       highlight: { background: '#fff', border: '#fff' },
-      hover: { background: TYPE_COLORS[n.type] || '#666', border: '#fff' },
+      hover: { background: TYPE_COLORS[n.type] || '#8b949e', border: '#fff' },
     },
     shape: 'dot',
     size: 12 + (n.relevance || 0) * 22,
@@ -3405,7 +3417,7 @@ function applyCompareHighlight(nodeIds, edgeIds) {
   const nu = [];
   nodes.forEach(n => {
     const g = graphData.nodes.find(x => x.id === n.id);
-    const bg = TYPE_COLORS[g?.type] || '#666';
+    const bg = TYPE_COLORS[g?.type] || '#8b949e';
     nu.push(nset.has(n.id)
       ? { id: n.id, opacity: 1, borderWidth: 4,
           color: { background: bg, border: '#f0b429', highlight: { background: bg, border: '#f0b429' }, hover: { background: bg, border: '#f0b429' } },
@@ -9876,9 +9888,9 @@ function secLeadRenderGraph(filterIds) {
     id: n.id, label: n.label,
     title: `${n.title}\nInvestigation: ${n.investigation}\nRelevance: ${n.relevance}\nReview: ${n.review}`,
     color: {
-      background: TYPE_COLORS[n.type] || '#666', border: TYPE_COLORS[n.type] || '#666',
+      background: TYPE_COLORS[n.type] || '#8b949e', border: TYPE_COLORS[n.type] || '#8b949e',
       highlight: { background: '#fff', border: '#fff' },
-      hover: { background: TYPE_COLORS[n.type] || '#666', border: '#fff' },
+      hover: { background: TYPE_COLORS[n.type] || '#8b949e', border: '#fff' },
     },
     shape: n.type === 'investigation' ? 'box' : 'dot',
     size: n.type === 'investigation' ? 24 : 10 + (n.relevance || 0) * 18,
@@ -9942,7 +9954,7 @@ function secLeadGraphDetailHtml(n) {
   neighborIds.delete(n.id);
   const neighbors = [...neighborIds].map(id => secLeadGraphIndex[id]).filter(Boolean).slice(0, 8);
   return `<button class="gkg-d-close" onclick="secLeadGraphCloseDetail(true)" title="Close (Esc)">&times;</button>
-    <h4><i class="fas ${n.type === 'investigation' ? 'fa-folder-tree' : 'fa-file-lines'}" style="color:${TYPE_COLORS[n.type] || '#666'};"></i> ${escHtml(n.label)}</h4>
+    <h4><i class="fas ${n.type === 'investigation' ? 'fa-folder-tree' : 'fa-file-lines'}" style="color:${TYPE_COLORS[n.type] || '#8b949e'};"></i> ${escHtml(n.label)}</h4>
     <div class="gkg-d-row"><b>Type:</b> ${escHtml(n.type)}</div>
     ${n.investigation ? `<div class="gkg-d-row"><b>Investigation:</b> ${escHtml(n.investigation)}</div>` : ''}
     ${n.relevance !== undefined && n.relevance !== null ? `<div class="gkg-d-row"><b>Relevance:</b> ${Math.round(Number(n.relevance) * 100)}%</div>` : ''}
@@ -10047,7 +10059,7 @@ function secLeadGraphSearch(q) {
   wrap.innerHTML = secLeadGraphResults.length ? secLeadGraphResults.map((r, i) => {
     const hl = secLeadGraphHighlight(r.label, ql);
     return `<div class="gkg-res-item" data-id="${escHtml(r.id)}" onclick="secLeadGraphSelect('${escHtml(r.id)}')" onmouseenter="this.classList.add('sel');secLeadGraphSelIdx=${i}" onmouseleave="this.classList.remove('sel')">
-      <i class="fas fa-circle" style="font-size:8px;color:${TYPE_COLORS[r.type] || '#666'};"></i>
+      <i class="fas fa-circle" style="font-size:8px;color:${TYPE_COLORS[r.type] || '#8b949e'};"></i>
       <span>${hl}</span><span class="gkg-res-meta">${escHtml(r.meta)}</span></div>`;
   }).join('') : '<div class="gkg-res-item" style="cursor:default;">No matching artifacts.</div>';
   wrap.hidden = false;
