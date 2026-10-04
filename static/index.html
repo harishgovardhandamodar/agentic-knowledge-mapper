@@ -731,6 +731,7 @@ td.std-threat .std-name { font-weight: 600; display: block; font-size: 11.5px; }
 .gkg-detail .gkg-d-row b { color: var(--text); }
 .gkg-detail .gkg-d-tag { display: inline-block; background: var(--bg3); border-radius: 8px; padding: 1px 7px; margin: 1px 3px 1px 0; font-size: 10.5px; color: var(--text2); }
 .gkg-zoom { display: flex; align-items: center; gap: 2px; }
+.gkg-toolbar .btn.on { color: var(--accent); border-color: var(--accent); }
 
 .std-detail { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 8px; background: var(--bg2); overflow: hidden; }
 .std-detail.dim { opacity: 0.55; }
@@ -1537,6 +1538,7 @@ body.pane-sec-top-collapsed .sec-topbar-sub { display: none; }
               <button class="btn btn-ghost btn-sm" onclick="secLeadGraphZoomFit()" title="Fit view"><i class="fas fa-expand"></i> Fit</button>
             </span>
             <button class="btn btn-ghost btn-sm" onclick="secLeadGraphPhysics()" title="Toggle physics"><i class="fas fa-arrows-alt"></i> Physics</button>
+            <button class="btn btn-ghost btn-sm" id="secLeadGraphEdgeLabelsBtn" onclick="secLeadGraphToggleEdgeLabels()" title="Show or hide the relation labels on edges"><i class="fas fa-tags"></i> Edge labels</button>
             <button class="btn btn-ghost btn-sm" onclick="secLeadLoadGraph(true)" title="Reload from the server"><i class="fas fa-rotate"></i></button>
           </div>
           <div class="cluster-bar" style="margin:8px 0;">
@@ -9590,6 +9592,9 @@ let secLeadGraphData = null, secLeadGraphNetwork = null,
 let secLeadGraphSearchTimer = null, secLeadGraphIndex = {},
     secLeadGraphResults = [], secLeadGraphSelIdx = 0,
     secLeadGraphFilterActive = false, secLeadGraphPinned = false;
+// Edge relation labels start visible; the toolbar toggle hides them when a
+// dense graph makes the labels more clutter than signal.
+let secLeadGraphEdgeLabels = true;
 
 // Global scope flips the board from one investigation to the whole portfolio.
 // The backend has always accepted investigation_id=None; the UI refused to
@@ -9905,8 +9910,9 @@ function secLeadRenderGraph(filterIds) {
     .map(e => ({
       from: e.from, to: e.to, label: e.label, title: e.title,
       color: { color: isLight ? '#0969da44' : '#58a6ff55', highlight: '#58a6ff', hover: '#58a6ff' },
-      font: { size: 8, strokeWidth: 0 },
+      font: { size: 9, strokeWidth: 0 },
       width: e.label === 'collected_in' ? 1 : 2,
+      label: secLeadGraphEdgeLabels ? (e.label || '') : '',
       smooth: { type: 'continuous' },
       arrows: e.label === 'collected_in' ? { to: { enabled: false } }
         : { to: { enabled: true, scaleFactor: 0.5 } },
@@ -10137,6 +10143,12 @@ function secLeadGraphOpenAll() {
 function secLeadGraphPhysics() {
   const on = secLeadGraphNetwork?.getOptions?.()?.physics?.enabled;
   secLeadGraphNetwork?.setOptions({ physics: { enabled: !on } });
+}
+function secLeadGraphToggleEdgeLabels() {
+  secLeadGraphEdgeLabels = !secLeadGraphEdgeLabels;
+  const btn = document.getElementById('secLeadGraphEdgeLabelsBtn');
+  if (btn) btn.classList.toggle('on', secLeadGraphEdgeLabels);
+  if (secLeadGraphData) secLeadRenderGraph(secLeadGraphFilterSet());
 }
 function secLeadGraphCount(n) {
   const el = document.getElementById('secLeadGraphCount');
