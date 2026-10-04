@@ -58,7 +58,7 @@ control catalogue, and the assurance closed loop.
 
 | Doc | Contents |
 |---|---|
-| [**design/**](design/README.md) | Eleven diagram documents: [context](design/01-system-context.md) · [UML](design/02-uml.md) · [data model](design/data-model.md) · [interaction](design/interaction.md) · [activity](design/activity.md) · [state](design/state.md) · [UI](design/ui-interaction.md) · [privacy](design/privacy.md) · [controls](design/controls.md) · [assurance](design/assurance.md) · [risk console](design/risk-console.md) |
+| [**design/**](design/README.md) | Twelve diagram documents: [context](design/01-system-context.md) · [UML](design/02-uml.md) · [data model](design/data-model.md) · [interaction](design/interaction.md) · [activity](design/activity.md) · [state](design/state.md) · [UI](design/ui-interaction.md) · [privacy](design/privacy.md) · [controls](design/controls.md) · [assurance](design/assurance.md) · [security scoring](design/security-scoring.md) · [risk console](design/risk-console.md) |
 | [docs/architecture.md](docs/architecture.md) | System context, containers, UML component/class diagrams, runtime flows, the assurance closed loop |
 | [docs/agent-loop.md](docs/agent-loop.md) | Collection loop state machine, activity flow, stage protocol, guards |
 | [docs/explainer.md](docs/explainer.md) | Q&A pipeline, graph-first routing, grounding, write guard, threads/quiz/watch |
