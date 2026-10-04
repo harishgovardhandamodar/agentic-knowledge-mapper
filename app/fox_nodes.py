@@ -96,13 +96,14 @@ FOX_NODES: list[dict] = [
         "probe": "gateway",
         "trust_boundary": TRUST_LOCAL,
         "max_data_tier": "public",
-        "cpu": None,
-        "gpu": None,
-        "ram": None,
-        "storage": None,
+        "cpu": "Apple M2 Max",
+        "gpu": "Apple M2 Max",
+        "ram": "96 GB",
+        "storage": "4 TB",
         "note": ("Local gateway for offline development, outside the managed "
                  "perimeter, so it may only carry public/synthetic data. "
-                 "Probe target derives from LLM_FALLBACK_URL when set."),
+                 "Hardware declared by the operator; probe target derives from "
+                 "LLM_FALLBACK_URL when set."),
     },
 ]
 

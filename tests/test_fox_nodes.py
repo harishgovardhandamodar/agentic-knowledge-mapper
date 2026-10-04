@@ -51,6 +51,10 @@ class RegistryCase(unittest.TestCase):
         self.assertIn("outside the perimeter", mac["trust_boundary"])
         self.assertEqual(mac["max_data_tier"], "public")
         self.assertEqual(mac["probe"], "gateway")
+        self.assertEqual(mac["cpu"], "Apple M2 Max")
+        self.assertEqual(mac["gpu"], "Apple M2 Max")
+        self.assertEqual(mac["ram"], "96 GB")
+        self.assertEqual(mac["storage"], "4 TB")
 
     def test_operator_specs_override_the_registry(self):
         with mock.patch.dict(os.environ, {
