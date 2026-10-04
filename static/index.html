@@ -1784,12 +1784,22 @@ function toggleTheme() {
       const g = graphData.nodes.find(x => x.id === n.id);
       nodes.update({ id: n.id, font: nodeFont(isLight, 12) });
     });
+    if (edges) {
+      edges.forEach(e => {
+        edges.update({
+          id: e.id,
+          color: { color: isLight ? '#0969da44' : '#58a6ff66', highlight: '#58a6ff', hover: '#58a6ff' },
+          font: { size: 9, color: isLight ? '#1f2328' : '#d1d5db', strokeWidth: 0 },
+        });
+      });
+    }
     network.redraw();
     if (clusterMode !== 'off' && clusterCache[clusterMode]) {
       const m = clusterMode; openAllClusters(); clusterMode = m; updateClusterButtons();
       applyClusters(clusterCache[m].clusters || [], m);
     }
   }
+  if (secLeadGraphData) secLeadGraphTheme();
   if (window.mermaid) {
     const list = document.querySelectorAll('.mermaid');
     if (list.length) mmRender(list);
@@ -9605,7 +9615,8 @@ let secLeadCache = null, secLeadLayer = 'board', secLeadPersona = 'executive',
 // graph's shared `network`/`nodes`/`edges` globals.
 let secLeadGraphData = null, secLeadGraphNetwork = null,
     secLeadGraphMode = 'off', secLeadGraphClusterIds = [],
-    secLeadGraphCache = { category: null, similarity: null };
+    secLeadGraphCache = { category: null, similarity: null },
+    secLeadGraphNodes = null, secLeadGraphEdges = null;
 // Finder + overlay state for the graph tab. Kept module-level so the debounce
 // timer survives re-renders and filter-to-matches persists across searches.
 let secLeadGraphSearchTimer = null, secLeadGraphIndex = {},
@@ -9937,6 +9948,8 @@ function secLeadRenderGraph(filterIds) {
         : { to: { enabled: true, scaleFactor: 0.5 } },
     })));
   if (secLeadGraphNetwork) secLeadGraphNetwork.destroy();
+  secLeadGraphNodes = visNodes;
+  secLeadGraphEdges = visEdges;
   secLeadGraphNetwork = new vis.Network(canvas, { nodes: visNodes, edges: visEdges }, {
     nodes: { scaling: { min: 6, max: 40 } },
     edges: { smooth: { type: 'continuous' } },
@@ -10200,33 +10213,68 @@ async function secLeadGraphSetCluster(mode) {
       data = await res.json();
       secLeadGraphCache[mode] = data;
     }
-    const isLight = document.documentElement.className === 'light';
-    let applied = 0;
-    for (const cl of (data.clusters || [])) {
-      const present = (cl.member_ids || []).map(m => `a:${m}`).filter(id => secLeadGraphData && secLeadGraphData.nodes.some(n => n.id === id));
-      if (present.length < 2) continue;
-      const set = new Set(present);
-      const bg = mode === 'category' ? (TYPE_COLORS[cl.centroid] || '#8b949e') : '#8250df';
-      try {
-        secLeadGraphNetwork.cluster({
-          joinCondition: node => set.has(node.id),
-          clusterNodeProperties: {
-            id: `cl:${cl.id}`, label: cl.label,
-            title: `${mode === 'category' ? 'Category' : 'Similarity centroid'}: ${cl.centroid}\n${present.length} artifacts\nClick to expand`,
-            shape: 'dot', size: 20 + Math.min(16, present.length), borderWidth: 3,
-            color: { background: bg, border: isLight ? '#1f2328' : '#ffffff' },
-            font: nodeFont(isLight, 12),
-          },
-        });
-        secLeadGraphClusterIds.push(`cl:${cl.id}`); applied++;
-      } catch (e) { /* cluster already applied */ }
-    }
-    secLeadGraphCount(applied);
+    secLeadGraphApplyClusters(data.clusters || [], mode);
   } catch (e) {
     secLeadGraphMode = 'off';
     document.querySelectorAll('[data-secCluster]').forEach(b =>
       b.classList.toggle('active', b.dataset.secCluster === 'off'));
     secLeadGraphCount(0);
+  }
+}
+
+function secLeadGraphApplyClusters(clusters, mode) {
+  const isLight = document.documentElement.className === 'light';
+  let applied = 0;
+  for (const cl of (clusters || [])) {
+    const present = (cl.member_ids || []).map(m => `a:${m}`).filter(id => secLeadGraphData && secLeadGraphData.nodes.some(n => n.id === id));
+    if (present.length < 2) continue;
+    const set = new Set(present);
+    const bg = mode === 'category' ? (TYPE_COLORS[cl.centroid] || '#8b949e') : '#8250df';
+    try {
+      secLeadGraphNetwork.cluster({
+        joinCondition: node => set.has(node.id),
+        clusterNodeProperties: {
+          id: `cl:${cl.id}`, label: cl.label,
+          title: `${mode === 'category' ? 'Category' : 'Similarity centroid'}: ${cl.centroid}\n${present.length} artifacts\nClick to expand`,
+          shape: 'dot', size: 20 + Math.min(16, present.length), borderWidth: 3,
+          color: { background: bg, border: isLight ? '#1f2328' : '#ffffff' },
+          font: nodeFont(isLight, 12),
+        },
+      });
+      secLeadGraphClusterIds.push(`cl:${cl.id}`); applied++;
+    } catch (e) { /* cluster already applied */ }
+  }
+  secLeadGraphCount(applied);
+}
+
+// Re-theme the leadership graph in place when the theme toggles: vis baked the
+// old theme's label and edge colours into the network at render, so without
+// this the labels stay the wrong colour until a reload.
+function secLeadGraphTheme() {
+  if (!secLeadGraphNetwork) return;
+  const isLight = document.documentElement.className === 'light';
+  if (secLeadGraphNodes) {
+    secLeadGraphNodes.forEach(n => {
+      secLeadGraphNodes.update({ id: n.id, font: nodeFont(isLight, 11) });
+    });
+  }
+  if (secLeadGraphEdges) {
+    secLeadGraphEdges.forEach(e => {
+      secLeadGraphEdges.update({
+        id: e.id,
+        color: { color: isLight ? '#0969da44' : '#58a6ff55', highlight: '#58a6ff', hover: '#58a6ff' },
+        font: { size: 9, color: isLight ? '#1f2328' : '#d1d5db', strokeWidth: 0 },
+      });
+    });
+  }
+  secLeadGraphNetwork.redraw();
+  if (secLeadGraphMode !== 'off' && secLeadGraphCache[secLeadGraphMode]) {
+    const m = secLeadGraphMode;
+    secLeadGraphOpenAll();
+    secLeadGraphMode = m;
+    document.querySelectorAll('[data-secCluster]').forEach(b =>
+      b.classList.toggle('active', b.dataset.secCluster === m));
+    secLeadGraphApplyClusters(secLeadGraphCache[m].clusters || [], m);
   }
 }
 
