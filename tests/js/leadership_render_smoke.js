@@ -139,7 +139,8 @@ try {
     + [...handlers, 'secLeadRender', 'secLeadKpis', 'secLeadSorted',
        'lbLineChart', 'lbGroupedBars', 'lbBars', 'lbKpi', 'lbSev',
        'secLeadChartMode', 'secLeadSortBy', 'secLeadQueueHtml',
-       'secLeadRiskHtml', 'secLeadAlertsHtml']
+       'secLeadRiskHtml', 'secLeadAlertsHtml', 'secLeadRenderNodes',
+       'secLeadTrustBoundaryHtml']
       .map(n => `${n}: typeof ${n} !== 'undefined' ? ${n} : undefined`).join(',')
     + '};');
   const api = fn(document, window, setInterval, clearInterval, localStorage,
@@ -222,6 +223,39 @@ try {
   api.secLeadSortBy('age');
   api.secLeadSortBy('blast');
   api.secLeadSortBy('product');
+
+  // The Fox services nodes tab: the trust-boundary map must place inside
+  // nodes in the perimeter box, outside nodes out of it, and never print a
+  // bare undefined into a node card.
+  const nodesFixture = {
+    nodes: [
+      { id: 'axiom', name: 'axiom', role: 'gateway',
+        trust_boundary: 'inside the data-governance perimeter',
+        max_data_tier: 'confidential_data', gpu: '2x RTX 5080',
+        status: { state: 'up' } },
+      { id: 'axiom-dgx', name: 'axiom-dgx', role: 'inference',
+        trust_boundary: 'inside the data-governance perimeter',
+        max_data_tier: 'confidential_data', gpu: null,
+        status: { state: 'unprobed' } },
+      { id: 'harishs-macbook-pro', name: 'Harishs-MacBook-Pro', role: 'local',
+        trust_boundary: 'outside the perimeter — local / developer',
+        max_data_tier: 'public', gpu: 'Apple M2 Max',
+        status: { state: 'down' } },
+    ],
+  };
+  api.secLeadRenderNodes(nodesFixture);
+  const nodeHtml = document.getElementById('secLeadNodesBody').innerHTML;
+  if (!nodeHtml) problems.push('nodes view rendered nothing');
+  if (/\bundefined\b/.test(nodeHtml)) problems.push('bare undefined in the nodes view');
+  if (!nodeHtml.includes('Data-governance perimeter')) problems.push('trust perimeter box missing');
+  if (!nodeHtml.includes('Outside the perimeter')) problems.push('outside-perimeter region missing');
+  if (nodeHtml.indexOf('axiom') > nodeHtml.indexOf('Outside the perimeter')
+      || nodeHtml.indexOf('axiom-dgx') > nodeHtml.indexOf('Outside the perimeter')) {
+    problems.push('an inside node rendered outside the perimeter');
+  }
+  if (nodeHtml.indexOf('Harishs-MacBook-Pro') < nodeHtml.indexOf('Outside the perimeter')) {
+    problems.push('the outside node rendered inside the perimeter');
+  }
 } catch (e) {
   problems.push(`threw: ${e && e.stack ? e.stack.split('\n').slice(0, 4).join(' | ') : e}`);
 }
