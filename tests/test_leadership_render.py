@@ -139,7 +139,7 @@ class LeadershipRenderCase(unittest.TestCase):
     # ---- the cases ---------------------------------------------------------
 
     def test_a_full_board_renders_without_crashing_or_printing_undefined(self):
-        self._row("restricted copilot", "restricted_data", 62.7, 0.31,
+        self._row("claims intake agent", "restricted_data", 62.7, 0.31,
                   days_ago=40, run_id=1,
                   architecture_gate={"gate_blocked_applied": True,
                                      "banner": "Scoring returned to inherent",
@@ -169,7 +169,7 @@ class LeadershipRenderCase(unittest.TestCase):
         self.assertIn("PASS", out)
 
     def test_a_tier_filtered_board_renders_with_one_tier(self):
-        self._row("restricted copilot", "restricted_data", 62.7, 0.31, run_id=1)
+        self._row("claims intake agent", "restricted_data", 62.7, 0.31, run_id=1)
         self._row("public faq", "public", 9.0, 0.9, run_id=2)
         payload = self._board(exposure="restricted_data")
         self.assertEqual([t["tier"] for t in payload["risk_position"]["tiers"]],
@@ -248,7 +248,7 @@ class LeadershipRenderCase(unittest.TestCase):
                          "the UI sends a status the backend refuses")
 
     def test_the_board_renders_for_every_persona_lens(self):
-        self._row("restricted copilot", "restricted_data", 62.7, 0.31, run_id=1)
+        self._row("claims intake agent", "restricted_data", 62.7, 0.31, run_id=1)
         for lens in ("executive", "ciso", "dpo", "legal", "audit",
                      "security_engineering"):
             payload = self._board(persona=lens)

@@ -39,3 +39,24 @@ re-read whole files.
 After big code changes, refresh the graph with `graft build` (deterministic,
 no API key, $0).
 <!-- graft:end -->
+
+## Cloud models are test subjects only
+
+Never name a cloud model or provider in workflow instructions, code comments,
+test names, commit messages, or documentation. The only place a cloud model may
+appear by name is as the **subject of an investigation** — an assessment, an
+example prompt, or fixture data representing the thing being evaluated.
+
+Why: this app exists to score AI systems, and a reader has to be able to trust
+that a residual, a control count or a run instruction came from the pipeline
+rather than from the name of whatever wrote it. Naming providers in the
+scaffolding contaminates the evidence the product is supposed to produce.
+
+In practice:
+- Fixture product names are the subject's role, not its vendor: `claims intake
+  agent`, `document summariser`, `support triage bot` — not a hosted assistant.
+- Gateway/transport facts (an OpenAI-compatible request shape, a `/v1` route)
+  describe the local wire protocol. Keep them factual and minimal; if a
+  sentence reads like an endorsement or a provider comparison, cut it.
+- An example command that investigates a model provider is correct usage: that
+  is a test subject. Leave those alone.
