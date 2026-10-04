@@ -1277,3 +1277,101 @@ class TestExportCarriesTheChartSeries(LeadershipTestBase):
     def test_the_export_omits_the_series_table_when_there_is_no_history(self):
         md = LD.export_markdown(self.db, window_days=90)
         self.assertNotIn("Dated residual and confidence", md)
+
+
+def _model_row(db, inv_id, *, name, experiments, hypotheses,
+               tier="confidential_data", run_id=1, days_ago=5,
+               plan_error=None):
+    """A model-layer assessment row carrying an experiment plan."""
+    mj = {"model_key": name, "model_name": name, "meta": {"model_name": name},
+          "experiments": experiments}
+    if plan_error:
+        mj["experiment_plan_error"] = plan_error
+    rec = _row(db, inv_id, name=name, tier=tier, run_id=run_id,
+               verified=55.0, confidence=0.4, layer="model",
+               days_ago=days_ago)
+    # _row writes only a stub model_json; replace it with the plan-bearing one.
+    rec.model_json = json.dumps(mj)
+    rec.hypothesis_json = json.dumps({"hypotheses": hypotheses})
+    db.commit()
+    return rec
+
+
+class TestCoverage(LeadershipTestBase):
+    """Coverage of the scope: investigations assessed vs total, and the
+    experiment plans over the open-falsifier space."""
+
+    def test_investigation_coverage_counts_assessed_versus_total(self):
+        _row(self.db, self.inv.id, name="a", tier="internal", run_id=1,
+             verified=40.0, confidence=0.5)
+        other = Investigation(title="Never assessed")
+        self.db.add(other)
+        self.db.commit()
+        c = LD.coverage(self.db)
+        self.assertEqual(c["investigations"]["total"], 2)
+        self.assertEqual(c["investigations"]["assessed"], 1)
+        self.assertEqual(c["investigations"]["unassessed"], 1)
+        self.assertEqual(c["investigations"]["coverage_pct"], 50)
+
+    def test_coverage_respects_the_resolved_scope(self):
+        # A tier filter narrows the coverage claim the same way it narrows
+        # every other board section: an assessment in another tier does not
+        # make this scope "assessed".
+        _row(self.db, self.inv.id, name="a", tier="public", run_id=1,
+             verified=40.0, confidence=0.5)
+        c = LD.coverage(self.db, exposure="restricted_data")
+        self.assertEqual(c["investigations"]["assessed"], 0)
+
+    def test_single_investigation_scope_reports_one(self):
+        _row(self.db, self.inv.id, name="a", tier="internal", run_id=1,
+             verified=40.0, confidence=0.5)
+        c = LD.coverage(self.db, self.inv.id)
+        self.assertEqual(c["investigations"]["total"], 1)
+        self.assertEqual(c["investigations"]["assessed"], 1)
+
+    def test_experiment_coverage_counts_plans_and_falsifier_targets(self):
+        covered = {"hypothesis_id": "H01", "status": "untested"}
+        bare = {"hypothesis_id": "H02", "status": "contested"}
+        _model_row(self.db, self.inv.id, name="m", run_id=1,
+                   experiments=[{"id": "EX-01", "title": "canary probe",
+                                 "method_type": "canary_probe",
+                                 "targets": {"hypothesis_ids": ["H01"]}}],
+                   hypotheses=[covered, bare])
+        c = LD.coverage(self.db, self.inv.id)
+        e = c["experiments"]
+        self.assertEqual(e["model_assessments"], 1)
+        self.assertEqual(e["with_plan"], 1)
+        self.assertEqual(e["planned"], 1)
+        self.assertEqual(e["plan_coverage_pct"], 100)
+        self.assertEqual(e["open_falsifiers"], 2)
+        self.assertEqual(e["covered_falsifiers"], 1)
+        self.assertEqual(e["falsifier_coverage_pct"], 50)
+        self.assertEqual(e["planner_unavailable"], 0)
+
+    def test_a_product_row_is_not_counted_as_a_model_assessment(self):
+        _row(self.db, self.inv.id, name="p", tier="internal", run_id=1,
+             verified=40.0, confidence=0.5, layer="product")
+        c = LD.coverage(self.db, self.inv.id)
+        self.assertEqual(c["experiments"]["model_assessments"], 0)
+        self.assertIsNone(c["experiments"]["plan_coverage_pct"])
+
+    def test_an_unbuildable_plan_is_reported_not_hidden(self):
+        _model_row(self.db, self.inv.id, name="m", run_id=1,
+                   experiments=[],
+                   hypotheses=[{"hypothesis_id": "H01", "status": "untested"}],
+                   plan_error="planner unavailable: timeout")
+        c = LD.coverage(self.db, self.inv.id)
+        self.assertEqual(c["experiments"]["planner_unavailable"], 1)
+        self.assertEqual(c["experiments"]["with_plan"], 0)
+
+    def test_board_payload_and_export_carry_the_coverage_section(self):
+        _model_row(self.db, self.inv.id, name="m", run_id=1,
+                   experiments=[{"id": "EX-01", "title": "x",
+                                 "method_type": "canary_probe",
+                                 "targets": {"hypothesis_ids": ["H01"]}}],
+                   hypotheses=[{"hypothesis_id": "H01", "status": "untested"}])
+        b = LD.board(self.db, self.inv.id)
+        self.assertEqual(b["coverage"]["investigations"]["total"], 1)
+        md = LD.export_markdown(self.db, self.inv.id)
+        self.assertIn("## Coverage", md)
+        self.assertIn("1/1", md)

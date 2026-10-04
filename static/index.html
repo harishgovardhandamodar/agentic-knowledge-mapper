@@ -9591,6 +9591,7 @@ function secLeadRender() {
   const b = secLeadCache;
   const render = {
     risk_position: secLeadRiskHtml,
+    coverage: secLeadCoverageHtml,
     decision_queue: secLeadQueueHtml,
     assurance_health: secLeadHealthHtml,
     exposure_lens: secLeadExposureHtml,
@@ -9603,9 +9604,11 @@ function secLeadRender() {
   // whole subject is residual risk cannot hide the residual position from the
   // Legal or Audit lens -- that would be a lens quietly changing what is being
   // reported. So risk_position is always the anchor and the lens only reorders
-  // and adds around it.
-  const order = ['risk_position'].concat(
-    (b.emphasis || []).filter(k => k !== 'risk_position'));
+  // and adds around it. Coverage is the same kind of fact: how much of the
+  // portfolio was assessed at all is not something one role gets to see and
+  // another does not.
+  const order = ['risk_position', 'coverage'].concat(
+    (b.emphasis || []).filter(k => k !== 'risk_position' && k !== 'coverage'));
   const sections = order.map(k => (render[k] ? render[k](b[k] || {}) : '')).join('');
   const badge = document.getElementById('dashTabBadge');
   const a = b.alerts || {};
@@ -9655,6 +9658,45 @@ function secLeadHeaderHtml(b) {
 // The strip answers "where do we stand" before any table does. Every tile that
 // could be read as a bare count carries the denominator it is a fraction of,
 // because "2 open" and "2 open of 3" are different conversations.
+function secLeadCoverageHtml(c) {
+  c = c || {};
+  const inv = c.investigations || {}, ex = c.experiments || {};
+  const invPct = inv.coverage_pct, expPct = ex.plan_coverage_pct, fPct = ex.falsifier_coverage_pct;
+  const tone = (n) => (n === null || n === undefined ? ''
+    : n === 100 ? 'var(--green, #28a745)'
+    : n >= 60 ? 'var(--orange, #f0ad4e)'
+    : 'var(--red, #d9534f)');
+  const bars = [];
+  bars.push({ label: 'Investigations assessed', value: invPct,
+    suffix: inv.total ? ` of ${inv.total} in scope` : '',
+    color: tone(invPct), display: inv.total ? `${inv.assessed || 0}/${inv.total}` : '—' });
+  bars.push({ label: 'Model assessments with a plan', value: expPct,
+    suffix: ex.model_assessments ? ` of ${ex.model_assessments} model assessments` : '',
+    color: tone(expPct), display: ex.model_assessments ? `${ex.with_plan || 0}/${ex.model_assessments}` : '—' });
+  bars.push({ label: 'Open falsifiers targeted', value: fPct,
+    suffix: ex.open_falsifiers ? ` of ${ex.open_falsifiers} open` : '',
+    color: tone(fPct), display: ex.open_falsifiers ? `${ex.covered_falsifiers || 0}/${ex.open_falsifiers}` : '—' });
+  const flagged = (inv.unassessed || 0)
+    ? `<span class="std-note">${inv.unassessed} investigation${inv.unassessed === 1 ? '' : 's'} have never been assessed in this scope — nothing can be reported about them.</span>`
+    : (inv.total ? `<span class="std-note">every investigation in scope has an assessment.</span>` : '');
+  const planFlag = (ex.planner_unavailable || 0)
+    ? `<span class="std-note" style="color:var(--orange, #f0ad4e);">${ex.planner_unavailable} experiment plan(s) could not be built.</span>` : '';
+  return `<div class="sec-card" style="margin-bottom:8px;">
+    <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;">
+      <h3 style="font-size:13px;margin:0;"><i class="fas fa-expand" style="color:var(--teal);"></i> Coverage of this scope</h3>
+      <span class="std-note">${escHtml(c.note || '')}</span>
+    </div>
+    <div class="lb-chart" style="margin-top:6px;">
+      ${lbBars(bars.filter(b => b.value !== null && b.value !== undefined),
+        { labelWidth: 200 })}
+    </div>
+    <div style="font-size:11.5px;margin-top:6px;">
+      <span>Experiments planned: <b>${ex.planned || 0}</b> (plan-only, never executed) · ${ex.with_plan || 0} assessment${(ex.with_plan || 0) === 1 ? '' : 's'} carry a plan</span>
+      ${flagged} ${planFlag}
+    </div>
+  </div>`;
+}
+
 function secLeadKpis(b) {
   const rp = b.risk_position || {}, dec = rp.decisions || {}, q = b.decision_queue || {},
         a = b.alerts || {}, h = b.assurance_health || {}, c = rp.controls || {},
@@ -9714,6 +9756,20 @@ function secLeadKpis(b) {
   tile.push(lbKpi(checked ? `${intact}/${checked}` : '—', 'ledger chains intact',
     { tone: !checked ? 'muted' : intact === checked ? 'green' : 'red',
       sub: checked ? (intact === checked ? 'every checked chain verifies' : 'a chain does not verify — see integrity') : 'no chains checked yet' }));
+
+  const cov = b.coverage || {}, inv = cov.investigations || {}, ex = cov.experiments || {};
+  const invV = inv.total ? `${inv.assessed || 0}/${inv.total}` : '—';
+  tile.push(lbKpi(invV, 'investigations assessed',
+    { tone: !inv.total ? 'muted' : inv.coverage_pct === 100 ? 'green' : (inv.coverage_pct || 0) >= 60 ? 'amber' : 'red',
+      barPct: inv.coverage_pct,
+      barTone: !inv.total ? '' : inv.coverage_pct === 100 ? 'green' : (inv.coverage_pct || 0) >= 60 ? 'amber' : 'red',
+      sub: inv.total ? `${inv.unassessed || 0} unassessed in this scope` : 'nothing in this scope' }));
+
+  tile.push(lbKpi(ex.planned || 0, 'experiments planned',
+    { tone: !ex.model_assessments ? 'muted' : (ex.planned || 0) > 0 ? 'green' : 'amber',
+      sub: ex.model_assessments
+        ? `${ex.with_plan || 0}/${ex.model_assessments} model assessments carry a plan · ${ex.covered_falsifiers || 0}/${ex.open_falsifiers || 0} falsifiers targeted`
+        : 'no model assessments in scope' }));
 
   return tile.join('');
 }

@@ -1613,6 +1613,116 @@ def persona_card(name: str) -> dict[str, Any]:
     return persona_names()[[p["id"] for p in PERSONAS].index(name)]
 
 
+def _row_experiment_coverage(rec: Any) -> dict[str, Any]:
+    """One model row's experiment plan, read from stored columns only.
+
+    Experiments are plan-only by design (the product never executes them), so
+    "covered" means an open falsifier has a probe mapped onto it, never that
+    the probe has run. The plan can live in either the model or the hypothesis
+    payload, and hypotheses can be stored under either name, so both are read
+    and the first non-empty wins -- the same fallback order model_kb uses.
+    """
+    mj = _load(getattr(rec, "model_json", None), {}) or {}
+    hj = _load(getattr(rec, "hypothesis_json", None), {}) or {}
+    scoring = _load(getattr(rec, "scoring_json", None), {}) or {}
+    experiments = mj.get("experiments") or hj.get("experiments") or []
+    if not isinstance(experiments, list):
+        experiments = []
+    hypotheses = (hj.get("hypotheses") or hj.get("claims")
+                  or scoring.get("hypotheses") or [])
+    if not isinstance(hypotheses, list):
+        hypotheses = []
+    targeted = {str(x) for e in experiments
+                for x in ((e.get("targets") or {}).get("hypothesis_ids") or [])}
+    open_falsifiers = [str(c.get("hypothesis_id")) for c in hypotheses
+                       if str(c.get("status") or "untested")
+                       in ("untested", "contested")
+                       and str(c.get("hypothesis_id"))]
+    return {
+        "planned": len(experiments),
+        "open_falsifiers": len(open_falsifiers),
+        "covered_falsifiers": len([h for h in open_falsifiers
+                                   if h in targeted]),
+        "planner_unavailable": bool(mj.get("experiment_plan_error")
+                                    or hj.get("experiment_plan_error")),
+    }
+
+
+def coverage(db, investigation_id: Optional[int] = None, *,
+             initiative_id: Optional[int] = None,
+             layer: Optional[str] = None,
+             exposure: Optional[str] = None) -> dict[str, Any]:
+    """Coverage of the scope: which investigations have been assessed, and
+    which model assessments carry an experiment plan over the open questions.
+
+    Two different kinds of coverage, kept separate because they mean different
+    things to a board member:
+    - investigation coverage: of the investigations in scope, how many have at
+      least one assessment. An unassessed investigation is a hole in the board
+      -- nothing can be said about it, so it cannot be shown as a residual.
+    - experiment coverage: of the latest model-layer assessments, how many
+      carry a plan of experiments, and how much of the open-falsifier space
+      those plans target. Both numbers count the same scope the rest of the
+      board reads, so a tier filter that narrows the risk table also narrows
+      the coverage claim.
+    """
+    from .models import Investigation
+
+    rows = _assessments(db, investigation_id, initiative_id=initiative_id,
+                        layer=layer, exposure=exposure)
+    latest = _latest_per_investigation(rows)
+    by_id = {r.id: r for r in rows}
+    recs = [by_id[a["assessment_id"]] for a in latest
+            if a["assessment_id"] in by_id]
+
+    # ---- investigation coverage -------------------------------------------
+    if investigation_id:
+        total_inv = 1
+    else:
+        total_inv = db.query(Investigation).count()
+    assessed_inv = len({a["investigation_id"] for a in latest})
+    unassessed = max(0, total_inv - assessed_inv)
+    inv_pct = (round(100.0 * assessed_inv / total_inv)
+               if total_inv else None)
+
+    # ---- experiment coverage ----------------------------------------------
+    model_recs = [r for r in recs if _layer_of(r) == "model"]
+    exp_rows = [_row_experiment_coverage(r) for r in model_recs]
+    with_plan = sum(1 for e in exp_rows if e["planned"] > 0)
+    planned = sum(e["planned"] for e in exp_rows)
+    open_falsifiers = sum(e["open_falsifiers"] for e in exp_rows)
+    covered_falsifiers = sum(e["covered_falsifiers"] for e in exp_rows)
+    planner_unavailable = sum(1 for e in exp_rows
+                              if e["planner_unavailable"])
+    plan_pct = (round(100.0 * with_plan / len(model_recs))
+                if model_recs else None)
+    falsifier_pct = (round(100.0 * covered_falsifiers / open_falsifiers)
+                     if open_falsifiers else None)
+
+    return {
+        "investigations": {
+            "total": total_inv,
+            "assessed": assessed_inv,
+            "unassessed": unassessed,
+            "coverage_pct": inv_pct,
+        },
+        "experiments": {
+            "model_assessments": len(model_recs),
+            "with_plan": with_plan,
+            "planned": planned,
+            "planner_unavailable": planner_unavailable,
+            "plan_coverage_pct": plan_pct,
+            "open_falsifiers": open_falsifiers,
+            "covered_falsifiers": covered_falsifiers,
+            "falsifier_coverage_pct": falsifier_pct,
+        },
+        "note": ("Investigation coverage counts investigations with at least "
+                 "one assessment in this scope; experiment coverage is "
+                 "plan-only by design -- 'covered' means an open falsifier has "
+                 "a planned probe, never that the probe has run."),
+    }
+
+
 def board(db, investigation_id: Optional[int] = None, *,
           window_days: int = 90, persona: str = "executive",
           initiative_id: Optional[int] = None,
@@ -1658,6 +1768,10 @@ def board(db, investigation_id: Optional[int] = None, *,
                                        initiative_id=scope["initiative_id"],
                                        layer=scope["layer"],
                                        exposure=scope["exposure"]),
+        "coverage": coverage(db, scope["investigation_id"],
+                             initiative_id=scope["initiative_id"],
+                             layer=scope["layer"],
+                             exposure=scope["exposure"]),
         "decision_queue": queue,
         # Every section reads the same resolved scope. A tier filter that
         # narrowed the risk table but not the queue or the alerts would show a
@@ -2023,6 +2137,34 @@ def export_markdown(db, investigation_id: Optional[int] = None, *,
                               for t in tb["threats"][:3])
             L.append(f"- **{tb['tier']}**: {names or 'none scored'}")
         L.append("")
+
+    # Coverage of the scope itself: how much of the portfolio has an
+    # assessment at all, and how much of the model space has an experiment
+    # plan. A board that reports residuals without saying how much it could
+    # not assess is reporting a number with a hole in the denominator.
+    cov = b["coverage"]
+    inv = cov["investigations"]
+    exp = cov["experiments"]
+    L.append("## Coverage")
+    L.append("")
+    if inv["total"]:
+        L.append(f"- Investigations assessed: **{inv['assessed']}/{inv['total']}** "
+                 f"({_pct_or_dash(inv.get('coverage_pct'))}) — "
+                 f"{inv['unassessed']} with no assessment in this scope")
+    else:
+        L.append("- Investigations assessed: **0/0** — no investigations in this scope")
+    L.append(f"- Model assessments with an experiment plan: "
+             f"**{exp['with_plan']}/{exp['model_assessments']}** "
+             f"({_pct_or_dash(exp.get('plan_coverage_pct'))}) — "
+             f"{exp['planned']} experiment(s) planned")
+    L.append(f"- Open falsifiers targeted by a planned experiment: "
+             f"**{exp['covered_falsifiers']}/{exp['open_falsifiers']}** "
+             f"({_pct_or_dash(exp.get('falsifier_coverage_pct'))})"
+             + (f" · {exp['planner_unavailable']} plan(s) could not be built"
+                if exp["planner_unavailable"] else ""))
+    L.append("")
+    L.append(f"> {cov['note']}")
+    L.append("")
 
     L.append(f"## Decision queue ({q['count']} item(s))")
     L.append("")
