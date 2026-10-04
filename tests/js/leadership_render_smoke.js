@@ -172,6 +172,16 @@ try {
     const i = htmlOut.indexOf('NaN');
     problems.push(`NaN near: ${htmlOut.slice(Math.max(0, i - 80), i + 40).replace(/\s+/g, ' ')}`);
   }
+  // Bare "undefined" is the failure mode this suite is for: a bucket index
+  // past the end of a glyph ramp or a missing field interpolates as the word
+  // "undefined" inside a run of block characters, which reads as junk and
+  // is invisible to the >cell< check above.
+  const undef = htmlOut.match(/\bundefined\b/g) || [];
+  if (undef.length) {
+    const i = htmlOut.indexOf('undefined');
+    problems.push(`${undef.length} bare undefined token(s) in the render; near: `
+      + htmlOut.slice(Math.max(0, i - 60), i + 30).replace(/\s+/g, ' '));
+  }
   // The strip and the charts are the point of the rework. Charts are only
   // required when there is something to plot: with an empty portfolio the
   // honest output is the "no history, direction unknown" panel, and demanding

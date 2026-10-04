@@ -372,6 +372,15 @@ def risk_position(db, investigation_id: Optional[int] = None, *,
         conf = a.get("evidence_confidence")
         if conf is not None:
             confidences.append(float(conf))
+        # Each mean aggregates every row that carries that value. Verified and
+        # declared must not be coupled to the same rows: a portfolio where no
+        # row has been verified still has a real declared residual, and a
+        # "mean declared —" next to per-tier declared figures would look like a
+        # hole in the data rather than an honest gap in verification.
+        if v is not None:
+            verified_vals.append(float(v))
+        if d is not None:
+            declared_vals.append(float(d))
         inh = a.get("inherent_pct")
         if (inh is not None and d is not None and v is not None):
             claimed = max(0.0, float(inh) - float(d))
@@ -379,8 +388,6 @@ def risk_position(db, investigation_id: Optional[int] = None, *,
             if claimed > 0:
                 reductions["claimed"] += claimed
                 reductions["verified"] += min(verified, claimed)
-            declared_vals.append(float(d))
-            verified_vals.append(float(v))
         for t in (a.get("threats") or [])[:4]:
             if isinstance(t, dict) and t.get("verified_residual") is not None:
                 entry = {

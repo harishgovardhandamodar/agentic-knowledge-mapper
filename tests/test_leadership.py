@@ -1438,3 +1438,19 @@ class TestCoverageRegister(LeadershipTestBase):
         md = LD.export_markdown(self.db, self.inv.id)
         self.assertNotIn("All investigations in scope", md)
         self.assertNotIn("Experiment plans in scope", md)
+
+
+class TestRiskPositionVerifiedVsDeclared(LeadershipTestBase):
+    def test_declared_mean_is_reported_even_when_nothing_is_verified(self):
+        # A portfolio where no row has been verified still has a real declared
+        # residual. The header must not print "mean declared —" beside per-tier
+        # declared figures that exist.
+        _row(self.db, self.inv.id, name="a", tier="internal", run_id=1,
+             verified=None, confidence=None,
+             exposure_assurance=_assurance(verified={"residual_pct": None},
+                                           evidence_confidence=None))
+        rp = LD.risk_position(self.db, self.inv.id)
+        vvd = rp["verified_vs_declared"]
+        self.assertEqual(vvd["mean_declared_residual_pct"], 35.4)
+        self.assertIsNone(vvd["mean_verified_residual_pct"])
+        self.assertIsNone(vvd["verified_share_pct"])

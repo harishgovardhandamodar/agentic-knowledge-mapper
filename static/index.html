@@ -9947,8 +9947,10 @@ function secLeadRiskHtml(rp) {
       </div>
     </div>
 
-    <div class="std-note">Mean verified ${secLeadNum(vvd.mean_verified_residual_pct, '%')} vs declared ${secLeadNum(vvd.mean_declared_residual_pct, '%')} ·
-      <b>${secLeadNum(vvd.verified_share_pct, '%')}</b> of the claimed reduction is evidenced (${vvd.verified_reduction_pct_points} of ${vvd.claimed_reduction_pct_points} points) ·
+    <div class="std-note">${(vvd.claimed_reduction_pct_points || 0) > 0
+      ? `Mean verified ${secLeadNum(vvd.mean_verified_residual_pct, '%')} vs declared ${secLeadNum(vvd.mean_declared_residual_pct, '%')} ·
+      <b>${secLeadNum(vvd.verified_share_pct, '%')}</b> of the claimed reduction is evidenced (${vvd.verified_reduction_pct_points} of ${vvd.claimed_reduction_pct_points} points)`
+      : `No verified residual in scope — mean declared ${secLeadNum(vvd.mean_declared_residual_pct, '%')}, so the evidenced-reduction share cannot be computed`} ·
       mean evidence confidence ${secLeadNum(conf.mean_pct, '%')}</div>
     <div style="overflow-x:auto;margin-top:6px;"><table class="sec-table">
       <tr><th>Tier</th><th style="text-align:right;">N</th><th style="text-align:right;">Verified</th><th style="text-align:right;">Declared</th><th style="text-align:right;">Forensics</th><th style="text-align:right;">Radius quantified</th><th style="text-align:right;">Gate-blocked</th><th>Trend</th></tr>
@@ -10703,13 +10705,16 @@ function secLeadNum(v, suffix) {
 // nothing here can be quoted as a figure. null buckets stay blank.
 function secLeadSpark(series) {
   if (!series || !series.length) return '<span class="std-note">—</span> ';
-  const vals = series.filter(v => v !== null && v !== undefined);
+  const vals = series.filter(v => typeof v === 'number' && Number.isFinite(v));
   if (!vals.length) return '<span class="std-note">—</span> ';
   const max = Math.max.apply(null, vals), min = Math.min.apply(null, vals);
   const span = (max - min) || 1;
+  // The ramp has 8 glyphs (▁..█, indices 0..7). A max value must land on █,
+  // not on a bucket index beyond the ramp -- an out-of-range index renders as
+  // the string "undefined" inside the row.
   const bars = series.map(v => {
-    if (v === null || v === undefined) return '<span style="opacity:.2;">▁</span>';
-    const h = 3 + Math.round(((v - min) / span) * 7);
+    if (typeof v !== 'number' || !Number.isFinite(v)) return '<span style="opacity:.2;">▁</span>';
+    const h = Math.max(0, Math.min(7, Math.round(((v - min) / span) * 7)));
     return `<span title="${v}">${'▁▂▃▄▅▆▇█'[h]}</span>`;
   }).join('');
   return `<span style="font-family:monospace;letter-spacing:-1px;">${bars}</span> `;
