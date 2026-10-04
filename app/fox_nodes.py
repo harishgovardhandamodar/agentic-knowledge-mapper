@@ -62,13 +62,13 @@ FOX_NODES: list[dict] = [
         "probe": "broker",
         "trust_boundary": TRUST_INSIDE,
         "max_data_tier": "confidential_data",
-        "cpu": None,
+        "cpu": "AMD 7800X3D",
         "gpu": "2x RTX 5080",
-        "ram": None,
-        "storage": None,
+        "ram": "64 GB",
+        "storage": "2 TB",
         "note": ("Runs the fox-services broker and the LLM gateway; agent tool "
-                 "calls and inference go through it. GPU from docker-compose; "
-                 "CPU/RAM/storage not recorded — declare via FOX_NODES_SPECS."),
+                 "calls and inference go through it. Hardware declared by the "
+                 "operator."),
     },
     {
         "id": "axiom-dgx",
@@ -79,13 +79,13 @@ FOX_NODES: list[dict] = [
         "probe": "http",
         "trust_boundary": TRUST_INSIDE,
         "max_data_tier": "confidential_data",
-        "cpu": None,
-        "gpu": None,
-        "ram": None,
-        "storage": None,
-        "note": ("Declared in the fox-services pool. No probe endpoint is "
-                 "configured, so status stays unprobed until "
-                 "FOX_NODE_AXIOM_DGX_HOST is set."),
+        "cpu": "NVIDIA GB10",
+        "gpu": "NVIDIA GB10",
+        "ram": "128 GB",
+        "storage": "4 TB",
+        "note": ("Declared in the fox-services pool with operator-declared "
+                 "hardware. No probe endpoint is configured, so status stays "
+                 "unprobed until FOX_NODE_AXIOM_DGX_HOST is set."),
     },
     {
         "id": "harishs-macbook-pro",

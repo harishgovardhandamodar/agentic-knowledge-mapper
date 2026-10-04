@@ -34,7 +34,17 @@ class RegistryCase(unittest.TestCase):
         axiom = next(n for n in F.FOX_NODES if n["id"] == "axiom")
         self.assertIn("data-governance perimeter", axiom["trust_boundary"])
         self.assertEqual(axiom["probe"], "broker")
-        self.assertTrue(axiom["gpu"])
+        self.assertEqual(axiom["gpu"], "2x RTX 5080")
+        self.assertEqual(axiom["cpu"], "AMD 7800X3D")
+        self.assertEqual(axiom["ram"], "64 GB")
+        self.assertEqual(axiom["storage"], "2 TB")
+
+    def test_axiom_dgx_declares_its_hardware(self):
+        dgx = next(n for n in F.FOX_NODES if n["id"] == "axiom-dgx")
+        self.assertEqual(dgx["cpu"], "NVIDIA GB10")
+        self.assertEqual(dgx["gpu"], "NVIDIA GB10")
+        self.assertEqual(dgx["ram"], "128 GB")
+        self.assertEqual(dgx["storage"], "4 TB")
 
     def test_mac_is_outside_the_perimeter_and_limited_to_public(self):
         mac = next(n for n in F.FOX_NODES if n["id"] == "harishs-macbook-pro")
