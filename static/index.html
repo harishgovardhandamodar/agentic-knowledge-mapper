@@ -1422,7 +1422,8 @@ body.pane-sec-top-collapsed .sec-topbar-sub { display: none; }
           <button class="std-viewbtn on" id="secLeadLayerBoard" onclick="secLeadSetLayer('board')">Assurance board</button>
           <button class="std-viewbtn" id="secLeadLayerRegister" onclick="secLeadSetLayer('register')">Portfolio register</button>
           <button class="std-viewbtn" id="secLeadLayerNodes" onclick="secLeadSetLayer('nodes')">Fox services nodes</button>
-          <span class="std-note">The assurance board answers "what must a person decide, and what do we believe it?". The register answers "is the portfolio covered and owned?". The nodes tab answers "what compute estate is the pipeline running on, and is it up?".</span>
+          <button class="std-viewbtn" id="secLeadLayerGraph" onclick="secLeadSetLayer('graph')">Knowledge graph</button>
+          <span class="std-note">The assurance board answers "what must a person decide, and what do we believe it?". The register answers "is the portfolio covered and owned?". The nodes tab answers "what compute estate is the pipeline running on, and is it up?". The graph answers "what has been collected and investigated, and how is it connected?".</span>
         </div>
         <div id="secLeadBody"></div>
         <div id="secDashCard" hidden>
@@ -1482,6 +1483,30 @@ body.pane-sec-top-collapsed .sec-topbar-sub { display: none; }
             a guess.
           </div>
           <div id="secLeadNodesBody"><div class="audit-empty"><i class="fas fa-spinner fa-spin"></i> Loading nodes…</div></div>
+        </div>
+        </div>
+        <div id="secLeadGraphCard" hidden>
+        <div class="sec-card">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;flex-wrap:wrap;">
+            <h3 style="font-size:13px;margin:0;"><i class="fas fa-project-diagram" style="color:var(--teal);"></i> Global knowledge graph</h3>
+            <span id="secLeadGraphLive" style="font-size:11px;color:var(--text2);"></span>
+            <span style="flex:1"></span>
+            <button class="btn btn-ghost btn-sm" onclick="secLeadGraphFit()" title="Fit view"><i class="fas fa-expand"></i> Fit</button>
+            <button class="btn btn-ghost btn-sm" onclick="secLeadGraphPhysics()" title="Toggle physics"><i class="fas fa-arrows-alt"></i> Physics</button>
+            <button class="btn btn-ghost btn-sm" onclick="secLeadLoadGraph(true)"><i class="fas fa-rotate"></i> Refresh</button>
+          </div>
+          <div class="cluster-bar">
+            <button class="cluster-btn active" data-secCluster="off" onclick="secLeadGraphSetCluster('off')"><i class="fas fa-circle"></i> Off</button>
+            <button class="cluster-btn" data-secCluster="category" onclick="secLeadGraphSetCluster('category')"><i class="fas fa-layer-group"></i> Category</button>
+            <button class="cluster-btn" data-secCluster="similarity" onclick="secLeadGraphSetCluster('similarity')"><i class="fas fa-hubspot"></i> Similarity</button>
+            <span class="cluster-count" id="secLeadGraphCount"></span>
+          </div>
+          <div class="std-note" style="margin-bottom:6px;">
+            Every collected artifact across every investigation, with investigation hub nodes
+            and the relationships the agent recorded. Cluster by type or by tag overlap to
+            read the estate as a landscape rather than a hairball.
+          </div>
+          <div id="secLeadGraphCanvas" style="width:100%;height:560px;border:1px solid var(--border);border-radius:8px;background:var(--bg2);"></div>
         </div>
         </div>
       </div>
@@ -1650,7 +1675,7 @@ let overlayOpen = false;
 const TYPE_COLORS = {
   news: '#58a6ff', paper: '#3fb950', book: '#f0b429', essay: '#bc8cff',
   tweet: '#5ce0e6', interview: '#f85a5a', research: '#da8fff', projection: '#f0b429',
-  cve: '#ff6b1a',
+  cve: '#ff6b1a', investigation: '#8250df',
 };
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -9502,6 +9527,11 @@ function secDashBrief(fmt) {
 let secLeadCache = null, secLeadLayer = 'board', secLeadPersona = 'executive',
     secLeadOffset = 0, secLeadPoll = null, secLeadErr = '', secLeadNote = '',
     secLeadGlobal = false, secLeadNodesCache = null;
+// The leadership graph is its own network, so it cannot touch the main
+// graph's shared `network`/`nodes`/`edges` globals.
+let secLeadGraphData = null, secLeadGraphNetwork = null,
+    secLeadGraphMode = 'off', secLeadGraphClusterIds = [],
+    secLeadGraphCache = { category: null, similarity: null };
 
 // Global scope flips the board from one investigation to the whole portfolio.
 // The backend has always accepted investigation_id=None; the UI refused to
@@ -9519,20 +9549,25 @@ function secLeadSetGlobal(v) {
 function secLeadRefresh() {
   if (secLeadLayer === 'register') return secLoadDashboard(true);
   if (secLeadLayer === 'nodes') return secLeadLoadNodes(true);
+  if (secLeadLayer === 'graph') return secLeadLoadGraph(true);
   return secLeadLoad(true);
 }
 
 function secLeadSetLayer(layer) {
   secLeadLayer = layer === 'register' ? 'register'
-    : layer === 'nodes' ? 'nodes' : 'board';
+    : layer === 'nodes' ? 'nodes'
+    : layer === 'graph' ? 'graph' : 'board';
   document.getElementById('secLeadLayerBoard').classList.toggle('on', secLeadLayer === 'board');
   document.getElementById('secLeadLayerRegister').classList.toggle('on', secLeadLayer === 'register');
   document.getElementById('secLeadLayerNodes').classList.toggle('on', secLeadLayer === 'nodes');
+  document.getElementById('secLeadLayerGraph').classList.toggle('on', secLeadLayer === 'graph');
   document.getElementById('secLeadBody').hidden = (secLeadLayer !== 'board');
   document.getElementById('secDashCard').hidden = (secLeadLayer !== 'register');
   document.getElementById('secLeadNodesCard').hidden = (secLeadLayer !== 'nodes');
+  document.getElementById('secLeadGraphCard').hidden = (secLeadLayer !== 'graph');
   if (secLeadLayer === 'register') secLoadDashboard(true);
   else if (secLeadLayer === 'nodes') secLeadLoadNodes(true);
+  else if (secLeadLayer === 'graph') secLeadLoadGraph(true);
   else { secLeadLoad(false); secLeadPollStart(); }
 }
 
@@ -9726,6 +9761,139 @@ function secLeadRenderNodes(d) {
     <div class="std-note" style="margin-top:8px;">${escHtml(d.note || '')}</div>`;
 }
 
+async function secLeadLoadGraph(force) {
+  const canvas = document.getElementById('secLeadGraphCanvas');
+  if (!canvas) return;
+  if (!force && secLeadGraphData) { secLeadRenderGraph(); return; }
+  try {
+    const r = await fetch(`${API}/leadership/knowledge-graph`, { cache: 'no-store' });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
+    secLeadGraphData = d;
+    secLeadRenderGraph();
+  } catch (e) {
+    canvas.innerHTML = `<div class="audit-empty">Could not load the global graph: ${escHtml(e.message || String(e))}. <button class="btn btn-ghost btn-sm" onclick="secLeadLoadGraph(true)"><i class="fas fa-rotate"></i> Retry</button></div>`;
+  }
+}
+
+function secLeadRenderGraph() {
+  const canvas = document.getElementById('secLeadGraphCanvas');
+  if (!canvas || !secLeadGraphData) return;
+  const isLight = document.documentElement.className === 'light';
+  const c = secLeadGraphData.counts || {};
+  const live = document.getElementById('secLeadGraphLive');
+  if (live) live.textContent = `${c.artifacts || 0} artifacts · ${c.investigations || 0} investigations · ${c.relationships || 0} relationships${secLeadGraphData.generated ? ' · ' + escHtml(String(secLeadGraphData.generated)) : ''}`;
+  const visNodes = new vis.DataSet((secLeadGraphData.nodes || []).map(n => ({
+    id: n.id, label: n.label,
+    title: `${n.title}\nInvestigation: ${n.investigation}\nRelevance: ${n.relevance}\nReview: ${n.review}`,
+    color: {
+      background: TYPE_COLORS[n.type] || '#666', border: TYPE_COLORS[n.type] || '#666',
+      highlight: { background: '#fff', border: '#fff' },
+      hover: { background: TYPE_COLORS[n.type] || '#666', border: '#fff' },
+    },
+    shape: n.type === 'investigation' ? 'box' : 'dot',
+    size: n.type === 'investigation' ? 24 : 10 + (n.relevance || 0) * 18,
+    borderWidth: n.type === 'investigation' ? 3 : 2,
+    font: nodeFont(isLight, 11),
+    group: n.type,
+    opacity: (n.review === 'rejected' || n.drift) ? 0.35 : 1,
+  })));
+  const ids = new Set(visNodes.getIds());
+  const visEdges = new vis.DataSet((secLeadGraphData.edges || [])
+    .filter(e => ids.has(e.from) && ids.has(e.to))
+    .map(e => ({
+      from: e.from, to: e.to, label: e.label, title: e.title,
+      color: { color: isLight ? '#0969da44' : '#58a6ff55', highlight: '#58a6ff', hover: '#58a6ff' },
+      font: { size: 8, strokeWidth: 0 },
+      width: e.label === 'collected_in' ? 1 : 2,
+      smooth: { type: 'continuous' },
+      arrows: e.label === 'collected_in' ? { to: { enabled: false } }
+        : { to: { enabled: true, scaleFactor: 0.5 } },
+    })));
+  if (secLeadGraphNetwork) secLeadGraphNetwork.destroy();
+  secLeadGraphNetwork = new vis.Network(canvas, { nodes: visNodes, edges: visEdges }, {
+    nodes: { scaling: { min: 6, max: 40 } },
+    edges: { smooth: { type: 'continuous' } },
+    physics: { enabled: true, solver: 'forceAtlas2Based',
+      forceAtlas2Based: { gravitationalConstant: -50, centralGravity: 0.006, springLength: 160, springConstant: 0.02, damping: 0.4 },
+      stabilization: false },
+    interaction: { hover: true, tooltipDelay: 200, hideEdgesOnDrag: true },
+  });
+  secLeadGraphNetwork.on('click', params => {
+    if (!params.nodes.length) return;
+    const sel = params.nodes[0];
+    if (secLeadGraphNetwork.isCluster(sel)) {
+      secLeadGraphNetwork.openCluster(sel);
+      secLeadGraphClusterIds = secLeadGraphClusterIds.filter(x => x !== sel);
+      secLeadGraphCount(secLeadGraphClusterIds.length);
+    }
+  });
+  if (secLeadGraphMode !== 'off') {
+    const m = secLeadGraphMode; secLeadGraphMode = 'off';
+    secLeadGraphSetCluster(m);
+  } else secLeadGraphCount(0);
+}
+
+async function secLeadGraphSetCluster(mode) {
+  secLeadGraphMode = mode;
+  document.querySelectorAll('[data-secCluster]').forEach(b =>
+    b.classList.toggle('active', b.dataset.secCluster === mode));
+  if (secLeadGraphNetwork) secLeadGraphOpenAll();
+  if (mode === 'off') return secLeadGraphCount(0);
+  try {
+    let data = secLeadGraphCache[mode];
+    if (!data) {
+      const res = await fetch(`${API}/leadership/knowledge-graph/clusters?mode=${mode}`);
+      data = await res.json();
+      secLeadGraphCache[mode] = data;
+    }
+    const isLight = document.documentElement.className === 'light';
+    let applied = 0;
+    for (const cl of (data.clusters || [])) {
+      const present = (cl.member_ids || []).map(m => `a:${m}`).filter(id => secLeadGraphData && secLeadGraphData.nodes.some(n => n.id === id));
+      if (present.length < 2) continue;
+      const set = new Set(present);
+      const bg = mode === 'category' ? (TYPE_COLORS[cl.centroid] || '#8b949e') : '#8250df';
+      try {
+        secLeadGraphNetwork.cluster({
+          joinCondition: node => set.has(node.id),
+          clusterNodeProperties: {
+            id: `cl:${cl.id}`, label: cl.label,
+            title: `${mode === 'category' ? 'Category' : 'Similarity centroid'}: ${cl.centroid}\n${present.length} artifacts\nClick to expand`,
+            shape: 'dot', size: 20 + Math.min(16, present.length), borderWidth: 3,
+            color: { background: bg, border: isLight ? '#1f2328' : '#ffffff' },
+            font: nodeFont(isLight, 12),
+          },
+        });
+        secLeadGraphClusterIds.push(`cl:${cl.id}`); applied++;
+      } catch (e) { /* cluster already applied */ }
+    }
+    secLeadGraphCount(applied);
+  } catch (e) {
+    secLeadGraphMode = 'off';
+    document.querySelectorAll('[data-secCluster]').forEach(b =>
+      b.classList.toggle('active', b.dataset.secCluster === 'off'));
+    secLeadGraphCount(0);
+  }
+}
+
+function secLeadGraphOpenAll() {
+  (secLeadGraphClusterIds || []).forEach(id => {
+    try { secLeadGraphNetwork.openCluster(id); } catch (e) {}
+  });
+  secLeadGraphClusterIds = [];
+}
+
+function secLeadGraphFit() { secLeadGraphNetwork?.fit({ animation: true }); }
+function secLeadGraphPhysics() {
+  const on = secLeadGraphNetwork?.getOptions?.()?.physics?.enabled;
+  secLeadGraphNetwork?.setOptions({ physics: { enabled: !on } });
+}
+function secLeadGraphCount(n) {
+  const el = document.getElementById('secLeadGraphCount');
+  if (el) el.textContent = n ? `${n} cluster${n === 1 ? '' : 's'}` : '';
+}
+
 // Sections are emitted in the order the persona asks for. A lens, not a
 // different number: every persona reads the same rows.
 function secLeadRender() {
@@ -9851,6 +10019,30 @@ function secLeadCoverageHtml(c) {
     ${foldSection(`cov:exp:${regKey}`, 'Experiment plans',
       `<table class="audit-tbl"><thead><tr><th>Investigation</th><th>Model</th><th>Planned</th><th>Falsifiers covered/open</th></tr></thead><tbody>${expRows || '<tr><td colspan="4">no model assessments in scope</td></tr>'}</tbody></table>`,
       { open: false, count: (ex.items || []).length, unit: 'plans', icon: 'fa-vial' })}`;
+  // Coverage distribution: the same coverage figure, cut by the dimensions a
+  // board reader actually reasons in -- keywords, data tier, use case, focus
+  // area, model class. Each row is covered/total with the percent, so an
+  // unassigned bucket stays visible instead of shrinking the denominator.
+  const dist = c.distribution || {};
+  const pctCell = (p) => (p === null || p === undefined ? '—' : p + '%');
+  const dimFold = (label, key, icon) => {
+    const rows = (dist[key] || []).map(b =>
+      `<tr><td>${escHtml(String(b.value).slice(0, 120))}</td>
+       <td style="text-align:right;">${b.covered || 0}</td>
+       <td style="text-align:right;">${b.total || 0}</td>
+       <td style="text-align:right;">${pctCell(b.coverage_pct)}</td></tr>`).join('');
+    if (!rows) return '';
+    return foldSection(`covdist:${key}:${regKey}`, `${label}`,
+      `<table class="audit-tbl"><thead><tr><th>Value</th><th style="text-align:right;">Covered</th><th style="text-align:right;">Total</th><th style="text-align:right;">%</th></tr></thead><tbody>${rows}</tbody></table>`,
+      { open: false, count: (dist[key] || []).length, unit: '', icon });
+  };
+  const distHtml = [
+    dimFold('By keywords', 'keywords', 'fa-tags'),
+    dimFold('By data exposure', 'exposure', 'fa-shield-halved'),
+    dimFold('By use case (objective)', 'use_case', 'fa-bullseye'),
+    dimFold('By focus / settings / context', 'focus', 'fa-sliders'),
+    dimFold('By model class', 'model_class', 'fa-cube'),
+  ].join('');
   return `<div class="sec-card" style="margin-bottom:8px;">
     <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;">
       <h3 style="font-size:13px;margin:0;"><i class="fas fa-expand" style="color:var(--teal);"></i> Coverage of this scope</h3>
@@ -9865,6 +10057,7 @@ function secLeadCoverageHtml(c) {
       ${flagged} ${planFlag}
     </div>
     ${registers}
+    ${distHtml ? `<div style="font-size:11.5px;font-weight:600;margin:10px 0 4px;">Coverage distribution <span class="std-note" style="font-weight:400;">— ${escHtml(dist.note || '')}</span></div>${distHtml}` : ''}
   </div>`;
 }
 

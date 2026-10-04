@@ -1734,6 +1734,82 @@ def coverage(db, investigation_id: Optional[int] = None, *,
     exp_detail.sort(key=lambda e: (str(e["investigation"]).lower(),
                                    str(e["product"]).lower()))
 
+    # ---- coverage distribution ---------------------------------------------
+    # "33 unassessed" needs a shape: which keywords, data tiers, use cases,
+    # focus areas and model classes carry the coverage, and which are left
+    # bare. Every dimension buckets *investigations* in scope (not rows), so
+    # an unassessed investigation lands in a visible "unassigned" bucket
+    # instead of silently shrinking the denominator. theme/topic are carried
+    # by keywords and focus; objective is carried by use_case.
+    def _bucket(buckets, value):
+        return buckets.setdefault(value, [0, 0])
+
+    def _dist(buckets):
+        out = [{"value": v, "total": t, "covered": c,
+                "coverage_pct": (round(100.0 * c / t) if t else None)}
+               for v, (t, c) in buckets.items()]
+        out.sort(key=lambda x: (-(x["coverage_pct"]
+                                  if x["coverage_pct"] is not None else -1),
+                                x["value"].lower()))
+        return out
+
+    tier_of: dict[int, str] = {}
+    uc_of: dict[int, str] = {}
+    focus_of: dict[int, str] = {}
+    class_of: dict[int, str] = {}
+    for a, rec in zip(latest, recs):
+        inv = a["investigation_id"]
+        tier_of.setdefault(inv, a["exposure"])
+        uc_of.setdefault(inv, (rec.use_case or "").strip())
+        focus = _load(getattr(rec, "focus_json", None), []) or []
+        first = ""
+        if isinstance(focus, list):
+            first = next((str(f).strip() for f in focus
+                          if str(f).strip()), "")
+        focus_of.setdefault(inv, first)
+        if _layer_of(rec) == "model":
+            mj = _load(getattr(rec, "model_json", None), {}) or {}
+            meta = mj.get("meta") or {}
+            cls = str(meta.get("model_class") or "").strip() or "unknown"
+        else:
+            cls = "product / other"
+        class_of.setdefault(inv, cls)
+
+    kw_b: dict[str, list[int]] = {}
+    exp_b: dict[str, list[int]] = {}
+    uc_b: dict[str, list[int]] = {}
+    fo_b: dict[str, list[int]] = {}
+    cl_b: dict[str, list[int]] = {}
+    for r in inv_rows:
+        kws = [k.strip().lower() for k in (r.keywords or "").split(",")
+               if k.strip()]
+        for k in (kws or ["(no keywords)"]):
+            entry = _bucket(kw_b, k)
+            entry[0] += 1
+            if r.id in assessed_ids:
+                entry[1] += 1
+        for label, buckets, source in (
+                ("exposure", exp_b, tier_of),
+                ("use_case", uc_b, uc_of),
+                ("focus", fo_b, focus_of),
+                ("model_class", cl_b, class_of)):
+            entry = _bucket(buckets, source.get(r.id) or "unassigned")
+            entry[0] += 1
+            if r.id in assessed_ids:
+                entry[1] += 1
+
+    distribution = {
+        "keywords": _dist(kw_b),
+        "exposure": _dist(exp_b),
+        "use_case": _dist(uc_b),
+        "focus": _dist(fo_b),
+        "model_class": _dist(cl_b),
+        "note": ("Each bucket counts investigations in scope by the latest "
+                 "assessment's attribute; investigations with no assessment "
+                 "land in an explicit 'unassigned' bucket. theme/topic are "
+                 "carried by keywords and focus, objective by use case."),
+    }
+
     return {
         "investigations": {
             "total": total_inv,
@@ -1753,6 +1829,7 @@ def coverage(db, investigation_id: Optional[int] = None, *,
             "falsifier_coverage_pct": falsifier_pct,
             "items": exp_detail,
         },
+        "distribution": distribution,
         "note": ("Investigation coverage counts investigations with at least "
                  "one assessment in this scope; experiment coverage is "
                  "plan-only by design -- 'covered' means an open falsifier has "
@@ -2225,6 +2302,29 @@ def export_markdown(db, investigation_id: Optional[int] = None, *,
                      + (" (plan unbuildable)" if exi["planner_unavailable"] else "")
                      + " |")
         L.append("")
+        dist = cov.get("distribution") or {}
+        if any(dist.get(k) for k in ("keywords", "exposure", "use_case",
+                                     "focus", "model_class")):
+            L.append("Coverage distribution — covered/total by dimension:")
+            L.append("")
+            for label, key in (("keywords", "keywords"),
+                               ("data exposure", "exposure"),
+                               ("use case (objective)", "use_case"),
+                               ("focus / settings / context", "focus"),
+                               ("model class", "model_class")):
+                buckets = dist.get(key) or []
+                if not buckets:
+                    continue
+                L.append(f"- **{label}:**")
+                L.append("")
+                L.append("| Value | Covered | Total | % |")
+                L.append("|---|---:|---:|---:|")
+                for bucket in buckets[:20]:
+                    L.append(f"| {bucket['value']} | {bucket['covered']} | {bucket['total']} | "
+                             f"{_pct_or_dash(bucket.get('coverage_pct'))} |")
+                L.append("")
+            L.append(f"> {dist.get('note', '')}")
+            L.append("")
 
     L.append(f"## Decision queue ({q['count']} item(s))")
     L.append("")

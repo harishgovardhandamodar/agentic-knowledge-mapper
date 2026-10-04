@@ -2731,6 +2731,130 @@ def leadership_infrastructure():
     return _fn.infrastructure()
 
 
+@app.get("/api/leadership/knowledge-graph")
+def leadership_knowledge_graph(db: Session = Depends(get_db)):
+    """The global knowledge graph: every collected artifact and every
+    relationship, with investigation hub nodes so "what collected what" is
+    visible at a glance instead of being implied by the row's foreign key.
+
+    Node ids are namespaced (``a:`` artifacts, ``inv:`` investigations) so a
+    portfolio-wide graph cannot collide with itself. A portfolio graph can be
+    large on purpose: the reader asked for everything collected and
+    investigated, so nothing is capped here.
+    """
+    from datetime import datetime, timezone
+    from .models import Investigation, Artifact, Relationship
+
+    arts = db.query(Artifact).order_by(Artifact.id).all()
+    rels = db.query(Relationship).all()
+    inv_rows = db.query(Investigation).all()
+    titles = {r.id: (r.title or "Untitled") for r in inv_rows}
+    nodes = [{
+        "id": f"a:{a.id}", "label": (a.title or "")[:60], "title": a.title or "",
+        "type": a.artifact_type or "unknown",
+        "relevance": round(a.relevance or 0, 2),
+        "review": a.review or "pending", "drift": bool(a.drift),
+        "investigation_id": a.investigation_id,
+        "investigation": titles.get(a.investigation_id, "Unknown"),
+    } for a in arts]
+    nodes += [{
+        "id": f"inv:{inv_id}", "label": (title or "")[:40],
+        "title": f"Investigation {inv_id}: {title}", "type": "investigation",
+        "relevance": 0.0, "review": "accepted", "drift": False,
+        "investigation_id": inv_id, "investigation": title,
+    } for inv_id, title in titles.items()]
+    edges = [{
+        "id": f"e:{r.id}", "from": f"a:{r.source_id}", "to": f"a:{r.target_id}",
+        "label": r.relationship_type or "", "title": r.description or "",
+    } for r in rels]
+    edges += [{
+        "id": f"ei:{a.id}", "from": f"a:{a.id}", "to": f"inv:{a.investigation_id}",
+        "label": "collected_in", "title": "collected in this investigation",
+    } for a in arts]
+    return {
+        "nodes": nodes, "edges": edges,
+        "generated": datetime.now(timezone.utc).isoformat(),
+        "counts": {"artifacts": len(arts), "investigations": len(titles),
+                   "relationships": len(rels)},
+    }
+
+
+@app.get("/api/leadership/knowledge-graph/clusters")
+def leadership_knowledge_graph_clusters(
+        mode: str = Query("category", pattern="^(category|similarity)$"),
+        threshold: float = Query(0.25, ge=0.0, le=1.0),
+        db: Session = Depends(get_db)):
+    """Cluster the *global* artifact graph, the same two modes the
+    per-investigation graph offers but across every investigation at once."""
+    from collections import defaultdict
+    from .models import Artifact
+
+    artifacts = db.query(Artifact).all()
+    if mode == "category":
+        grouped: dict = defaultdict(list)
+        for a in artifacts:
+            grouped[a.artifact_type or "unknown"].append(a.id)
+        clusters = []
+        for atype, mids in sorted(grouped.items()):
+            counts: dict = defaultdict(int)
+            for a in artifacts:
+                if a.id in mids:
+                    for t in _tag_set(a.tags):
+                        counts[t] += 1
+            top = sorted(counts, key=lambda t: -counts[t])[:3]
+            clusters.append({"id": f"category:{atype}", "label": f"{atype} ({len(mids)})",
+                             "mode": "category", "centroid": atype,
+                             "centroid_tags": top, "member_ids": sorted(mids),
+                             "size": len(mids)})
+        return {"mode": mode, "clusters": clusters}
+
+    ids = [a.id for a in artifacts]
+    tag_map = {a.id: _tag_set(a.tags) for a in artifacts}
+    parent = {i: i for i in ids}
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    for i in range(len(ids)):
+        for j in range(i + 1, len(ids)):
+            a, b = tag_map[ids[i]], tag_map[ids[j]]
+            union = a | b
+            if a and b and union and len(a & b) / len(union) >= threshold:
+                ra, rb = find(ids[i]), find(ids[j])
+                if ra != rb:
+                    parent[rb] = ra
+
+    groups: dict = defaultdict(list)
+    for i in ids:
+        if tag_map[i]:
+            groups[find(i)].append(i)
+
+    clusters = []
+    for idx, (root, mids) in enumerate(sorted(groups.items(), key=lambda kv: -len(kv[1]))):
+        if len(mids) < 2:
+            continue
+        sets = [tag_map[m] for m in mids]
+        inter = set.intersection(*sets) if sets else set()
+        if inter:
+            ctags = sorted(inter)
+        else:
+            counts = defaultdict(int)
+            for s in sets:
+                for t in s:
+                    counts[t] += 1
+            ctags = sorted(counts, key=lambda t: (-counts[t], t))[:3]
+        label = ", ".join(ctags[:3]) if ctags else f"group {idx + 1}"
+        clusters.append({"id": f"similarity:{root}", "label": f"{label} ({len(mids)})",
+                         "mode": "similarity", "centroid": label,
+                         "centroid_tags": ctags, "member_ids": sorted(mids),
+                         "size": len(mids)})
+    clusters.sort(key=lambda c: -c["size"])
+    return {"mode": mode, "threshold": threshold, "clusters": clusters}
+
+
 @app.get("/api/leadership/risk-position")
 def leadership_risk_position(investigation_id: Optional[int] = None,
                              window_days: int = 90,
