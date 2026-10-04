@@ -1402,7 +1402,8 @@ body.pane-sec-top-collapsed .sec-topbar-sub { display: none; }
         <div class="std-filters" style="margin-bottom:10px;">
           <button class="std-viewbtn on" id="secLeadLayerBoard" onclick="secLeadSetLayer('board')">Assurance board</button>
           <button class="std-viewbtn" id="secLeadLayerRegister" onclick="secLeadSetLayer('register')">Portfolio register</button>
-          <span class="std-note">The assurance board answers "what must a person decide, and what do we believe it?". The register answers "is the portfolio covered and owned?".</span>
+          <button class="std-viewbtn" id="secLeadLayerNodes" onclick="secLeadSetLayer('nodes')">Fox services nodes</button>
+          <span class="std-note">The assurance board answers "what must a person decide, and what do we believe it?". The register answers "is the portfolio covered and owned?". The nodes tab answers "what compute estate is the pipeline running on, and is it up?".</span>
         </div>
         <div id="secLeadBody"></div>
         <div id="secDashCard" hidden>
@@ -1444,6 +1445,24 @@ body.pane-sec-top-collapsed .sec-topbar-sub { display: none; }
           </div>
           <div id="secDashBody"></div>
           <div id="secDashFoot" class="std-note" style="margin-top:8px;"></div>
+        </div>
+        </div>
+        <div id="secLeadNodesCard" hidden>
+        <div class="sec-card">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;flex-wrap:wrap;">
+            <h3 style="font-size:13px;margin:0;"><i class="fas fa-server" style="color:var(--teal);"></i> Fox services nodes</h3>
+            <span id="secLeadNodesLive" style="font-size:11px;color:var(--text2);"></span>
+            <span style="flex:1"></span>
+            <button class="btn btn-ghost btn-sm" onclick="secLeadLoadNodes(true)"><i class="fas fa-rotate"></i></button>
+          </div>
+          <div class="std-note" style="margin-bottom:10px;">
+            The compute estate the assessment pipeline runs on. Trust boundary
+            and hardware are declared configuration; status is probed live with
+            a short timeout, so a down node reads as data, not an error, and a
+            node with no configured probe endpoint reports unprobed rather than
+            a guess.
+          </div>
+          <div id="secLeadNodesBody"><div class="audit-empty"><i class="fas fa-spinner fa-spin"></i> Loading nodes…</div></div>
         </div>
         </div>
       </div>
@@ -9463,7 +9482,7 @@ function secDashBrief(fmt) {
 
 let secLeadCache = null, secLeadLayer = 'board', secLeadPersona = 'executive',
     secLeadOffset = 0, secLeadPoll = null, secLeadErr = '', secLeadNote = '',
-    secLeadGlobal = false;
+    secLeadGlobal = false, secLeadNodesCache = null;
 
 // Global scope flips the board from one investigation to the whole portfolio.
 // The backend has always accepted investigation_id=None; the UI refused to
@@ -9479,16 +9498,22 @@ function secLeadSetGlobal(v) {
 }
 
 function secLeadRefresh() {
-  return secLeadLayer === 'register' ? secLoadDashboard(true) : secLeadLoad(true);
+  if (secLeadLayer === 'register') return secLoadDashboard(true);
+  if (secLeadLayer === 'nodes') return secLeadLoadNodes(true);
+  return secLeadLoad(true);
 }
 
 function secLeadSetLayer(layer) {
-  secLeadLayer = layer === 'register' ? 'register' : 'board';
+  secLeadLayer = layer === 'register' ? 'register'
+    : layer === 'nodes' ? 'nodes' : 'board';
   document.getElementById('secLeadLayerBoard').classList.toggle('on', secLeadLayer === 'board');
   document.getElementById('secLeadLayerRegister').classList.toggle('on', secLeadLayer === 'register');
+  document.getElementById('secLeadLayerNodes').classList.toggle('on', secLeadLayer === 'nodes');
   document.getElementById('secLeadBody').hidden = (secLeadLayer !== 'board');
   document.getElementById('secDashCard').hidden = (secLeadLayer !== 'register');
+  document.getElementById('secLeadNodesCard').hidden = (secLeadLayer !== 'nodes');
   if (secLeadLayer === 'register') secLoadDashboard(true);
+  else if (secLeadLayer === 'nodes') secLeadLoadNodes(true);
   else { secLeadLoad(false); secLeadPollStart(); }
 }
 
@@ -9561,7 +9586,6 @@ async function secLeadLoad(force) {
     if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
     secLeadCache = d;
     secLeadErr = '';
-    secLeadPopulateFilters(d);
   } catch (e) {
     secLeadErr = e.message || String(e);
     body.innerHTML = `<div class="std-err">Could not load the assurance board: ${escHtml(secLeadErr)}. <button class="btn btn-ghost btn-sm" onclick="secLeadLoad(true)"><i class="fas fa-rotate"></i> Retry</button></div>`;
@@ -9595,6 +9619,61 @@ function secLeadPopulateFilters(d) {
     st.innerHTML = (qf.states || []).map(s =>
       `<option value="${escHtml(s)}"${(picked.size ? picked.has(s) : (qf.default_states || []).includes(s)) ? ' selected' : ''}>${escHtml(String(s).replace(/_/g, ' '))}</option>`).join('');
   }
+}
+
+async function secLeadLoadNodes(force) {
+  const body = document.getElementById('secLeadNodesBody');
+  if (!body) return;
+  if (!force && secLeadNodesCache) { secLeadRenderNodes(secLeadNodesCache); return; }
+  body.innerHTML = '<div class="audit-empty"><i class="fas fa-spinner fa-spin"></i> Probing fox-services nodes…</div>';
+  try {
+    const r = await fetch(`${API}/leadership/infrastructure`, { cache: 'no-store' });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
+    secLeadNodesCache = d;
+    secLeadRenderNodes(d);
+  } catch (e) {
+    body.innerHTML = `<div class="audit-empty">Could not probe nodes: ${escHtml(e.message || String(e))}</div>`;
+  }
+}
+
+function secLeadRenderNodes(d) {
+  const body = document.getElementById('secLeadNodesBody');
+  if (!body) return;
+  const live = document.getElementById('secLeadNodesLive');
+  if (live) live.textContent = d.generated ? `probed ${escHtml(String(d.generated))}` : '';
+  const rows = (d.nodes || []).map(n => {
+    const s = n.status || {};
+    const state = s.state || 'unknown';
+    const dot = state === 'up' ? 'var(--green, #28a745)'
+      : state === 'down' ? 'var(--red, #d9534f)' : 'var(--text2)';
+    const stateLabel = state === 'up'
+      ? `up${s.latency_ms !== undefined && s.latency_ms !== null ? ` · ${s.latency_ms}ms` : ''}`
+      : state === 'down' ? 'down' : 'unprobed';
+    const detail = [];
+    if (s.gateway) detail.push(`gateway ${s.gateway.reachable ? 'up' : 'down'}`);
+    if (s.models && s.models.length) detail.push(`serving: ${s.models.join(', ')}`);
+    if (s.sandboxes && s.sandboxes.length) detail.push(`${s.sandboxes.length} sandbox(es)`);
+    if (s.error) detail.push(s.error);
+    const spec = (v) => (v === null || v === undefined || v === '' ? '—' : escHtml(String(v)));
+    return `<tr>
+      <td><b>${escHtml(n.name || n.id || '')}</b></td>
+      <td>${escHtml(n.role || '')}</td>
+      <td><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${dot};margin-right:5px;"></span><b>${stateLabel}</b>
+        ${detail.length ? `<div class="std-note" style="font-size:11px;">${escHtml(detail.join(' · '))}</div>` : ''}</td>
+      <td>${escHtml(n.trust_boundary || '—')}<div class="std-note" style="font-size:11px;">max tier: ${escHtml(String(n.max_data_tier || '—').replace(/_/g, ' '))}</div></td>
+      <td>${spec(n.cpu)}</td>
+      <td>${spec(n.gpu)}</td>
+      <td>${spec(n.ram)}</td>
+      <td>${spec(n.storage)}</td>
+      <td style="max-width:300px;"><span class="std-note">${escHtml(n.note || '')}</span></td>
+    </tr>`;
+  }).join('');
+  body.innerHTML = `<div style="overflow-x:auto;"><table class="sec-table">
+      <tr><th>Node</th><th>Role</th><th>Status</th><th>Trust boundary</th><th>CPU</th><th>GPU</th><th>RAM</th><th>Storage</th><th>Note</th></tr>
+      ${rows || '<tr><td colspan="9">No nodes declared.</td></tr>'}
+    </table></div>
+    <div class="std-note" style="margin-top:8px;">${escHtml(d.note || '')}</div>`;
 }
 
 // Sections are emitted in the order the persona asks for. A lens, not a
@@ -9632,6 +9711,12 @@ function secLeadRender() {
     badge.textContent = String(n);
   }
   body.innerHTML = secLeadHeaderHtml(b) + sections + secLeadFootHtml(b);
+  // The dropdowns (lens, sort, tier, layer, states) live inside the DOM that
+  // was just written and are re-created empty on every render. Populating them
+  // here -- not in the loader, which runs before the header exists -- is what
+  // keeps them non-empty on every path: first load, cached render, and each
+  // poll refresh.
+  secLeadPopulateFilters(secLeadCache);
 }
 
 function secLeadHeaderHtml(b) {

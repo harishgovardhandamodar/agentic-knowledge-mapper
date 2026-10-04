@@ -2718,6 +2718,19 @@ def leadership_personas(db: Session = Depends(get_db)):
     return {"personas": _ld.persona_names()}
 
 
+@app.get("/api/leadership/infrastructure")
+def leadership_infrastructure():
+    """Fox-services nodes: declared trust boundary and hardware, live status.
+
+    Status is probed with a short timeout; unreachable is data, not a 500, and
+    a node with no configured probe endpoint reports unprobed rather than a
+    guess. No database read: this is the compute estate the pipeline runs on,
+    not a portfolio row.
+    """
+    from . import fox_nodes as _fn
+    return _fn.infrastructure()
+
+
 @app.get("/api/leadership/risk-position")
 def leadership_risk_position(investigation_id: Optional[int] = None,
                              window_days: int = 90,

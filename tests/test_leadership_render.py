@@ -253,3 +253,17 @@ class LeadershipRenderCase(unittest.TestCase):
                      "security_engineering"):
             payload = self._board(persona=lens)
             self.assertIn("PASS", self._render(payload, f"{lens} lens"))
+    def test_the_dropdowns_are_populated_after_the_dom_is_written(self):
+        # The lens/sort/tier/layer/states selects live inside the board header,
+        # which the render writes into the DOM. Populating them in the loader
+        # -- before that write -- finds no elements and every payload-driven
+        # dropdown comes back empty. The call must therefore sit *inside*
+        # secLeadRender, textually after the innerHTML assignment, on every
+        # render path.
+        html = open(os.path.join(HERE, "..", "static", "index.html")).read()
+        write = "body.innerHTML = secLeadHeaderHtml(b) + sections + secLeadFootHtml(b);"
+        populate = "secLeadPopulateFilters(secLeadCache);"
+        self.assertIn(write, html)
+        self.assertIn(populate, html)
+        self.assertGreater(html.index(populate), html.index(write),
+                           "populate ran before the header existed in the DOM")
