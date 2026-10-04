@@ -712,10 +712,10 @@ td.std-threat .std-name { font-weight: 600; display: block; font-size: 11.5px; }
 .gkg-searchwrap { position: relative; display: flex; align-items: center; gap: 6px; }
 .gkg-searchwrap > i { position: absolute; left: 8px; pointer-events: none; }
 .gkg-results { position: absolute; top: 30px; left: 0; right: 0; z-index: 20;
-  max-height: 320px; overflow-y: auto; background: var(--bg1, #161b22);
+  max-height: 320px; overflow-y: auto; background: var(--bg2); color: var(--text);
   border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.4); }
 .gkg-res-item { display: flex; align-items: center; gap: 8px; padding: 6px 9px; cursor: pointer;
-  font-size: 11.5px; border-bottom: 1px solid var(--border); }
+  font-size: 11.5px; color: var(--text); border-bottom: 1px solid var(--border); }
 .gkg-res-item:last-child { border-bottom: none; }
 .gkg-res-item:hover, .gkg-res-item.sel { background: rgba(88,166,255,0.1); }
 .gkg-res-item mark { background: var(--orange, #f0ad4e); color: #000; border-radius: 2px; padding: 0 1px; }
@@ -723,7 +723,7 @@ td.std-threat .std-name { font-weight: 600; display: block; font-size: 11.5px; }
 .gkg-canvas { flex: 1; min-height: 260px; position: relative; border: 1px solid var(--border);
   border-radius: 8px; background: var(--bg2); overflow: hidden; }
 .gkg-detail { position: absolute; top: 8px; right: 8px; z-index: 15; width: 300px; max-height: calc(100% - 16px);
-  overflow-y: auto; background: var(--bg1, #161b22); border: 1px solid var(--border); border-radius: 8px;
+  overflow-y: auto; background: var(--bg2); color: var(--text); border: 1px solid var(--border); border-radius: 8px;
   box-shadow: 0 8px 24px rgba(0,0,0,.45); padding: 10px 12px; font-size: 11.5px; }
 .gkg-detail h4 { margin: 0 0 6px; font-size: 12.5px; }
 .gkg-detail .gkg-d-close { float: right; background: none; border: none; color: var(--text2); cursor: pointer; font-size: 12px; }
