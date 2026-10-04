@@ -2244,7 +2244,11 @@ def get_security_assessment(assessment_id: int, db: Session = Depends(get_db)):
 
 class AssuranceDecisionRequest(BaseModel):
     """A leadership acceptance, rejection or time-bounded exception."""
-    decision: str  # accept | accept_with_mandatory_guardrails | reject | exception
+    # accept | guardrails | reject | exception, or any alias in
+    # leadership.DECISION_ALIASES. The long stored constants are what the
+    # assurance pass derives; the short spellings are what a UI offers, and
+    # accepting only the long form made the documented `reject` a 422.
+    decision: str
     actor: str = ""
     rationale: str = ""
     expires_days: Optional[int] = None
@@ -2636,6 +2640,7 @@ def leadership_board_markdown(investigation_id: Optional[int] = None,
                               window_days: int = 90, persona: str = "executive",
                               initiative_id: Optional[int] = None,
                               layer: Optional[str] = None,
+                              exposure: Optional[str] = None,
                               db: Session = Depends(get_db)):
     """The board as one Markdown snapshot, for a regulator or an archive."""
     from fastapi.responses import PlainTextResponse
@@ -2643,7 +2648,7 @@ def leadership_board_markdown(investigation_id: Optional[int] = None,
     try:
         md = _ld.export_markdown(db, investigation_id, window_days=window_days,
                                  persona=persona, initiative_id=initiative_id,
-                                 layer=layer)
+                                 layer=layer, exposure=exposure)
     except ValueError as exc:
         raise HTTPException(422, str(exc))
     return PlainTextResponse(md, media_type="text/markdown; charset=utf-8")
@@ -2677,6 +2682,7 @@ def leadership_risk_position(investigation_id: Optional[int] = None,
 def leadership_decision_queue(investigation_id: Optional[int] = None,
                               states: Optional[str] = None,
                               tier: Optional[str] = None,
+                              exposure: Optional[str] = None,
                               sort: str = "residual",
                               limit: int = 25, offset: int = 0,
                               sla_days: int = 14,
@@ -2688,8 +2694,8 @@ def leadership_decision_queue(investigation_id: Optional[int] = None,
     try:
         return _ld.decision_queue(db, investigation_id,
                                   states=_csv_states(states), limit=limit,
-                                  offset=offset, tier=tier, sort=sort,
-                                  sla_days=sla_days,
+                                  offset=offset, tier=tier, exposure=exposure,
+                                  sort=sort, sla_days=sla_days,
                                   initiative_id=initiative_id, layer=layer)
     except ValueError as exc:
         raise HTTPException(422, str(exc))
@@ -2699,12 +2705,14 @@ def leadership_decision_queue(investigation_id: Optional[int] = None,
 def leadership_assurance_health(investigation_id: Optional[int] = None,
                                 initiative_id: Optional[int] = None,
                                 layer: Optional[str] = None,
+                                exposure: Optional[str] = None,
                                 db: Session = Depends(get_db)):
     """Controls verified vs declared, forensics, ledger integrity, stalled runs."""
     from . import leadership as _ld
     try:
         return _ld.assurance_health(db, investigation_id,
-                                   initiative_id=initiative_id, layer=layer)
+                                   initiative_id=initiative_id, layer=layer,
+                                   exposure=exposure)
     except ValueError as exc:
         raise HTTPException(422, str(exc))
 
@@ -2713,12 +2721,14 @@ def leadership_assurance_health(investigation_id: Optional[int] = None,
 def leadership_exposure(investigation_id: Optional[int] = None,
                         initiative_id: Optional[int] = None,
                         layer: Optional[str] = None,
+                        exposure: Optional[str] = None,
                         db: Session = Depends(get_db)):
     """Restricted/confidential assets, privileged users and material items."""
     from . import leadership as _ld
     try:
         return _ld.exposure_lens(db, investigation_id,
-                                 initiative_id=initiative_id, layer=layer)
+                                 initiative_id=initiative_id, layer=layer,
+                                 exposure=exposure)
     except ValueError as exc:
         raise HTTPException(422, str(exc))
 
@@ -2727,12 +2737,14 @@ def leadership_exposure(investigation_id: Optional[int] = None,
 def leadership_system_integrity(investigation_id: Optional[int] = None,
                                 initiative_id: Optional[int] = None,
                                 layer: Optional[str] = None,
+                                exposure: Optional[str] = None,
                                 db: Session = Depends(get_db)):
     """Swarm health, threat-pack currency, ledger completeness, time-to-close."""
     from . import leadership as _ld
     try:
         return _ld.system_integrity(db, investigation_id,
-                                    initiative_id=initiative_id, layer=layer)
+                                    initiative_id=initiative_id, layer=layer,
+                                    exposure=exposure)
     except ValueError as exc:
         raise HTTPException(422, str(exc))
 
@@ -2741,6 +2753,7 @@ def leadership_system_integrity(investigation_id: Optional[int] = None,
 def leadership_alerts(investigation_id: Optional[int] = None,
                       initiative_id: Optional[int] = None,
                       layer: Optional[str] = None,
+                      exposure: Optional[str] = None,
                       sla_days: int = 14,
                       include_acknowledged: bool = False,
                       db: Session = Depends(get_db)):
@@ -2748,14 +2761,16 @@ def leadership_alerts(investigation_id: Optional[int] = None,
     from . import leadership as _ld
     try:
         return _ld.alerts(db, investigation_id, initiative_id=initiative_id,
-                          layer=layer, sla_days=sla_days,
+                          layer=layer, exposure=exposure, sla_days=sla_days,
                           include_acknowledged=include_acknowledged)
     except ValueError as exc:
         raise HTTPException(422, str(exc))
 
 
 class AlertAckRequest(BaseModel):
-    alert_id: str
+    # Optional here because the path form supplies it. Required on the
+    # body-addressable endpoint, where there is nothing else to key off.
+    alert_id: str = ""
     actor: str = ""
     status: str = "acknowledged"
     note: str = ""
@@ -2773,6 +2788,8 @@ def leadership_acknowledge_alert(data: AlertAckRequest, request: Request,
     finding that is still true.
     """
     from . import leadership as _ld
+    if not data.alert_id:
+        raise HTTPException(422, "alert_id is required")
     actor = (data.actor or "").strip() or ledger_api.request_actor_or_empty(request)
     try:
         return _ld.acknowledge_alert(
@@ -2782,16 +2799,34 @@ def leadership_acknowledge_alert(data: AlertAckRequest, request: Request,
         raise HTTPException(422, str(exc))
 
 
+@app.post("/api/leadership/alerts/{alert_id}/ack")
+def leadership_acknowledge_alert_by_id(alert_id: str, data: AlertAckRequest,
+                                        request: Request,
+                                        db: Session = Depends(get_db)):
+    """Path-addressable twin of the body-addressable ack endpoint.
+
+    The id in the path is the id that gets acknowledged, whatever the body says:
+    a mismatch is a client bug, not two alerts to answer.
+    """
+    if data.alert_id and data.alert_id != alert_id:
+        raise HTTPException(422, f"alert_id in path ({alert_id}) does not match "
+                                 f"body ({data.alert_id})")
+    return leadership_acknowledge_alert(
+        data.model_copy(update={"alert_id": alert_id}), request, db)
+
+
 @app.get("/api/leadership/exceptions")
 def leadership_exceptions(investigation_id: Optional[int] = None,
                           initiative_id: Optional[int] = None,
                           layer: Optional[str] = None,
+                          exposure: Optional[str] = None,
                           db: Session = Depends(get_db)):
     """Time-bounded exceptions and their expiry status."""
     from . import leadership as _ld
     try:
         return _ld.exception_register(db, investigation_id,
-                                      initiative_id=initiative_id, layer=layer)
+                                      initiative_id=initiative_id, layer=layer,
+                                      exposure=exposure)
     except ValueError as exc:
         raise HTTPException(422, str(exc))
 
@@ -2800,12 +2835,14 @@ def leadership_exceptions(investigation_id: Optional[int] = None,
 def leadership_change_log(investigation_id: Optional[int] = None,
                           initiative_id: Optional[int] = None,
                           layer: Optional[str] = None,
+                          exposure: Optional[str] = None,
                           db: Session = Depends(get_db)):
     """Current vs superseded assessments, portfolio-wide when unscoped."""
     from . import leadership as _ld
     try:
         return _ld.change_log(db, investigation_id,
-                              initiative_id=initiative_id, layer=layer)
+                              initiative_id=initiative_id, layer=layer,
+                              exposure=exposure)
     except ValueError as exc:
         raise HTTPException(422, str(exc))
 

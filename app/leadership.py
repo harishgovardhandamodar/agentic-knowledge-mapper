@@ -465,7 +465,10 @@ def risk_position(db, investigation_id: Optional[int] = None, *,
         "top_threats_by_tier": tier_threats,
         "trend": trend,
         "trend_windows": _trend_windows(rows),
-        "tier_trends": _tier_trends(rows),
+        # The per-tier trend has to use the window the caller asked for.
+        # Hard-coding 90 here meant a 365-day board reported per-tier movement
+        # over a different period than its own headline trend.
+        "tier_trends": _tier_trends(rows, window_days),
         "investigations": [{"id": a["investigation_id"],
                             "title": titles.get(a["investigation_id"], "")}
                            for a in latest],
@@ -644,7 +647,8 @@ def decision_queue(db, investigation_id: Optional[int] = None, *,
                    sort: str = "residual",
                    sla_days: int = DECISION_SLA_DAYS,
                    initiative_id: Optional[int] = None,
-                   layer: Optional[str] = None) -> dict[str, Any]:
+                   layer: Optional[str] = None,
+                   exposure: Optional[str] = None) -> dict[str, Any]:
     """Everything waiting on a leadership decision, with what would change it.
 
     Each row carries the verified residual *and* its evidence confidence,
@@ -654,9 +658,16 @@ def decision_queue(db, investigation_id: Optional[int] = None, *,
     """
     if sort not in QUEUE_SORTS:
         raise ValueError(f"unknown sort: {sort} (expected one of {list(QUEUE_SORTS)})")
+    # The board takes `exposure` from the URL and the queue filter takes `tier`.
+    # Accept both spellings here so a caller cannot silently get an unfiltered
+    # queue because it used the other word.
+    if tier and exposure and tier != exposure:
+        raise ValueError(f"conflicting tiers: tier={tier} exposure={exposure}")
+    tier = tier or exposure
     if tier and tier not in TIER_ORDER:
         raise ValueError(f"unknown exposure tier: {tier}")
-    rows = _assessments(db, investigation_id, initiative_id=initiative_id, layer=layer)
+    rows = _assessments(db, investigation_id, initiative_id=initiative_id, layer=layer,
+                        exposure=tier)
     latest = _latest_per_investigation(rows)
     titles = _investigations(db, {a["investigation_id"] for a in latest})
     now = _now()
@@ -677,7 +688,12 @@ def decision_queue(db, investigation_id: Optional[int] = None, *,
         # Age is measured from the assessment, and an accepted row is aged from
         # when it was signed rather than from when it was scored: a decision
         # taken in week one does not stay "waiting" forever.
-        anchor = a.get("decision_at") if state == STATE_ACCEPTED else a.get("created_at")
+        anchor = a.get("created_at")
+        if state == STATE_ACCEPTED:
+            # Falls back to the scoring date for a row the scorer accepted
+            # automatically. Those rows have no signature, so ageing them from
+            # `None` would report every derived acceptance as brand new.
+            anchor = a.get("decision_at") or anchor
         age_days = _days_between(anchor, now)
         queue.append({
             "assessment_id": a["assessment_id"],
@@ -788,11 +804,12 @@ def _queue_sort_key(sort: str):
 
 def assurance_health(db, investigation_id: Optional[int] = None, *,
                      initiative_id: Optional[int] = None,
-                     layer: Optional[str] = None) -> dict[str, Any]:
+                     layer: Optional[str] = None,
+                     exposure: Optional[str] = None) -> dict[str, Any]:
     """Controls verified vs declared, forensics across the portfolio, ledger
     integrity, interrupted runs, overdue evidence reviews."""
     rows = _assessments(db, investigation_id, initiative_id=initiative_id,
-                        layer=layer)
+                        layer=layer, exposure=exposure)
     latest = _latest_per_investigation(rows)
 
     verified = declared = unknown = 0
@@ -838,6 +855,9 @@ def assurance_health(db, investigation_id: Optional[int] = None, *,
                                 for c, e, n in worst_controls],
             "assessments_without_attestation": unassessed,
         },
+        "scope": {"investigation_id": investigation_id,
+                  "initiative_id": initiative_id, "layer": layer,
+                  "exposure": exposure},
         "forensics": {
             "mean_score": (round(sum(forensics_scores) / len(forensics_scores), 1)
                            if forensics_scores else None),
@@ -994,10 +1014,11 @@ def _overdue_evidence(db, investigation_id: Optional[int] = None,
 
 def exposure_lens(db, investigation_id: Optional[int] = None, *,
                   initiative_id: Optional[int] = None,
-                  layer: Optional[str] = None) -> dict[str, Any]:
+                  layer: Optional[str] = None,
+                  exposure: Optional[str] = None) -> dict[str, Any]:
     """Restricted/Confidential assets, privileged users, materiality flags."""
     rows = _assessments(db, investigation_id, initiative_id=initiative_id,
-                        layer=layer)
+                        layer=layer, exposure=exposure)
     latest = _latest_per_investigation(rows)
     restricted = confidential = users = 0
     quantified = unquantified = 0
@@ -1027,6 +1048,9 @@ def exposure_lens(db, investigation_id: Optional[int] = None, *,
         else:
             unquantified += 1
     return {
+        "scope": {"investigation_id": investigation_id,
+                  "initiative_id": initiative_id, "layer": layer,
+                  "exposure": exposure},
         "restricted_assets": restricted,
         "confidential_assets": confidential,
         "privileged_users": users,
@@ -1044,10 +1068,11 @@ def exposure_lens(db, investigation_id: Optional[int] = None, *,
 def system_integrity(db, investigation_id: Optional[int] = None,
                      limit: int = 20, *,
                      initiative_id: Optional[int] = None,
-                     layer: Optional[str] = None) -> dict[str, Any]:
+                     layer: Optional[str] = None,
+                     exposure: Optional[str] = None) -> dict[str, Any]:
     """Swarm health, pack currency, ledger completeness, time-to-close."""
     rows = _assessments(db, investigation_id, initiative_id=initiative_id,
-                        layer=layer)
+                        layer=layer, exposure=exposure)
     latest = _latest_per_investigation(rows)
 
     swarm_stats: dict[str, Any] = {"roles": [], "hops": 0, "failures": 0,
@@ -1075,7 +1100,11 @@ def system_integrity(db, investigation_id: Optional[int] = None,
                 slot["attempts"] += r["attempts"]
                 slot["completions"] += r["completions"]
                 slot["failures"] += r["failures"]
-                slot["gate_failures"] += r["gate_failures"]
+                # `.get`, not `[]`: SW.health reports gate failures in its
+                # portfolio total only, so the per-role rows have no such key.
+                # Indexing it raised KeyError on the first investigation that
+                # had any swarm activity at all.
+                slot["gate_failures"] += r.get("gate_failures") or 0
                 slot["success_rate"] = (round(slot["completions"] / slot["attempts"], 2)
                                         if slot["attempts"] else None)
             swarm_stats["roles"] = sorted(merged.values(),
@@ -1122,6 +1151,9 @@ def system_integrity(db, investigation_id: Optional[int] = None,
                      "re-scoring a signed assessment is a decision for whoever "
                      "owns it."),
         },
+        "scope": {"investigation_id": investigation_id,
+                  "initiative_id": initiative_id, "layer": layer,
+                  "exposure": exposure},
         "ledger": health["ledger"],
         "time_to_close": ttc,
         "note": ("System health belongs in the risk picture: a portfolio of "
@@ -1202,6 +1234,7 @@ def _time_to_close(db, investigation_id: Optional[int] = None) -> dict[str, Any]
 def alerts(db, investigation_id: Optional[int] = None, *,
            initiative_id: Optional[int] = None,
            layer: Optional[str] = None,
+           exposure: Optional[str] = None,
            sla_days: int = DECISION_SLA_DAYS,
            include_acknowledged: bool = False,
            queue_states: Optional[list[str]] = None) -> dict[str, Any]:
@@ -1209,7 +1242,7 @@ def alerts(db, investigation_id: Optional[int] = None, *,
     out: list[dict[str, Any]] = []
     q = decision_queue(db, investigation_id, sla_days=sla_days,
                        initiative_id=initiative_id, layer=layer,
-                       states=queue_states,
+                       exposure=exposure, states=queue_states,
                        limit=1000)
     for item in q["items"]:
         if item["state"] == STATE_BLOCKED:
@@ -1503,9 +1536,23 @@ PERSONAS: dict[str, dict[str, Any]] = {
 }
 
 
-def persona_names() -> list[dict[str, str]]:
-    return [{"id": k, "label": v["label"], "blurb": v["blurb"]}
+def persona_names() -> list[dict[str, Any]]:
+    """The lenses, each with the sections it emphasises.
+
+    A client can build its persona selector from this instead of hard-coding the
+    list, so adding a lens does not mean editing the UI in two places.
+    """
+    return [{"id": k, "name": k, "label": v["label"], "blurb": v["blurb"],
+             "emphasis": list(v["emphasis"])}
             for k, v in PERSONAS.items()]
+
+
+def persona_card(name: str) -> dict[str, Any]:
+    """One lens, resolved by name."""
+    if name not in PERSONAS:
+        raise ValueError(f"unknown persona: {name} "
+                         f"(expected one of {sorted(PERSONAS)})")
+    return persona_names()[[p["id"] for p in PERSONAS].index(name)]
 
 
 def board(db, investigation_id: Optional[int] = None, *,
@@ -1540,7 +1587,7 @@ def board(db, investigation_id: Optional[int] = None, *,
                            initiative_id=scope["initiative_id"],
                            layer=scope["layer"], states=queue_states,
                            sort=sort, limit=limit, offset=offset,
-                           sla_days=sla_days)
+                           sla_days=sla_days, exposure=scope["exposure"])
     return {
         "persona": persona,
         "persona_label": PERSONAS[persona]["label"],
@@ -1554,25 +1601,34 @@ def board(db, investigation_id: Optional[int] = None, *,
                                        layer=scope["layer"],
                                        exposure=scope["exposure"]),
         "decision_queue": queue,
+        # Every section reads the same resolved scope. A tier filter that
+        # narrowed the risk table but not the queue or the alerts would show a
+        # reader a coherent-looking board about a portfolio nobody is looking at.
         "assurance_health": assurance_health(db, scope["investigation_id"],
                                             initiative_id=scope["initiative_id"],
-                                            layer=scope["layer"]),
+                                            layer=scope["layer"],
+                                            exposure=scope["exposure"]),
         "exposure_lens": exposure_lens(db, scope["investigation_id"],
                                        initiative_id=scope["initiative_id"],
-                                       layer=scope["layer"]),
+                                       layer=scope["layer"],
+                                       exposure=scope["exposure"]),
         "system_integrity": system_integrity(db, scope["investigation_id"],
                                              initiative_id=scope["initiative_id"],
-                                             layer=scope["layer"]),
+                                             layer=scope["layer"],
+                                             exposure=scope["exposure"]),
         "alerts": alerts(db, scope["investigation_id"],
                          initiative_id=scope["initiative_id"],
                          layer=scope["layer"], sla_days=sla_days,
+                         exposure=scope["exposure"],
                          include_acknowledged=include_acknowledged),
         "exceptions": exception_register(db, scope["investigation_id"],
                                          initiative_id=scope["initiative_id"],
-                                         layer=scope["layer"]),
+                                         layer=scope["layer"],
+                                         exposure=scope["exposure"]),
         "change_log": change_log(db, scope["investigation_id"],
                                  initiative_id=scope["initiative_id"],
-                                 layer=scope["layer"]),
+                                 layer=scope["layer"],
+                                 exposure=scope["exposure"]),
         "decisions_available": {
             "options": [
                 {"value": A.DECISION_ACCEPT, "label": "Accept"},
@@ -1683,10 +1739,11 @@ def record_decision(db, assessment_id: int, decision: str, *, actor: str,
 
 def exception_register(db, investigation_id: Optional[int] = None, *,
                        initiative_id: Optional[int] = None,
-                       layer: Optional[str] = None) -> dict[str, Any]:
+                       layer: Optional[str] = None,
+                       exposure: Optional[str] = None) -> dict[str, Any]:
     """Time-bounded exceptions, with expiry status."""
     rows = _assessments(db, investigation_id, initiative_id=initiative_id,
-                        layer=layer)
+                        layer=layer, exposure=exposure)
     now = _now()
     out = []
     for rec in rows:
@@ -1717,6 +1774,9 @@ def exception_register(db, investigation_id: Optional[int] = None, *,
     out.sort(key=lambda e: (order.get("expired" if e["expired"] else "active", 1),
                             -(e["days_remaining"] if e["days_remaining"] is not None else 1e9)))
     return {
+        "scope": {"investigation_id": investigation_id,
+                  "initiative_id": initiative_id, "layer": layer,
+                  "exposure": exposure},
         "exceptions": out,
         "count": len(out),
         "expired": sum(1 for e in out if e["expired"]),
@@ -1730,7 +1790,8 @@ def exception_register(db, investigation_id: Optional[int] = None, *,
 
 def change_log(db, investigation_id: Optional[int] = None, *,
                initiative_id: Optional[int] = None,
-               layer: Optional[str] = None) -> dict[str, Any]:
+               layer: Optional[str] = None,
+               exposure: Optional[str] = None) -> dict[str, Any]:
     """Superseded assessments as a short change-log.
 
     §6's redundancy complaint: multiple overlapping assessments with slight
@@ -1742,25 +1803,37 @@ def change_log(db, investigation_id: Optional[int] = None, *,
     "which number is current" question appears.
     """
     rows = _assessments(db, investigation_id, initiative_id=initiative_id,
-                        layer=layer)
+                        layer=layer, exposure=exposure)
     current = _latest_per_investigation(rows)
     current_ids = {a["assessment_id"] for a in current}
     titles = _investigations(db, {r.investigation_id for r in rows})
+    # `supersedes_id` lives on the *new* row and points at the row it replaced, so
+    # it is the old row that is missing its own successor. Resolve the link here
+    # rather than reporting a null on exactly the rows a reader wants to trace.
+    replaced_by = {int(rec.supersedes_id): rec.id for rec in rows
+                   if getattr(rec, "supersedes_id", None)}
     superseded = []
     for rec in rows:
         a = _assessment_dict(rec)
         if a["assessment_id"] in current_ids:
             continue
-        a["supersedes_id"] = rec.supersedes_id
+        a["superseded_by_id"] = replaced_by.get(int(a["assessment_id"]))
         a["threat_pack_version"] = rec.threat_pack_version
         a["investigation_title"] = titles.get(a["investigation_id"], "")
         superseded.append(a)
     superseded.sort(key=lambda a: a.get("created_at") or "", reverse=True)
     payload = {
         "investigation_id": investigation_id,
-        "scope": {"initiative_id": initiative_id, "layer": layer},
+        "scope": {"investigation_id": investigation_id,
+                  "initiative_id": initiative_id, "layer": layer,
+                  "exposure": exposure},
         "current": [{"assessment_id": a["assessment_id"], "product": a["product_name"],
                      "path": a["scoring_path"], "tier": a["exposure"],
+                     # Named on every row so the portfolio-wide grouping below
+                     # and any drill-down can attribute a row to its owner
+                     # without having to look it up again.
+                     "investigation_id": a["investigation_id"],
+                     "investigation_title": titles.get(a["investigation_id"], ""),
                      "verified_residual_pct": a.get("verified_residual_pct"),
                      "evidence_confidence_pct": (
                          round(float(a["evidence_confidence"]) * 100)
@@ -1778,7 +1851,7 @@ def change_log(db, investigation_id: Optional[int] = None, *,
                             round(float(a["evidence_confidence"]) * 100)
                             if a.get("evidence_confidence") is not None else None),
                         "threat_pack_version": a.get("threat_pack_version"),
-                        "supersedes_id": a.get("supersedes_id"),
+                        "superseded_by_id": a.get("superseded_by_id"),
                         "created_at": a.get("created_at")}
                        for a in superseded],
         "superseded_count": len(superseded),
@@ -1788,23 +1861,32 @@ def change_log(db, investigation_id: Optional[int] = None, *,
         "generated": _now().isoformat(),
     }
     if investigation_id is None:
+        # Portfolio-wide, so group by investigation. Only counting superseded
+        # rows would report an empty grouping for an investigation that is
+        # perfectly current, which reads as "nothing here" rather than
+        # "nothing was rewritten here".
         by_inv: dict[int, dict[str, Any]] = {}
-        for a in superseded:
-            slot = by_inv.setdefault(int(a["investigation_id"]),
-                                     {"investigation_id": a["investigation_id"],
-                                      "title": titles.get(a["investigation_id"], ""),
-                                      "count": 0})
-            slot["count"] += 1
-        payload["by_investigation"] = sorted(by_inv.values(),
-                                             key=lambda r: -r["count"])
+        for group, key in ((payload["current"], "current"),
+                           (superseded, "superseded")):
+            for a in group:
+                inv_id = int(a["investigation_id"])
+                slot = by_inv.setdefault(
+                    inv_id, {"investigation_id": inv_id,
+                             "title": titles.get(inv_id, ""),
+                             "current": 0, "superseded": 0})
+                slot[key] += 1
+        payload["by_investigation"] = sorted(
+            by_inv.values(), key=lambda r: (-r["current"], -r["superseded"]))
     return payload
+
 
 # -------------------------------------------------- board export -----------
 
 def export_markdown(db, investigation_id: Optional[int] = None, *,
                     window_days: int = 90, persona: str = "executive",
                     initiative_id: Optional[int] = None,
-                    layer: Optional[str] = None) -> str:
+                    layer: Optional[str] = None,
+                    exposure: Optional[str] = None) -> str:
     """The whole board as one Markdown snapshot.
 
     A regulator asks for a document, not a live endpoint. This is that
@@ -1813,7 +1895,7 @@ def export_markdown(db, investigation_id: Optional[int] = None, *,
     be mistaken for the live position.
     """
     b = board(db, investigation_id, window_days=window_days, persona=persona,
-              initiative_id=initiative_id, layer=layer)
+              initiative_id=initiative_id, layer=layer, exposure=exposure)
     rp = b["risk_position"]
     q = b["decision_queue"]
     ah = b["assurance_health"]
@@ -1889,7 +1971,7 @@ def export_markdown(db, investigation_id: Optional[int] = None, *,
     L.append("")
     c = ah["controls"]
     L.append(f"- Controls: {c['verified']} evidenced · {c['declared']} declared · "
-             f"{c['unknown']} unknown ({_pct_or_dash(c.get('verified_pct'))}% evidenced)")
+             f"{c['unknown']} unknown ({_pct_or_dash(c.get('verified_pct'))} evidenced)")
     f = ah["forensics"]
     L.append(f"- Forensics: mean {_num(f.get('mean_score'))} · "
              f"{f.get('reconstructable')}/{f.get('scored')} reconstructable")
@@ -1911,7 +1993,7 @@ def export_markdown(db, investigation_id: Optional[int] = None, *,
     L.append(f"- Failure rate {_num(sw.get('failure_rate'))} · "
              f"gate failure rate {_num(sw.get('gate_failure_rate'))}")
     tp = si["threat_pack"]
-    L.append(f"- Threat pack currency: {_pct_or_dash(tp.get('currency_pct'))}% "
+    L.append(f"- Threat pack currency: {_pct_or_dash(tp.get('currency_pct'))} "
              f"({tp.get('stale')} of {tp.get('assessments')} stale)")
     L.append("")
 
@@ -1947,8 +2029,8 @@ def export_markdown(db, investigation_id: Optional[int] = None, *,
         L.append(f"- {s['created_at']} · {s['product']} · "
                  f"verified {_pct_or_dash(s.get('verified_residual_pct'))} · "
                  f"pack {s.get('threat_pack_version') or 'unversioned'}"
-                 + (f" · supersedes {s['supersedes_id']}"
-                    if s.get("supersedes_id") else ""))
+                 + (f" · superseded by assessment {s['superseded_by_id']}"
+                    if s.get("superseded_by_id") else ""))
     L.append("")
     L.append("---")
     L.append("")

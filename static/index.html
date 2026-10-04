@@ -9833,15 +9833,37 @@ async function secLeadSubmitDecision(assessmentId, decision, actor, rationale, e
 }
 
 async function secLeadAck(alertId, status) {
+  // The endpoint requires a named actor, exactly as recording a decision does:
+  // an acknowledgement nobody owns is how an alert stays open in everyone's
+  // view and nobody's name. Prompting here keeps that contract visible.
+  const who = (prompt(
+    status === 'snoozed'
+      ? 'Snoozing for 7 days. It comes back if the finding is still true.\n\nWho is taking responsibility?'
+      : 'Acknowledging. This records that you have seen it, not that it is fixed.\n\nWho is acknowledging?',
+    '') || '').trim();
+  if (!who) return;
   let note = '';
-  if (status === 'snoozed') note = (prompt('Snooze for 7 days. It comes back if the finding is still true.\n\nNote (optional):', '') || '').trim();
+  if (status === 'snoozed') {
+    note = (prompt('Why snooze rather than fix? (optional, kept with the record)', '') || '').trim();
+  }
+  const target = (secLeadCache && secLeadCache.alerts
+    && (secLeadCache.alerts.alerts || []).find(a => a.id === alertId)) || {};
   try {
-    const r = await fetch(`${API}/leadership/alerts/ack`, {
+    const r = await fetch(`${API}/leadership/alerts/${encodeURIComponent(alertId)}/ack`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ alert_id: alertId, status, note }),
+      // finding_hash binds the response to the finding the reader actually saw.
+      // If the finding has changed since, the acknowledgement does not carry
+      // over and the alert stays open on purpose.
+      body: JSON.stringify({
+        alert_id: alertId, actor: who, status, note,
+        finding_hash: target.finding_hash || null,
+      }),
     });
     const d = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
+    secLeadNote = status === 'snoozed'
+      ? `Snoozed ${alertId} until ${String(d.snoozed_until || '').slice(0, 10)}, by ${who}. It returns if the finding is still true.`
+      : `Acknowledged ${alertId} by ${who}. The finding itself is unchanged.`;
     await secLeadLoad(true);
   } catch (e) {
     secLeadNote = `Could not record the acknowledgement: ${e.message || e}`;
@@ -9872,6 +9894,9 @@ function secLeadExport() {
   p.set('persona', secLeadPersona);
   if (sc.initiative_id) p.set('initiative_id', sc.initiative_id);
   if (sc.layer) p.set('layer', sc.layer);
+  // The exported document has to be about the tier the reader is looking at,
+  // not the whole portfolio behind it.
+  if (sc.exposure) p.set('exposure', sc.exposure);
   window.open(`${API}/leadership/board.md?${p.toString()}`, '_blank');
 }
 

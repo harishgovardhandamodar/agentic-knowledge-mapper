@@ -10,7 +10,7 @@ flowchart TB
     SW["Agent swarm<br/>role contracts · policy engine · critic"]
     LED["Ledger<br/>complete · immutable · 11 event classes"]
     SCORE["Scoring + Architecture gates + Evidence status"]
-    DASH["Leadership Dashboard<br/>decision-grade view"]
+    DASH["Leadership Dashboard → Assurance board<br/>decision-grade view"]
     HUMAN["Human acceptance / rejection / exception<br/>identity + rationale"]
     SW -->|"every material action"| LED
     LED --> SCORE
@@ -31,6 +31,7 @@ Related: [architecture.md](../docs/architecture.md) ·
 | `app/swarm.py` | Governed collective | role contracts, policy engine, topology, resume, critic, scope/budget |
 | `app/assurance_ledger.py` | Tamper-evident record | hash chain + 11 mandatory event classes + absence alerts |
 | `app/leadership.py` | Decision-grade view | residual always beside confidence and gate status |
+| `static/index.html` | The surface that renders it | Assurance board and Portfolio register are two labelled layers, not one blended view |
 
 ## Swarm: a governed graph, not a loose pipeline
 

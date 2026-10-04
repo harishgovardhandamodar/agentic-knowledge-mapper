@@ -353,6 +353,27 @@ confidence and gate status, and a human accept / reject / exception is a ledger
 event — see [design/security-scoring.md](design/security-scoring.md) for the
 full formulas and a worked example.
 
+#### Leadership Dashboard: two labelled layers
+
+The tab carries both surfaces, because they answer different questions and were
+previously conflated:
+
+- **Assurance board** (default) — the §9 leadership layer. Risk position by data
+  tier with each tier's evidence confidence; the decision queue with verified
+  residual, confidence, gate status, blast radius and age against a 14-day SLA;
+  alerts you can acknowledge or snooze; assurance health; exposure; system
+  integrity; the exception register; and the change log. One switcher picks the
+  lens (Executive / CISO / DPO / Legal / Audit / Security Engineering) — a lens
+  changes emphasis, never the underlying number. The board auto-refreshes every
+  60 seconds and stops polling when the tab is hidden.
+- **Portfolio register** — the older risk-register dashboard
+  (`/api/dashboard/*`): availability, distribution, robustness, and attention.
+
+Decisions are recorded from the board itself: each queue row carries accept /
+guardrails / reject / exception buttons that demand an actor and a rationale,
+and an expiry for an exception. `GET /api/leadership/board.md` renders the same
+board as a single Markdown snapshot for an archive or a regulator.
+
 ### Agentic Manager
 
 One command fans out to N investigations plus a summary: the Manager tab
@@ -505,7 +526,9 @@ an action are provable afterwards:
 | GET | `/api/security/assessments/{id}/vendor-questionnaire` | Architecture answers that would unblock each threat |
 | GET | `/api/security/assessments/{id}/review-queue`, `…/ledger/integrity`, `…/evidence-pack` | Pending evidence, chain+coverage integrity, one-click audit package |
 | POST | `/api/security/assessments/{id}/decision` | Human accept / guardrails / reject / exception (→ ledger event) |
-| GET | `/api/leadership/board?persona=`, `/api/leadership/risk-position`, `…/decision-queue`, `…/assurance-health`, `…/exposure`, `…/system-integrity`, `…/alerts`, `…/exceptions` | Decision-grade dashboard views (Executive / CISO / DPO / Legal / Audit / Security Engineering) |
+| GET | `/api/leadership/board?persona=&exposure=&layer=&initiative_id=&window_days=`, `/api/leadership/risk-position`, `…/decision-queue`, `…/assurance-health`, `…/exposure`, `…/system-integrity`, `…/alerts`, `…/exceptions`, `…/change-log`, `…/personas` | Decision-grade dashboard views (Executive / CISO / DPO / Legal / Audit / Security Engineering), scoped by tier/layer/initiative |
+| GET | `/api/leadership/board.md?persona=` | The whole board as one Markdown snapshot (scope, lens, generation time, every residual with its confidence) |
+| POST | `/api/leadership/alerts/{alert_id}/ack` | Acknowledge / snooze an alert, bound to the `finding_hash` the reader saw |
 | GET | `/api/assurance/ledger/integrity-monitor`, `…/siem-export`, `…/re-score-triggers` | Chain monitor, NDJSON SIEM stream, stale-residual triggers |
 | POST | `/api/assurance/assessments/{id}/re-score` | Re-queue a superseding run when its basis changed |
 | GET | `/api/agents/cards`, `/.well-known/agents` | A2A agent registry (fifteen cards) |

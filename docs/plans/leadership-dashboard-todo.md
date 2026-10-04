@@ -1,5 +1,10 @@
 # Leadership Dashboard — gap analysis & improvement to-do list
 
+> **Status: implemented** on branch `leadership-dashboard` (P0–P2, items 1–15).
+> See [Implementation notes](#implementation-notes) at the end for what each
+> item turned into and where it landed. The analysis below is kept as the
+> record of why the work was scoped this way.
+
 ## Current state
 
 The assurance-grade leadership layer is **backend-complete but frontend-invisible**.
@@ -92,3 +97,80 @@ everything else is hardening on top.
   not access control. Making it enforcement is a separate security project.
 - No auto-rescoring from the board: a stale pack or a changed basis is *reported*
   and re-queued explicitly; the signed row is never edited.
+
+## Implementation notes
+
+**1–3 · P0, the board is now visible and actionable.** `static/index.html`
+gains an explicit two-layer switcher in the Leadership Dashboard tab: an
+**Assurance board** (default) reading `/api/leadership/board`, and the existing
+**Portfolio register**, relabelled so the two cannot be mistaken for each other.
+Decision buttons (`accept` / `accept_with_mandatory_guardrails` / `reject` /
+`exception`) call `POST /api/security/assessments/{id}/decision`, prompting for
+actor, rationale, and — for an exception — an expiry.
+
+**4 · `reject` is now accepted.** `DECISION_ALIASES` / `canonical_decision`
+in `app/leadership.py` map the short spellings a UI offers onto the long stored
+constants. The response reports both `decision` and `decision_requested`, and an
+override of the derived recommendation is flagged as one.
+
+**5 · Queue age and SLA.** Rows carry `age_days`, `sla_days`, and `over_sla`
+(`DECISION_SLA_DAYS = 14`). An accepted row ages from its signature, not from
+its scoring date. Over-SLA items surface in `alerts()` as a `decision_sla`
+category carrying the assessment id and the next action.
+
+**6 · Portfolio filters.** `resolve_scope` and `_assessments` take
+investigation / initiative / layer / exposure. An unknown value is a 422, never a
+silently widened scope. Every board section receives the resolved scope, so a
+tier filter cannot narrow the risk table while leaving the queue and alerts
+showing the whole portfolio.
+
+**7 · Queue filters.** Tier filter, offset pagination (`offset` / `limit` /
+`returned` / `has_more`), sorting by residual / age / confidence / product, and
+`states` including `accepted` and `rejected`.
+
+**8 · Board completeness.** `board()` now carries `exceptions`, `change_log`,
+`personas`, and a `contract` describing what a decision requires.
+
+**9 · Persona picker.** Switcher in the UI; `/api/leadership/personas` publishes
+the lenses with their emphasis so the UI is not hard-coding the list.
+
+**10 · Richer trend.** 30/90/365-day windows with sample counts and
+insufficient-history reporting, per-tier trend lines honouring the requested
+window, and a residual sparkline on the risk card.
+
+**11 · Per-tier threat breakdown.** `top_threats_by_tier` ranks dominant
+threats within each tier, keeps the worst instance when a threat id repeats
+across products, and counts how many were forced to inherent risk.
+
+**12 · Alert acknowledgement.** `LeadershipAlertState` (`app/ledger_models.py`)
+records who responded to which finding. Acknowledge, snooze, and un-acknowledge
+are supported; the response is bound to the `finding_hash` the reader actually
+saw, so a changed finding reappears rather than staying silently answered. The
+acknowledged counter is read off the full set, so a filtered panel cannot report
+zero responses.
+
+**13 · Live updates.** The board polls every 60s, pausing on a hidden tab or
+when another app is open.
+
+**14 · Board export.** `GET /api/leadership/board.md` renders the whole board as
+one Markdown snapshot carrying scope, persona lens, generation time, and every
+residual beside its confidence.
+
+**15 · Drill-downs.** Queue rows carry their own links (one-page summary,
+evidence pack, vendor questionnaire, exception re-evaluation); the UI opens the
+link the backend chose rather than guessing a route.
+
+### Bugs the tests caught while implementing
+
+- `board(tier=…)` was accepted and ignored; the queue and every other section
+  now receive the resolved scope.
+- `system_integrity` indexed a per-role `gate_failures` key that `SW.health`
+  only reports in its portfolio total — a `KeyError` on the first investigation
+  with any swarm activity.
+- `_tier_trends` was hard-coded to a 90-day window regardless of the board's.
+- `change_log` reported `supersedes_id` on the new row while reading it off the
+  superseded row, so every entry was null; it now resolves `superseded_by_id`.
+- A derived (auto) acceptance has no signature date, so ageing it from
+  `decision_at` reported every such row as brand new.
+- The Markdown export double-printed `%` on two lines.
+- Alert snoozes were stored but never suppressed anything.

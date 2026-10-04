@@ -19,6 +19,7 @@ os.environ["AKM_DATABASE_URL"] = os.environ.get("AKM_TEST_DB") or (
     "sqlite:///" + os.path.join(
         tempfile.mkdtemp(prefix="akm-assurance-api-"), "test.db"))
 
+from app import assurance as A  # noqa: E402
 from app import database as _db  # noqa: E402
 from app import leadership as LD  # noqa: E402
 from app.database import Base, SessionLocal  # noqa: E402
@@ -80,6 +81,11 @@ class AssuranceApiCase(unittest.TestCase):
                         m.investigation_id == self.inv.id).delete()
                 self.db.query(Investigation).filter(
                     Investigation.id == self.inv.id).delete()
+                # Alert acknowledgements are keyed by alert id, not by
+                # investigation, so they survive the deletes above and would
+                # make the next test's alerts look already answered.
+                from app.ledger_models import LeadershipAlertState
+                self.db.query(LeadershipAlertState).delete()
                 self.db.commit()
             except Exception:
                 self.db.rollback()
@@ -406,6 +412,227 @@ class AssuranceApiCase(unittest.TestCase):
         self.assertEqual(req.exposure_inventory, {"records": 10})
         # Absent inputs stay empty rather than defaulting to a pass.
         self.assertIsNone(SecurityAssessRequest().architecture_checklist)
+
+    # ---- leadership: filters, pagination, ack, export --------------------
+
+    def test_board_filters_narrow_every_section_not_just_the_risk_table(self):
+        self._assessment()
+        r = self.client.get(
+            f"/api/leadership/board?investigation_id={self.inv.id}"
+            "&exposure=internal&layer=product&window_days=30")
+        self.assertEqual(r.status_code, 200)
+        b = r.json()
+        self.assertEqual(b["scope"]["exposure"], "internal")
+        self.assertEqual(b["scope"]["layer"], "product")
+        self.assertEqual(b["scope"]["window_days"], 30)
+        # Every section that reads assessments has to reflect the filter, or the
+        # board shows a coherent-looking portfolio nobody asked for.
+        self.assertEqual(b["risk_position"]["scope"]["exposure"], "internal")
+        self.assertEqual(b["decision_queue"]["tier"], "internal")
+        self.assertEqual(b["assurance_health"]["scope"]["exposure"], "internal")
+        self.assertEqual(b["exposure_lens"]["scope"]["exposure"], "internal")
+        self.assertEqual(b["system_integrity"]["scope"]["exposure"], "internal")
+        self.assertEqual(b["scope"]["layer"], "product")
+        self.assertEqual(b["exceptions"]["scope"]["exposure"], "internal")
+        self.assertEqual(b["change_log"]["scope"]["exposure"], "internal")
+
+    def test_board_rejects_an_unknown_layer_instead_of_widening_the_scope(self):
+        self._assessment()
+        r = self.client.get(
+            f"/api/leadership/board?investigation_id={self.inv.id}&layer=supply_chain")
+        self.assertEqual(r.status_code, 422)
+
+    def test_board_rejects_an_unknown_persona(self):
+        r = self.client.get("/api/leadership/board?persona=ceo")
+        self.assertEqual(r.status_code, 422)
+
+    def test_decision_queue_accepts_the_documented_sort_and_state_filters(self):
+        self._assessment()
+        r = self.client.get(
+            f"/api/leadership/decision-queue?investigation_id={self.inv.id}"
+            "&sort=age&limit=1&offset=0")
+        self.assertEqual(r.status_code, 200, r.text)
+        body = r.json()
+        self.assertEqual(body["returned"], 1)
+        self.assertEqual(body["limit"], 1)
+        self.assertEqual(body["offset"], 0)
+        self.assertEqual(body["sort"], "age")
+        # The blocked row is the only one waiting, and it is in the default
+        # view; asking for a narrower state set is honoured rather than ignored.
+        self.assertEqual(body["items"][0]["state"], LD.STATE_BLOCKED)
+        narrowed = self.client.get(
+            f"/api/leadership/decision-queue?investigation_id={self.inv.id}"
+            "&states=accepted").json()
+        self.assertEqual(narrowed["returned"], 0)
+        self.assertEqual(narrowed["states"][LD.STATE_ACCEPTED], 0)
+
+    def test_decision_queue_reports_a_non_numeric_window_as_a_bad_request(self):
+        self._assessment()
+        r = self.client.get(
+            f"/api/leadership/decision-queue?investigation_id={self.inv.id}"
+            "&sla_days=ninety")
+        self.assertEqual(r.status_code, 422)
+
+    def test_decision_queue_rejects_a_sort_it_cannot_honour(self):
+        self._assessment()
+        r = self.client.get(
+            f"/api/leadership/decision-queue?investigation_id={self.inv.id}"
+            "&sort=sideways")
+        self.assertEqual(r.status_code, 422)
+
+    def test_decision_endpoint_accepts_the_documented_reject_spelling(self):
+        rec = self._assessment()
+        r = self.client.post(
+            f"/api/security/assessments/{rec.id}/decision",
+            json={"decision": "reject", "actor": "Dana",
+                  "rationale": "retiring this product"})
+        self.assertEqual(r.status_code, 200, r.text)
+        body = r.json()
+        self.assertEqual(body["decision"], A.DECISION_REJECT)
+        self.assertEqual(body["decision_requested"], "reject")
+        self.assertEqual(body["actor"], "Dana")
+
+    def test_decision_endpoint_still_requires_an_actor(self):
+        rec = self._assessment()
+        r = self.client.post(
+            f"/api/security/assessments/{rec.id}/decision",
+            json={"decision": "reject", "rationale": "no owner"})
+        self.assertEqual(r.status_code, 422)
+
+    def test_a_rejection_is_recorded_even_without_a_written_rationale(self):
+        # Only an exception demands written justification, because it is the one
+        # that suspends a score. A rejection moves nothing forward, so the
+        # actor plus the ledger entry is enough of a record.
+        rec = self._assessment()
+        r = self.client.post(
+            f"/api/security/assessments/{rec.id}/decision",
+            json={"decision": "reject", "actor": "Dana"})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(r.json()["actor"], "Dana")
+        self.assertEqual(r.json()["rationale"], "")
+
+    def test_alert_acknowledgement_round_trips_through_the_api(self):
+        self._assessment()
+        alert = self.client.get(
+            f"/api/leadership/alerts?investigation_id={self.inv.id}").json()
+        target = [a for a in alert["alerts"] if a["severity"] == "block"][0]
+        ack = self.client.post(
+            f"/api/leadership/alerts/{target['id']}/ack",
+            json={"actor": "Dana", "status": "acknowledged",
+                  "note": "agreed, re-scoring after the gate closes",
+                  "finding_hash": target["finding_hash"]})
+        self.assertEqual(ack.status_code, 200, ack.text)
+        self.assertEqual(ack.json()["acknowledged_by"], "Dana")
+
+        open_alerts = self.client.get(
+            f"/api/leadership/alerts?investigation_id={self.inv.id}").json()
+        self.assertNotIn(target["id"], [a["id"] for a in open_alerts["alerts"]])
+        self.assertEqual(open_alerts["open_blocking"], 0)
+
+        with_ack = self.client.get(
+            f"/api/leadership/alerts?investigation_id={self.inv.id}"
+            "&include_acknowledged=true").json()
+        mine = [a for a in with_ack["alerts"] if a["id"] == target["id"]][0]
+        self.assertTrue(mine["acknowledged"])
+        self.assertEqual(mine["acknowledged_by"], "Dana")
+        self.assertEqual(with_ack["acknowledged"], 1)
+
+    def test_alert_acknowledgement_requires_an_actor(self):
+        self._assessment()
+        target = self.client.get(
+            f"/api/leadership/alerts?investigation_id={self.inv.id}"
+            ).json()["alerts"][0]
+        r = self.client.post(f"/api/leadership/alerts/{target['id']}/ack",
+                             json={"status": "acknowledged"})
+        self.assertEqual(r.status_code, 422)
+
+    def test_alert_acknowledgement_rejects_an_unknown_status(self):
+        self._assessment()
+        target = self.client.get(
+            f"/api/leadership/alerts?investigation_id={self.inv.id}"
+            ).json()["alerts"][0]
+        r = self.client.post(f"/api/leadership/alerts/{target['id']}/ack",
+                             json={"actor": "Dana", "status": "ignored"})
+        self.assertEqual(r.status_code, 422)
+
+    def test_snoozing_an_alert_hides_it_until_it_expires(self):
+        self._assessment()
+        target = self.client.get(
+            f"/api/leadership/alerts?investigation_id={self.inv.id}"
+            ).json()["alerts"][0]
+        r = self.client.post(f"/api/leadership/alerts/{target['id']}/ack",
+                             json={"actor": "Dana", "status": "snoozed",
+                                   "snooze_days": 3})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertIn("snoozed_until", r.json())
+        ids = [a["id"] for a in self.client.get(
+            f"/api/leadership/alerts?investigation_id={self.inv.id}"
+            ).json()["alerts"]]
+        self.assertNotIn(target["id"], ids)
+
+    def test_an_acknowledged_finding_does_not_hide_a_changed_one(self):
+        self._assessment()
+        target = self.client.get(
+            f"/api/leadership/alerts?investigation_id={self.inv.id}"
+            ).json()["alerts"][0]
+        self.client.post(f"/api/leadership/alerts/{target['id']}/ack",
+                         json={"actor": "Dana"})
+        from app.ledger_models import LeadershipAlertState
+        from app.database import SessionLocal
+        s = SessionLocal()
+        row = s.query(LeadershipAlertState).filter(
+            LeadershipAlertState.alert_id == target["id"]).one()
+        row.finding_hash = "the-finding-has-changed"
+        s.commit()
+        s.close()
+        ids = [a["id"] for a in self.client.get(
+            f"/api/leadership/alerts?investigation_id={self.inv.id}"
+            ).json()["alerts"]]
+        self.assertIn(target["id"], ids)
+
+    def test_board_markdown_export_is_served_as_a_document(self):
+        self._assessment()
+        r = self.client.get(
+            f"/api/leadership/board.md?investigation_id={self.inv.id}&persona=ciso")
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("text/markdown", r.headers["content-type"])
+        self.assertTrue(r.text.startswith("# Leadership board snapshot"))
+        self.assertIn("CISO", r.text)
+
+    def test_persona_endpoint_lists_the_lenses_with_their_emphasis(self):
+        r = self.client.get("/api/leadership/personas")
+        self.assertEqual(r.status_code, 200)
+        body = r.json()
+        self.assertEqual(len(body["personas"]), 6)
+        entry = [p for p in body["personas"] if p["id"] == "audit"][0]
+        self.assertIn("change_log", entry["emphasis"])
+        self.assertEqual(entry["label"], "Audit")
+        # Every lens carries a label and a blurb, so a UI never has to invent
+        # one for a persona it has not seen before.
+        for persona in body["personas"]:
+            self.assertTrue(persona["label"], persona["id"])
+            self.assertTrue(persona["blurb"], persona["id"])
+            self.assertTrue(persona["emphasis"], persona["id"])
+
+    def test_change_log_query_route_groups_a_portfolio_view(self):
+        self._assessment()
+        r = self.client.get("/api/leadership/change-log")
+        self.assertEqual(r.status_code, 200)
+        body = r.json()
+        self.assertIn("by_investigation", body)
+        # Scoped by this investigation rather than asserting on the whole
+        # portfolio: every test module in a pytest run shares one database, so
+        # other investigations legitimately appear in an unscoped view.
+        mine = [g for g in body["by_investigation"]
+                if g["investigation_id"] == self.inv.id]
+        self.assertEqual(len(mine), 1)
+        self.assertEqual(mine[0]["current"], 1)
+        self.assertEqual(mine[0]["superseded"], 0)
+        # Every group names its investigation, so a portfolio reader can tell
+        # which rows belong where without a second lookup.
+        for group in body["by_investigation"]:
+            self.assertIn("title", group)
+            self.assertIn("investigation_id", group)
 
 
 if __name__ == "__main__":
