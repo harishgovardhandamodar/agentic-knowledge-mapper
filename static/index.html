@@ -732,6 +732,18 @@ td.std-threat .std-name { font-weight: 600; display: block; font-size: 11.5px; }
 .gkg-detail .gkg-d-tag { display: inline-block; background: var(--bg3); border-radius: 8px; padding: 1px 7px; margin: 1px 3px 1px 0; font-size: 10.5px; color: var(--text2); }
 .gkg-zoom { display: flex; align-items: center; gap: 2px; }
 .gkg-toolbar .btn.on { color: var(--accent); border-color: var(--accent); }
+.gkg-overlay { position: fixed; inset: 0; z-index: 900; display: flex; align-items: center; justify-content: center; }
+.gkg-overlay-back { position: absolute; inset: 0; background: rgba(1, 4, 9, 0.62); }
+.gkg-overlay-panel { position: relative; z-index: 1; width: min(680px, 92vw); max-height: 86vh; overflow-y: auto;
+  background: var(--bg2); color: var(--text); border: 1px solid var(--border); border-radius: 12px;
+  padding: 16px 18px; box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5); }
+.gkg-overlay-panel h4 { margin: 0 0 8px; font-size: 14px; }
+.gkg-overlay-row { margin: 4px 0; color: var(--text2); font-size: 12px; }
+.gkg-overlay-row b { color: var(--text); }
+.gkg-overlay-panel .gkg-d-close { font-size: 16px; }
+.gkg-overlay-panel .gkg-e { display: flex; align-items: center; gap: 8px; padding: 5px 0; border-bottom: 1px solid var(--border); font-size: 11.5px; }
+.gkg-overlay-panel .gkg-e:last-child { border-bottom: none; }
+.gkg-overlay-panel .gkg-e a { color: var(--accent); }
 
 .std-detail { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 8px; background: var(--bg2); overflow: hidden; }
 .std-detail.dim { opacity: 0.55; }
@@ -1551,6 +1563,12 @@ body.pane-sec-top-collapsed .sec-topbar-sub { display: none; }
           </div>
           <div id="secLeadGraphCanvas" class="gkg-canvas"><div id="secLeadGraphDetail" class="gkg-detail" hidden></div></div>
         </div>
+        </div>
+        <div id="secLeadGraphOverlay" class="gkg-overlay" hidden>
+          <div class="gkg-overlay-back" onclick="secLeadGraphCloseOverlay()"></div>
+          <div class="gkg-overlay-panel">
+            <div id="secLeadGraphOverlayBody"></div>
+          </div>
         </div>
       </div>
     </div>
@@ -9930,16 +9948,18 @@ function secLeadRenderGraph(filterIds) {
   secLeadGraphNetwork.on('hoverNode', params => { if (!secLeadGraphPinned) secLeadGraphShowDetail(params.node, false); });
   secLeadGraphNetwork.on('blurNode', () => { if (!secLeadGraphPinned) secLeadGraphCloseDetail(false); });
   secLeadGraphNetwork.on('click', params => {
-    if (!params.nodes.length) return;
-    const sel = params.nodes[0];
-    if (secLeadGraphNetwork.isCluster(sel)) {
-      secLeadGraphNetwork.openCluster(sel);
-      secLeadGraphClusterIds = secLeadGraphClusterIds.filter(x => x !== sel);
-      secLeadGraphCount(secLeadGraphClusterIds.length);
+    if (params.nodes.length) {
+      const sel = params.nodes[0];
+      if (secLeadGraphNetwork.isCluster(sel)) {
+        secLeadGraphNetwork.openCluster(sel);
+        secLeadGraphClusterIds = secLeadGraphClusterIds.filter(x => x !== sel);
+        secLeadGraphCount(secLeadGraphClusterIds.length);
+        return;
+      }
+      secLeadGraphOpenOverlay(sel);
       return;
     }
-    secLeadGraphPinned = true;
-    secLeadGraphShowDetail(sel, true);
+    if (params.edges.length) secLeadGraphOpenEdgeOverlay(params.edges[0]);
   });
   secLeadGraphNetwork.on('deselectNode', () => {});
   secLeadGraphZoomLvl();
@@ -9996,6 +10016,82 @@ function secLeadGraphJump(id) {
     try { secLeadGraphNetwork.selectNodes([id]); } catch (e) {}
   }
 }
+
+function secLeadGraphOverlayHtml(n) {
+  const tags = String(n.tags || '').split(',').map(t => t.trim()).filter(Boolean);
+  const isHub = n.type === 'investigation';
+  const edges = (secLeadGraphData && secLeadGraphData.edges || [])
+    .filter(e => e.from === n.id || e.to === n.id);
+  const byId = {}; (secLeadGraphData && secLeadGraphData.nodes || []).forEach(x => byId[x.id] = x);
+  const edgeList = edges.slice(0, 14).map(e => {
+    const other = byId[e.from === n.id ? e.to : e.from];
+    return `<div class="gkg-e"><span class="gkg-d-tag">${escHtml(e.label || 'relation')}</span>
+      <span>→ ${other ? `<a href="#" onclick="secLeadGraphOverlayJump('${escHtml(other.id)}');return false;">${escHtml(other.label.slice(0, 44))}</a>` : '…'}</span></div>`;
+  }).join('');
+  return `<button class="gkg-d-close" onclick="secLeadGraphCloseOverlay()" title="Close (Esc)">&times;</button>
+    <h4><i class="fas ${isHub ? 'fa-folder-tree' : 'fa-file-lines'}" style="color:${TYPE_COLORS[n.type] || '#8b949e'};"></i> ${escHtml(n.label)}</h4>
+    <div class="gkg-overlay-row"><b>Type:</b> ${escHtml(n.type)}</div>
+    ${n.investigation ? `<div class="gkg-overlay-row"><b>Investigation:</b> ${escHtml(n.investigation)}</div>` : ''}
+    ${n.relevance !== undefined && n.relevance !== null ? `<div class="gkg-overlay-row"><b>Relevance:</b> ${Math.round(Number(n.relevance) * 100)}%</div>` : ''}
+    <div class="gkg-overlay-row"><b>Review:</b> ${escHtml(n.review)} ${n.drift ? '<span class="drift-pill">drift</span>' : ''}</div>
+    ${tags.length ? `<div class="gkg-overlay-row"><b>Tags:</b> ${tags.map(t => `<span class="gkg-d-tag">${escHtml(t)}</span>`).join('')}</div>` : ''}
+    ${n.title && n.title !== n.label ? `<div class="gkg-overlay-row" style="max-height:130px;overflow-y:auto;margin-top:6px;">${escHtml(n.title)}</div>` : ''}
+    <div style="display:flex;gap:8px;margin:10px 0 6px;">
+      <button class="btn btn-ghost btn-sm" onclick="secLeadGraphOverlayJump('${escHtml(n.id)}')"><i class="fas fa-crosshairs"></i> Focus</button>
+      ${edges.length ? `<span class="std-note" style="font-size:11px;align-self:center;">${edges.length} edge${edges.length === 1 ? '' : 's'}</span>` : ''}
+    </div>
+    ${edgeList ? `<div style="margin-top:4px;">${edgeList}</div>` : ''}`;
+}
+
+function secLeadGraphEdgeOverlayHtml(e) {
+  const byId = {}; (secLeadGraphData && secLeadGraphData.nodes || []).forEach(x => byId[x.id] = x);
+  const from = byId[e.from], to = byId[e.to];
+  const nav = (id) => `<a href="#" onclick="secLeadGraphOverlayJump('${escHtml(id)}');return false;">${escHtml((byId[id] || {}).label ? byId[id].label.slice(0, 44) : id)}</a>`;
+  return `<button class="gkg-d-close" onclick="secLeadGraphCloseOverlay()" title="Close (Esc)">&times;</button>
+    <h4><i class="fas fa-code-branch" style="color:var(--accent);"></i> ${escHtml(e.label || 'relationship')}</h4>
+    <div class="gkg-overlay-row"><b>From:</b> ${from ? nav(e.from) : escHtml(e.from)}</div>
+    <div class="gkg-overlay-row"><b>To:</b> ${to ? nav(e.to) : escHtml(e.to)}</div>
+    ${e.title ? `<div class="gkg-overlay-row" style="max-height:130px;overflow-y:auto;margin-top:6px;">${escHtml(e.title)}</div>` : ''}`;
+}
+
+function secLeadGraphOpenOverlay(id) {
+  const ov = document.getElementById('secLeadGraphOverlay');
+  const body = document.getElementById('secLeadGraphOverlayBody');
+  if (!ov || !body) return;
+  const n = (secLeadGraphData && secLeadGraphData.nodes || []).find(x => x.id === id);
+  if (!n) return;
+  secLeadGraphPinned = true;
+  body.innerHTML = secLeadGraphOverlayHtml(n);
+  ov.hidden = false;
+}
+
+function secLeadGraphOpenEdgeOverlay(edgeId) {
+  const ov = document.getElementById('secLeadGraphOverlay');
+  const body = document.getElementById('secLeadGraphOverlayBody');
+  if (!ov || !body) return;
+  const e = (secLeadGraphData && secLeadGraphData.edges || []).find(x => x.id === edgeId);
+  if (!e) return;
+  body.innerHTML = secLeadGraphEdgeOverlayHtml(e);
+  ov.hidden = false;
+}
+
+function secLeadGraphOverlayJump(id) {
+  secLeadGraphOpenOverlay(id);
+  if (secLeadGraphNetwork) {
+    try { secLeadGraphNetwork.focus(id, { scale: 1.6, animation: { duration: 400, easingFunction: 'easeInOutQuad' } }); } catch (e) {}
+  }
+}
+
+function secLeadGraphCloseOverlay() {
+  const ov = document.getElementById('secLeadGraphOverlay');
+  if (ov) ov.hidden = true;
+  secLeadGraphPinned = false;
+}
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Escape') return;
+  const ov = document.getElementById('secLeadGraphOverlay');
+  if (ov && !ov.hidden) secLeadGraphCloseOverlay();
+});
 
 function secLeadGraphZoom(delta) {
   if (!secLeadGraphNetwork) return;

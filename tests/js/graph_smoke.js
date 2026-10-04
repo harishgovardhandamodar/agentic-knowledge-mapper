@@ -44,7 +44,7 @@ function extractFn(name) {
 }
 const names = ['secLeadGraphBuildIndex', 'secLeadGraphMatch',
   'secLeadGraphFilterSet', 'secLeadGraphHighlight', 'secLeadGraphDetailHtml',
-  'secLeadGraphSearch'];
+  'secLeadGraphSearch', 'secLeadGraphOverlayHtml', 'secLeadGraphEdgeOverlayHtml'];
 let src = 'let secLeadGraphIndex = {};\nlet secLeadGraphResults = [];\n'
   + 'let secLeadGraphSelIdx = 0;\nlet secLeadGraphFilterActive = false;\n';
 for (const n of names) src += extractFn(n) + '\n';
@@ -86,7 +86,7 @@ try {
   const fn = new Function('document', 'escHtml', 'TYPE_COLORS', 'secLeadGraphData',
     src + '\nreturn { secLeadGraphBuildIndex, secLeadGraphMatch, '
       + 'secLeadGraphFilterSet, secLeadGraphHighlight, secLeadGraphDetailHtml, '
-      + 'secLeadGraphSearch };');
+      + 'secLeadGraphSearch, secLeadGraphOverlayHtml, secLeadGraphEdgeOverlayHtml };');
   const G = fn(document, escHtml, TYPE_COLORS, fixture);
 
   show('buildIndex', 'searchable corpus built from nodes');
@@ -122,7 +122,7 @@ try {
   const fn3 = new Function('document', 'escHtml', 'TYPE_COLORS', 'secLeadGraphData',
     src + '\nreturn { secLeadGraphBuildIndex, secLeadGraphMatch, '
       + 'secLeadGraphFilterSet, secLeadGraphHighlight, secLeadGraphDetailHtml, '
-      + 'secLeadGraphSearch };');
+      + 'secLeadGraphSearch, secLeadGraphOverlayHtml, secLeadGraphEdgeOverlayHtml };');
   const G3 = fn3(document, escHtml, TYPE_COLORS, fixture);
   G3.secLeadGraphBuildIndex();
   const detail = G3.secLeadGraphDetailHtml(fixture.nodes[0]);
@@ -130,6 +130,17 @@ try {
   assert(detail.includes('rlhf') && detail.includes('preference'), 'tags render');
   assert(detail.includes('Investigation:</b> One'), 'investigation renders');
   assert(!/\bundefined\b/.test(detail), 'no bare undefined in the panel');
+
+  show('overlay', 'node and edge overlays render without junk');
+  const overlay = G3.secLeadGraphOverlayHtml(fixture.nodes[0]);
+  assert(overlay.includes('RLHF preference paper'), 'overlay shows the label');
+  assert(overlay.includes('cites'), 'overlay lists the relation label');
+  assert(overlay.includes('Focus'), 'overlay offers a focus action');
+  assert(!/\bundefined\b/.test(overlay), 'no bare undefined in the node overlay');
+  const eover = G3.secLeadGraphEdgeOverlayHtml(fixture.edges[0]);
+  assert(eover.includes('cites'), 'edge overlay names the relation');
+  assert(eover.includes('From:') && eover.includes('To:'), 'edge overlay names both ends');
+  assert(!/\bundefined\b/.test(eover), 'no bare undefined in the edge overlay');
 
   if (failed.length) {
     console.error('FAIL: ' + failed.length + ' assertion(s)');
