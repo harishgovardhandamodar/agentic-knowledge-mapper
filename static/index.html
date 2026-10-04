@@ -9573,6 +9573,11 @@ let secLeadCache = null, secLeadLayer = 'board', secLeadPersona = 'executive',
 let secLeadGraphData = null, secLeadGraphNetwork = null,
     secLeadGraphMode = 'off', secLeadGraphClusterIds = [],
     secLeadGraphCache = { category: null, similarity: null };
+// Finder + overlay state for the graph tab. Kept module-level so the debounce
+// timer survives re-renders and filter-to-matches persists across searches.
+let secLeadGraphSearchTimer = null, secLeadGraphIndex = {},
+    secLeadGraphResults = [], secLeadGraphSelIdx = 0,
+    secLeadGraphFilterActive = false, secLeadGraphPinned = false;
 
 // Global scope flips the board from one investigation to the whole portfolio.
 // The backend has always accepted investigation_id=None; the UI refused to
