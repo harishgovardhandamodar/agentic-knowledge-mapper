@@ -317,6 +317,42 @@ reading the same database:
 The scoring pack is versioned and fingerprinted, so a moved number is a CI
 failure rather than a surprise — see [docs/threatpack.md](docs/threatpack.md).
 
+#### How scoring works
+
+**Product workflows are scored threat-by-threat** against a versioned catalog
+(T01–T12, each with a STRIDE class, an OWASP LLM mapping, and a 1–5
+likelihood × 1–5 impact baseline):
+
+- **Exposure scales likelihood.** The data tier weights each threat's baseline
+  likelihood mildly — `restricted` keeps full severity, `public` reduces it
+  (`round(L × (0.55 + 0.45 × weight))`).
+- **Inherent** per threat is `likelihood × impact` (1–25, banded Critical /
+  High / Medium / Low). **Residual** applies active controls C01–C15 with
+  diminishing-returns coverage (`1 − Π(1 − efficacy×weight)`) and a **35%
+  floor** — controls never take a threat below 35% of its inherent likelihood.
+- **The headline aggregate** is `0.55 × mean(top-5 worst threats) + 0.45 ×
+  mean(all threats)`, normalized to 100. The worst-case weight means one severe
+  threat cannot hide in a healthy mean; breadth means many medium threats still
+  count. Applicability scales each threat's contribution and renormalizes;
+  threats below 0.3 relevance are reported but not scored.
+- **Posture** bands the residual: ≥75 HIGH RISK, ≥50 ELEVATED, ≥30 MODERATE,
+  else LOW.
+
+**Model subjects use a different path** — a model is scored by how it handles
+data, how sound it is, how exposed and how governed (weighted dimensions,
+W1 adversarial coverage + W2 adoption risk + W3 mitigation, adversarial
+misuse, or hypothesis confidence). Model scores never pretend controls reduce
+them in v1: residual equals inherent.
+
+**The assurance overlay decides how much to believe.** A control counts toward
+the **verified** residual only when an accepted primary artifact names it; the
+**declared** residual is the optimistic vendor number. The two travel with an
+`evidence_confidence` figure and the gate statuses (architecture, evidence,
+injection cap, blast radius). The dashboard always shows residual beside its
+confidence and gate status, and a human accept / reject / exception is a ledger
+event — see [design/security-scoring.md](design/security-scoring.md) for the
+full formulas and a worked example.
+
 ### Agentic Manager
 
 One command fans out to N investigations plus a summary: the Manager tab
