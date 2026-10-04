@@ -1305,18 +1305,25 @@ body.pane-sec-top-collapsed .sec-topbar-sub { display: none; }
       <div class="sec-topbar">
         <div>
           <h2><i class="fas fa-gauge-high"></i> Leadership Dashboard</h2>
-          <div class="sec-topbar-sub">Availability, distribution and robustness across the portfolio — read-only aggregates, no composite score.</div>
+          <div class="sec-topbar-sub">Two layers: the assurance position (verified residual, decision queue, system health) and the portfolio register behind it.</div>
         </div>
         <div class="sec-topbar-right">
           <label for="dashInvSelect" style="font-size:11px;color:var(--text2);">Investigation</label>
           <select id="dashInvSelect" onchange="secDashSwitchInvestigation(this.value)" style="min-width:220px;"></select>
-          <button class="btn btn-ghost btn-sm" onclick="secLoadDashboard(true)"><i class="fas fa-rotate"></i> Refresh</button>
+          <button class="btn btn-ghost btn-sm" onclick="secLeadRefresh()"><i class="fas fa-rotate"></i> Refresh</button>
         </div>
       </div>
       <div style="padding:14px 20px;overflow-y:auto;flex:1;min-height:0;">
+        <div class="std-filters" style="margin-bottom:10px;">
+          <button class="std-viewbtn on" id="secLeadLayerBoard" onclick="secLeadSetLayer('board')">Assurance board</button>
+          <button class="std-viewbtn" id="secLeadLayerRegister" onclick="secLeadSetLayer('register')">Portfolio register</button>
+          <span class="std-note">The assurance board answers "what must a person decide, and what do we believe it?". The register answers "is the portfolio covered and owned?".</span>
+        </div>
+        <div id="secLeadBody"></div>
+        <div id="secDashCard" hidden>
         <div class="sec-card">
           <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;flex-wrap:wrap;">
-            <h3 style="font-size:13px;margin:0;"><i class="fas fa-gauge-high" style="color:var(--teal);"></i> Leadership dashboard</h3>
+            <h3 style="font-size:13px;margin:0;"><i class="fas fa-table-list" style="color:var(--teal);"></i> Portfolio register operations</h3>
             <span id="secDashCounts" style="font-size:11px;color:var(--text2);"></span>
             <span style="flex:1"></span>
             <button class="btn btn-ghost btn-sm" onclick="secLoadDashboard(true)"><i class="fas fa-rotate"></i></button>
@@ -1352,6 +1359,7 @@ body.pane-sec-top-collapsed .sec-topbar-sub { display: none; }
           </div>
           <div id="secDashBody"></div>
           <div id="secDashFoot" class="std-note" style="margin-top:8px;"></div>
+        </div>
         </div>
       </div>
     </div>
@@ -4500,6 +4508,8 @@ function switchApp(app) {
   currentApp = app;
   if (app !== 'manager' && mgrRunsTimer) { clearInterval(mgrRunsTimer); mgrRunsTimer = null; }
   if (app !== 'design' && typeof designZoomClose === 'function') designZoomClose();
+  // The board polls in the background, so leaving the tab has to stop it.
+  if (app !== 'dashboard' && typeof secLeadPollStop === 'function') secLeadPollStop();
   document.querySelectorAll('.app-tab').forEach(t => t.classList.toggle('active', t.dataset.app === app));
   const akm = document.getElementById('akmPane');
   const sec = document.getElementById('securityPane');
@@ -4529,7 +4539,14 @@ function switchApp(app) {
         try { await loadInvestigations(); } catch (e) { /* message renders below */ }
       }
       secDashRenderInvOptions();
-      secLoadDashboard(true);
+      if (secLeadLayer === 'register') {
+        secLoadDashboard(true);
+        secLeadPollStop();
+      } else {
+        secLeadSetLayer('board');
+        secLeadLoad(true);
+        secLeadPollStart();
+      }
     })();
   } else if (app === 'manager') {
     mgrLoadRuns();
@@ -9259,6 +9276,645 @@ function secDashBrief(fmt) {
   if (!inv) return;
   const sc = secDashScope();
   window.open(`${API}/dashboard/brief.${fmt}?investigation_id=${inv}&window_days=${sc.window_days}&accepted_only=${sc.accepted_only}`, '_blank');
+}
+
+// ============================ leadership assurance board =================
+// The screen that answers "what must a person decide, and what do we actually
+// believe?". Every residual is printed with its evidence confidence, its
+// architecture-gate status and its blast radius, because a residual without
+// those is not a decision item -- it is a number.
+
+let secLeadCache = null, secLeadLayer = 'board', secLeadPersona = 'executive',
+    secLeadOffset = 0, secLeadPoll = null, secLeadErr = '', secLeadNote = '';
+
+function secLeadRefresh() {
+  return secLeadLayer === 'register' ? secLoadDashboard(true) : secLeadLoad(true);
+}
+
+function secLeadSetLayer(layer) {
+  secLeadLayer = layer === 'register' ? 'register' : 'board';
+  document.getElementById('secLeadLayerBoard').classList.toggle('on', secLeadLayer === 'board');
+  document.getElementById('secLeadLayerRegister').classList.toggle('on', secLeadLayer === 'register');
+  document.getElementById('secLeadBody').hidden = (secLeadLayer !== 'board');
+  document.getElementById('secDashCard').hidden = (secLeadLayer !== 'register');
+  if (secLeadLayer === 'register') secLoadDashboard(true);
+  else { secLeadLoad(false); secLeadPollStart(); }
+}
+
+function secLeadSetPersona(p) {
+  secLeadPersona = p || 'executive';
+  secLeadOffset = 0;
+  secLeadCache = null;
+  secLeadLoad(true);
+}
+
+// Read the board's own filter controls. Kept separate from secDashScope() because
+// the assurance board and the register slice on different axes -- passing one
+// scope object to both endpoints is what made the leadership views look like the
+// wrong data in the first place.
+function secLeadScope() {
+  const q = (id) => (document.getElementById(id) || {}).value || '';
+  const states = Array.from(document.querySelectorAll('#secLeadStates option:checked'))
+    .map(o => o.value).filter(Boolean);
+  const init = q('secLeadInitiative');
+  const lay = q('secLeadLayer');
+  const tier = q('secLeadTier');
+  return {
+    window_days: q('secLeadWindow') || '90',
+    initiative_id: init || '',
+    layer: lay || '',
+    exposure: tier || '',
+    tier: tier || '',
+    states: states.join(','),
+    sort: q('secLeadSort') || 'residual',
+    sla_days: q('secLeadSla') || '14',
+    offset: secLeadOffset,
+    limit: q('secLeadLimit') || '25',
+  };
+}
+
+function secLeadQuery(sc) {
+  const p = new URLSearchParams();
+  const inv = secDashInv();
+  if (inv) p.set('investigation_id', inv);
+  p.set('window_days', sc.window_days);
+  p.set('persona', secLeadPersona);
+  if (sc.initiative_id) p.set('initiative_id', sc.initiative_id);
+  if (sc.layer) p.set('layer', sc.layer);
+  if (sc.exposure) p.set('exposure', sc.exposure);
+  if (sc.tier) p.set('tier', sc.tier);
+  if (sc.states) p.set('states', sc.states);
+  p.set('sort', sc.sort);
+  p.set('sla_days', sc.sla_days);
+  p.set('offset', String(sc.offset || 0));
+  p.set('limit', String(sc.limit || 25));
+  const ack = document.getElementById('secLeadShowAck');
+  if (ack && ack.checked) p.set('include_acknowledged', 'true');
+  return p.toString();
+}
+
+async function secLeadLoad(force) {
+  const body = document.getElementById('secLeadBody');
+  if (!body) return;
+  const inv = secDashInv();
+  if (!inv) {
+    body.innerHTML = '<div class="std-err">Open an investigation first — the board is scoped to one investigation, never global.</div>';
+    return;
+  }
+  if (!force && secLeadCache) { secLeadRender(); return; }
+  body.innerHTML = '<div class="std-note">Loading the assurance board…</div>';
+  const sc = secLeadScope();
+  try {
+    const r = await fetch(`${API}/leadership/board?${secLeadQuery(sc)}`, { cache: 'no-store' });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
+    secLeadCache = d;
+    secLeadErr = '';
+    secLeadPopulateFilters(d);
+  } catch (e) {
+    secLeadErr = e.message || String(e);
+    body.innerHTML = `<div class="std-err">Could not load the assurance board: ${escHtml(secLeadErr)}. <button class="btn btn-ghost btn-sm" onclick="secLeadLoad(true)"><i class="fas fa-rotate"></i> Retry</button></div>`;
+    return;
+  }
+  secLeadRender();
+}
+
+// The board ships its own persona catalogue and decision contract, so the
+// controls are built from the payload rather than hard-coded here: a new
+// decision type or persona appears in the UI without a second edit here.
+function secLeadPopulateFilters(d) {
+  const person = document.getElementById('secLeadPersona');
+  if (person && d.personas) {
+    person.innerHTML = d.personas.map(p =>
+      `<option value="${escHtml(p.id)}"${p.id === d.persona ? ' selected' : ''}>${escHtml(p.label)}</option>`).join('');
+  }
+  const qf = d.queue_filters || {};
+  const mk = (el, vals, all) => {
+    if (!el) return;
+    const cur = el.value;
+    el.innerHTML = all + (vals || []).map(v =>
+      `<option value="${escHtml(v)}"${v === cur ? ' selected' : ''}>${escHtml(String(v).replace(/_/g, ' '))}</option>`).join('');
+  };
+  mk(document.getElementById('secLeadSort'), qf.sorts, '');
+  mk(document.getElementById('secLeadTier'), qf.tiers, '<option value="">All tiers</option>');
+  mk(document.getElementById('secLeadLayer'), qf.layers, '<option value="">All layers</option>');
+  const st = document.getElementById('secLeadStates');
+  if (st && (qf.states || []).length) {
+    const picked = new Set(Array.from(st.options).filter(o => o.selected).map(o => o.value));
+    st.innerHTML = (qf.states || []).map(s =>
+      `<option value="${escHtml(s)}"${(picked.size ? picked.has(s) : (qf.default_states || []).includes(s)) ? ' selected' : ''}>${escHtml(String(s).replace(/_/g, ' '))}</option>`).join('');
+  }
+}
+
+// Sections are emitted in the order the persona asks for. A lens, not a
+// different number: every persona reads the same rows.
+function secLeadRender() {
+  const body = document.getElementById('secLeadBody');
+  if (!body || !secLeadCache) return;
+  const b = secLeadCache;
+  const render = {
+    risk_position: secLeadRiskHtml,
+    decision_queue: secLeadQueueHtml,
+    assurance_health: secLeadHealthHtml,
+    exposure_lens: secLeadExposureHtml,
+    system_integrity: secLeadIntegrityHtml,
+    alerts: secLeadAlertsHtml,
+    exceptions: secLeadExceptionsHtml,
+    change_log: secLeadChangeLogHtml,
+  };
+  const sections = (b.emphasis || []).map(k => (render[k] ? render[k](b[k] || {}) : '')).join('');
+  const badge = document.getElementById('dashTabBadge');
+  const a = b.alerts || {};
+  if (badge) {
+    const n = a.open_blocking || 0;
+    badge.style.display = n ? '' : 'none';
+    badge.textContent = String(n);
+  }
+  body.innerHTML = secLeadHeaderHtml(b) + sections + secLeadFootHtml(b);
+}
+
+function secLeadHeaderHtml(b) {
+  const sc = b.scope || {};
+  const rp = b.risk_position || {};
+  const dec = rp.decisions || {};
+  const a = b.alerts || {};
+  const q = b.decision_queue || {};
+  const bits = [
+    `${rp.assessments || 0} assessment(s)`,
+    `${dec.open || 0} open`,
+    `${dec.blocked_on_architecture || 0} gate-blocked`,
+    `${dec.accepted || 0} accepted`,
+    `${q.over_sla_total || 0} over SLA`,
+  ];
+  return `<div class="sec-card" style="margin-bottom:8px;">
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
+      <h3 style="font-size:13px;margin:0;"><i class="fas fa-scale-balanced" style="color:var(--teal);"></i> Assurance board <span class="std-note" style="font-weight:400;">· ${escHtml(b.persona_label || '')} lens</span></h3>
+      <span class="std-note">${escHtml(b.persona_blurb || '')}</span>
+      <span style="flex:1"></span>
+      <button class="btn btn-ghost btn-sm" onclick="secLeadExport()" title="The whole board as one Markdown snapshot"><i class="fas fa-file-arrow-down"></i> Snapshot .md</button>
+    </div>
+    <div class="std-filters" style="margin-bottom:8px;">
+      <label class="std-note" for="secLeadPersona">Lens</label>
+      <select id="secLeadPersona" aria-label="Persona lens" onchange="secLeadSetPersona(this.value)"></select>
+      <select id="secLeadWindow" aria-label="Time window" onchange="secLeadOffset=0;secLeadLoad(true)">
+        <option value="30">30 days</option><option value="90" selected>90 days</option><option value="365">365 days</option>
+      </select>
+      <select id="secLeadInitiative" aria-label="Initiative filter" onchange="secLeadOffset=0;secLeadLoad(true)"><option value="">All initiatives</option></select>
+      <select id="secLeadLayer" aria-label="Layer filter" onchange="secLeadOffset=0;secLeadLoad(true)"></select>
+      <select id="secLeadTier" aria-label="Data tier filter" onchange="secLeadOffset=0;secLeadLoad(true)"></select>
+      <label class="std-note" for="secLeadSla">SLA</label>
+      <select id="secLeadSla" aria-label="Decision SLA in days" onchange="secLeadOffset=0;secLeadLoad(true)">
+        <option value="7">7d</option><option value="14" selected>14d</option><option value="30">30d</option><option value="90">90d</option>
+      </select>
+      <label class="std-note" style="display:flex;gap:4px;align-items:center;"><input type="checkbox" id="secLeadShowAck" onchange="secLeadLoad(true)"> show acknowledged</label>
+      <span class="std-note" id="secLeadLive" style="margin-left:auto;"></span>
+    </div>
+    <div style="font-size:11.5px;display:flex;gap:14px;flex-wrap:wrap;">
+      ${bits.map(x => `<span>${escHtml(x)}</span>`).join('')}
+      <span>${a.blocking || 0} blocking alert(s)</span>
+    </div>
+    <div class="std-note" style="margin-top:6px;">${escHtml(b.contract ? b.contract.note : '')}</div>
+  </div>`;
+}
+
+function secLeadFootHtml(b) {
+  const note = secLeadNote
+    ? `<div style="margin-top:6px;padding:6px 8px;border:1px solid var(--border);border-radius:6px;color:var(--text2);font-size:11.5px;">${escHtml(secLeadNote)}</div>` : '';
+  return `${note}<div class="std-note" style="margin:6px 2px 14px;">
+    Scope: investigation ${b.scope && b.scope.investigation_id || 'all'} ·
+    initiative ${(b.scope && b.scope.initiative_id) || 'all'} ·
+    layer ${(b.scope && b.scope.layer) || 'all'} ·
+    tier ${(b.scope && b.scope.exposure) || 'all'} ·
+    window ${(b.scope && b.scope.window_days) || 90}d ·
+    generated ${escHtml(String(b.generated || ''))}.
+    A persona is a lens, not access control: every lens reads the same rows, so
+    two roles can never quote two different residuals.
+  </div>`;
+}
+
+// ---- A. risk position -----------------------------------------------------
+function secLeadRiskHtml(rp) {
+  const tiers = (rp.tiers || []).map(t => {
+    const tr = (rp.tier_trends || []).find(x => x.tier === t.tier) || {};
+    return `<tr>
+      <td>${escHtml(String(t.tier).replace(/_/g, ' '))}</td>
+      <td style="text-align:right;">${t.count}</td>
+      <td style="text-align:right;">${secLeadNum(t.mean_verified_residual, '%')}</td>
+      <td style="text-align:right;">${secLeadNum(t.mean_declared_residual, '%')}</td>
+      <td style="text-align:right;">${secLeadNum(t.mean_forensics)}</td>
+      <td style="text-align:right;">${t.quantified || 0}/${t.count}</td>
+      <td style="text-align:right;">${t.blocked || 0}</td>
+      <td>${secLeadSpark(tr.series)}<span class="std-note">${tr.delta_pct_points === null || tr.delta_pct_points === undefined ? 'no prior window' : (tr.delta_pct_points > 0 ? '+' : '') + tr.delta_pct_points + ' pts'}</span></td>
+    </tr>`;
+  }).join('');
+  const tw = (rp.trend_windows || []).map(w =>
+    `<span style="display:inline-flex;gap:4px;align-items:baseline;margin-right:12px;">
+       <b>${w.window_days}d</b>
+       <span style="color:var(--text2);">${secLeadNum(w.mean_residual_pct, '%')}</span>
+       <span style="color:${w.direction === 'worsening' ? 'var(--red, #d9534f)' : w.direction === 'improving' ? 'var(--green, #5cb85c)' : 'var(--text3)'}">${escHtml(w.direction.replace(/_/g, ' '))}</span>
+       <span style="color:var(--text3);font-size:10.5px;">n=${w.samples}</span>
+     </span>`).join('');
+  const vvd = rp.verified_vs_declared || {};
+  const conf = rp.evidence_confidence || {};
+  const byTier = (rp.top_threats_by_tier || []).map(tb =>
+    `<div style="margin-bottom:6px;">
+       <b style="font-size:11.5px;">${escHtml(String(tb.tier).replace(/_/g, ' '))}</b>
+       <span class="std-note">${tb.distinct_threats} distinct threat(s)${tb.forced_to_inherent ? ` · <span style="color:var(--text2);">${tb.forced_to_inherent} forced to inherent (evidence gate held it)</span>` : ''}</span>
+       <div>${(tb.threats || []).map(t =>
+         `<div style="font-size:11.5px;">${escHtml(String(t.threat_id || ''))} — ${secLeadNum(t.verified_residual, '%')} verified ${t.coverage_confidence_pct === null || t.coverage_confidence_pct === undefined ? '' : `· ${t.coverage_confidence_pct}% coverage`}${t.forced_to_inherent ? ' · <b>forced to inherent</b>' : ''} <button class="btn btn-ghost btn-sm" onclick="secLeadOpenAssessment(${t.assessment_id})">open</button></div>`).join('') || '<span class="std-note">none scored</span>'}</div>
+     </div>`).join('');
+  const gaps = (rp.architecture_gaps || []).map(g =>
+    `<li>${escHtml(String(g.item))} <span class="std-note">(${g.assessments} assessment(s))</span></li>`).join('');
+  return `<div class="sec-card" style="margin-bottom:8px;">
+    <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;">
+      <h3 style="font-size:13px;margin:0;"><i class="fas fa-chart-column" style="color:var(--teal);"></i> Risk position</h3>
+      <span class="std-note">Verified residual by data tier. Public and Restricted never average into one number.</span>
+    </div>
+    <div class="std-filters" style="margin:6px 0;">${tw || '<span class="std-note">No trend history yet — the direction is unknown, not flat.</span>'}</div>
+    <div class="std-note">Mean verified ${secLeadNum(vvd.mean_verified_residual_pct, '%')} vs declared ${secLeadNum(vvd.mean_declared_residual_pct, '%')} ·
+      <b>${secLeadNum(vvd.verified_share_pct, '%')}</b> of the claimed reduction is evidenced (${vvd.verified_reduction_pct_points} of ${vvd.claimed_reduction_pct_points} points) ·
+      mean evidence confidence ${secLeadNum(conf.mean_pct, '%')}</div>
+    <div style="overflow-x:auto;margin-top:6px;"><table class="sec-table">
+      <tr><th>Tier</th><th style="text-align:right;">N</th><th style="text-align:right;">Verified</th><th style="text-align:right;">Declared</th><th style="text-align:right;">Forensics</th><th style="text-align:right;">Radius quantified</th><th style="text-align:right;">Gate-blocked</th><th>Trend</th></tr>
+      ${tiers || '<tr><td colspan="8">No assessments in scope.</td></tr>'}
+    </table></div>
+    ${conf.distribution ? `<div style="font-size:11.5px;margin-top:6px;">Confidence distribution: ${Object.entries(conf.distribution).map(([k, v]) => `${escHtml(k)} <b>${v}</b>`).join(' · ')}</div>` : ''}
+    ${byTier ? `<div style="margin-top:8px;"><b style="font-size:11.5px;">Dominant threats per tier</b><div>${byTier}</div></div>` : ''}
+    ${gaps ? `<div style="margin-top:6px;"><b style="font-size:11.5px;">Open architecture gate items</b><ul style="font-size:11.5px;margin:2px 0;padding-left:18px;">${gaps}</ul></div>` : ''}
+  </div>`;
+}
+
+// ---- B. decision queue ----------------------------------------------------
+function secLeadQueueHtml(q) {
+  const st = q.states || {};
+  const states = Object.entries(st).map(([k, v]) =>
+    `<span class="std-pill" title="${escHtml(k.replace(/_/g, ' '))}">${escHtml(String(k).replace(/_/g, ' '))} ${v}</span>`).join(' ');
+  const rows = (q.items || []).map(r => {
+    const over = r.over_sla;
+    const acts = `<div style="display:flex;gap:4px;flex-wrap:wrap;">
+      <button class="btn btn-ghost btn-sm" title="Accept the verified residual" onclick="secLeadDecide(${r.assessment_id},'accept')">Accept</button>
+      <button class="btn btn-ghost btn-sm" title="Accept subject to mandatory guardrails" onclick="secLeadDecide(${r.assessment_id},'accept_with_mandatory_guardrails')">Guardrails</button>
+      <button class="btn btn-ghost btn-sm" title="Reject until the architecture gate closes" onclick="secLeadDecide(${r.assessment_id},'reject')">Reject</button>
+      <button class="btn btn-ghost btn-sm" title="Time-bounded exception: requires a rationale and an expiry" onclick="secLeadDecide(${r.assessment_id},'exception')">Exception</button>
+      <button class="btn btn-ghost btn-sm" onclick="secLeadOpenAssessment(${r.assessment_id})" title="One-page summary and evidence">Open</button>
+      ${r.vendor_questionnaire_available ? `<button class="btn btn-ghost btn-sm" onclick="secLeadOpenJson('${escHtml(r.vendor_questionnaire_link)}')" title="Questions to send the vendor, with the threat each one unblocks">Vendor Q</button>` : ''}
+    </div>`;
+    return `<tr${over ? ' style="border-left:3px solid var(--red, #d9534f);"' : ''}>
+      <td><b>${escHtml(r.product || '(unnamed)')}</b>
+        ${r.investigation_title ? `<div class="std-note">${escHtml(r.investigation_title)}</div>` : ''}
+        <div class="std-note">${escHtml(String(r.tier || '').replace(/_/g, ' '))}${r.layer ? ' · ' + escHtml(r.layer) : ''}${r.forensics_band ? ' · forensics ' + escHtml(r.forensics_band) : ''}</div></td>
+      <td>${secLeadNum(r.verified_residual_pct, '%')}
+        <div class="std-note">declared ${secLeadNum(r.declared_residual_pct, '%')}</div></td>
+      <td>${secLeadNum(r.evidence_confidence_pct, '%')}</td>
+      <td>${escHtml(r.state.replace(/_/g, ' '))}
+        ${r.architecture_gate ? `<div class="std-note">${escHtml(String(r.architecture_gate))}</div>` : ''}
+        ${(r.architecture_open_items || []).length ? `<div class="std-note">${escHtml(r.architecture_open_items.join(', '))}</div>` : ''}</td>
+      <td>${r.blast_radius ? escHtml(r.blast_radius) : (r.quantified === false ? '<span style="color:var(--text2);">not quantified</span>' : '<span class="std-note">—</span>')}</td>
+      <td>${r.age_days === null || r.age_days === undefined ? '<span class="std-note">unknown</span>' : r.age_days + 'd'}${over ? ' <span style="color:var(--red, #d9534f);font-weight:700;">OVER SLA</span>' : ''}
+        ${r.recorded_decision ? `<div class="std-note">signed: ${escHtml(String(r.recorded_decision).replace(/_/g, ' '))}${r.decision_actor ? ' by ' + escHtml(r.decision_actor) : ''}</div>` : ''}
+        ${r.expires_at ? `<div class="std-note">expires ${escHtml(String(r.expires_at).slice(0, 10))}</div>` : ''}</td>
+      <td>${r.recommended_decision ? `<span class="std-note">${escHtml(String(r.recommended_decision).replace(/_/g, ' '))}</span>` : '<span class="std-note">—</span>'}
+        ${r.recommended_headline ? `<div class="std-note">${escHtml(r.recommended_headline)}</div>` : ''}</td>
+      <td>${acts}</td>
+    </tr>`;
+  }).join('');
+  const q2 = q;
+  return `<div class="sec-card" style="margin-bottom:8px;">
+    <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;">
+      <h3 style="font-size:13px;margin:0;"><i class="fas fa-list-check" style="color:var(--teal);"></i> Decision queue (${q.count})</h3>
+      <span class="std-note">Every row shows the verified residual with its evidence confidence and gate status.</span>
+    </div>
+    <div class="std-filters" style="margin:6px 0;">
+      <select id="secLeadSort" aria-label="Sort queue" onchange="secLeadOffset=0;secLeadLoad(true)"></select>
+      <select id="secLeadStates" aria-label="Filter by decision state" multiple size="1" style="min-width:150px;height:auto;" onchange="secLeadOffset=0;secLeadLoad(true)"></select>
+      <select id="secLeadLimit" aria-label="Rows per page" onchange="secLeadOffset=0;secLeadLoad(true)">
+        <option value="10">10 rows</option><option value="25" selected>25 rows</option><option value="50">50 rows</option><option value="100">100 rows</option>
+      </select>
+      <button class="btn btn-ghost btn-sm" onclick="secLeadPage(-1)" ${q2.offset ? '' : 'disabled'}><i class="fas fa-chevron-left"></i></button>
+      <span class="std-note">${q2.offset + 1}–${q2.offset + (q2.returned || 0)} of ${q2.count}</span>
+      <button class="btn btn-ghost btn-sm" onclick="secLeadPage(1)" ${q2.has_more ? '' : 'disabled'}><i class="fas fa-chevron-right"></i></button>
+      ${(q2.over_sla_total || 0) ? `<span style="color:var(--red, #d9534f);">${q2.over_sla_total} over the ${q2.sla_days}d SLA</span>` : ''}
+      <span class="std-note">${states}</span>
+    </div>
+    <div style="overflow-x:auto;"><table class="sec-table">
+      <tr><th>Product</th><th>Verified residual</th><th>Confidence</th><th>State / gate</th><th>Blast radius</th><th>Age</th><th>Recommended</th><th>Decision</th></tr>
+      ${rows || '<tr><td colspan="8">Nothing is waiting on a decision in this scope.</td></tr>'}
+    </table></div>
+  </div>`;
+}
+
+function secLeadPage(dir) {
+  const q = secLeadCache && secLeadCache.decision_queue;
+  if (!q) return;
+  const next = (q.offset || 0) + dir * (q.limit || 25);
+  if (next < 0) return;
+  secLeadOffset = next;
+  secLeadLoad(true);
+}
+
+// ---- C. assurance health --------------------------------------------------
+function secLeadHealthHtml(h) {
+  const c = h.controls || {}, f = h.forensics || {}, lg = h.ledger || {},
+        st = h.stalled_runs || {}, oe = h.overdue_evidence || {}, tc = h.time_to_close || {};
+  const least = (c.least_evidenced || []).map(x =>
+    `<li>${escHtml(x.control_id)} — ${x.evidenced} evidenced, ${x.not} not</li>`).join('');
+  const blocking = (lg.blocking_alerts || []).map(a =>
+    `<li><b>${escHtml(String(a.condition || ''))}</b> <span class="std-note">${escHtml(String(a.why_it_matters || ''))}</span></li>`).join('');
+  const ev = tc.evidence_reviews || {}, ag = tc.architecture_gaps || {};
+  return `<div class="sec-card" style="margin-bottom:8px;">
+    <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;">
+      <h3 style="font-size:13px;margin:0;"><i class="fas fa-heart-pulse" style="color:var(--teal);"></i> Control &amp; assurance health</h3>
+      <span class="std-note">${escHtml(h.note || '')}</span>
+    </div>
+    <div style="font-size:11.5px;display:flex;gap:16px;flex-wrap:wrap;margin-top:6px;">
+      <span>Controls: <b>${c.verified || 0}</b> evidenced · ${c.declared || 0} declared · ${c.unknown || 0} unknown</span>
+      <span>Evidence rate: <b>${secLeadNum(c.verified_pct, '%')}</b></span>
+      <span>Forensics: mean <b>${secLeadNum(f.mean_score)}</b> · ${f.reconstructable || 0}/${f.scored || 0} reconstructable</span>
+      <span>Ledger: <b>${lg.chains_intact || 0}/${lg.runs_checked || 0}</b> chains intact · ${lg.mean_event_classes_recorded || 0}/${lg.mandatory_event_classes || 0} event classes</span>
+      <span>Evidence backlog: ${oe.pending || 0} pending, <b style="${oe.overdue ? 'color:var(--red, #d9534f);' : ''}">${oe.overdue || 0}</b> overdue (oldest ${oe.oldest_days || 0}d)</span>
+      <span>Stalled runs: ${Object.entries(st.by_status || {}).map(([k, v]) => `${escHtml(k)} ${v}`).join(' · ')}</span>
+    </div>
+    <div style="font-size:11.5px;display:flex;gap:16px;flex-wrap:wrap;margin-top:4px;">
+      <span>Questions answered: ${tc.questions_answered || 0} (median ${tc.median_days_to_answer === null || tc.median_days_to_answer === undefined ? '—' : tc.median_days_to_answer}d)</span>
+      <span>Architecture gaps: ${ag.closed_count || 0} closed (mean ${secLeadNum(ag.mean_close_days)}d) · <b style="${ag.open_count ? 'color:var(--red, #d9534f);' : ''}">${ag.open_count || 0} open</b></span>
+      <span>Evidence reviews pending: ${ev.pending_count || 0} (mean ${secLeadNum(ev.mean_pending_days)}d, max ${secLeadNum(ev.max_pending_days)}d)</span>
+      <span>Assessments with no attestation: ${c.assessments_without_attestation || 0}</span>
+    </div>
+    ${least ? `<div style="margin-top:6px;"><b style="font-size:11.5px;">Least-evidenced controls</b><ul style="font-size:11.5px;margin:2px 0;padding-left:18px;">${least}</ul></div>` : ''}
+    ${blocking ? `<div style="margin-top:6px;"><b style="font-size:11.5px;color:var(--red, #d9534f);">Ledger blocking alerts</b><ul style="font-size:11.5px;margin:2px 0;padding-left:18px;">${blocking}</ul></div>` : ''}
+    ${(st.explainer_gap_open || 0) ? `<div style="margin-top:6px;"><b style="font-size:11.5px;">${st.explainer_gap_open} interrupted explainer_gap run(s), ${st.explainer_gap_failed || 0} failed</b> <span class="std-note">${escHtml(st.note || '')}</span></div>` : ''}
+  </div>`;
+}
+
+// ---- D. exposure ----------------------------------------------------------
+function secLeadExposureHtml(e) {
+  const mat = (e.material_items || []).map(m =>
+    `<tr><td>${escHtml(m.product || '')}</td><td style="text-align:right;">${secLeadNum(m.verified_residual_pct, '%')}</td>
+     <td style="text-align:right;">${m.records_at_risk}</td><td style="text-align:right;">${m.privileged_users || 0}</td>
+     <td style="text-align:right;">${m.max_payload_mb === null || m.max_payload_mb === undefined ? '—' : m.max_payload_mb + ' MB'}</td></tr>`).join('');
+  return `<div class="sec-card" style="margin-bottom:8px;">
+    <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;">
+      <h3 style="font-size:13px;margin:0;"><i class="fas fa-database" style="color:var(--teal);"></i> Exposure &amp; blast radius</h3>
+      <span class="std-note">${escHtml(e.note || '')}</span>
+    </div>
+    <div style="font-size:11.5px;display:flex;gap:16px;flex-wrap:wrap;margin-top:6px;">
+      <span>Restricted assets: <b>${e.restricted_assets || 0}</b></span>
+      <span>Confidential assets: <b>${e.confidential_assets || 0}</b></span>
+      <span>Privileged users: <b>${e.privileged_users || 0}</b></span>
+      <span>Quantified: <b>${e.quantified_assessments || 0}</b> · unquantified <b style="${e.unquantified_assessments ? 'color:var(--text2);' : ''}">${e.unquantified_assessments || 0}</b></span>
+    </div>
+    ${mat ? `<div style="overflow-x:auto;margin-top:6px;"><table class="sec-table"><tr><th>Material item</th><th style="text-align:right;">Verified residual</th><th style="text-align:right;">Records at risk</th><th style="text-align:right;">Privileged users</th><th style="text-align:right;">Max payload</th></tr>${mat}</table></div>`
+      : '<div class="std-note" style="margin-top:6px;">No material item meets both a ≥50% verified residual and a ≥1,000-record population. Materiality needs a score and a population; neither alone is materiality.</div>'}
+  </div>`;
+}
+
+// ---- E. system integrity --------------------------------------------------
+function secLeadIntegrityHtml(s) {
+  const sw = s.swarm || {}, tp = s.threat_pack || {}, lg = s.ledger || {};
+  const roles = (sw.roles || []).map(r =>
+    `<tr><td>${escHtml(r.role)}${r.contracted ? '' : ' <span class="std-note">(no contract)</span>'}</td>
+      <td style="text-align:right;">${r.attempts || 0}</td><td style="text-align:right;">${r.failures || 0}</td>
+      <td style="text-align:right;">${r.gate_failures || 0}</td>
+      <td style="text-align:right;">${r.success_rate === null || r.success_rate === undefined ? '—' : r.success_rate}</td></tr>`).join('');
+  const packs = (tp.rows || []).slice(0, 10).map(p =>
+    `<tr><td>${escHtml(p.product || '')}</td><td>${escHtml(p.version || 'unversioned')}</td>
+      <td>${p.stale ? '<span style="color:var(--red, #d9534f);">stale</span>' : 'current'}</td>
+      <td><button class="btn btn-ghost btn-sm" onclick="secLeadOpenAssessment(${p.assessment_id})">open</button></td></tr>`).join('');
+  return `<div class="sec-card" style="margin-bottom:8px;">
+    <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;">
+      <h3 style="font-size:13px;margin:0;"><i class="fas fa-microchip" style="color:var(--teal);"></i> System &amp; process integrity</h3>
+      <span class="std-note">${escHtml(s.note || '')}</span>
+    </div>
+    <div style="font-size:11.5px;display:flex;gap:16px;flex-wrap:wrap;margin-top:6px;">
+      <span>Swarm: <b>${sw.hops || 0}</b> hops · ${sw.failures || 0} failures (${sw.gate_failures || 0} gate-caused) · ${sw.retries || 0} retries</span>
+      <span>Success rate <b>${secLeadNum(sw.overall_success_rate)}</b></span>
+      <span>Failure rate <b>${secLeadNum(sw.failure_rate)}</b></span>
+      <span>Gate-caused share <b>${secLeadNum(sw.gate_failure_rate)}</b></span>
+      <span>Threat-pack currency: <b>${secLeadNum(tp.currency_pct, '%')}</b> (${tp.stale || 0} stale of ${tp.assessments || 0})</span>
+      <span>Ledger completeness: ${secLeadNum(lg.mean_event_classes_recorded)} of ${lg.mandatory_event_classes || 0} mandatory classes</span>
+    </div>
+    <div class="std-note" style="margin-top:4px;">${escHtml(sw.rate_note || '')}</div>
+    ${roles ? `<div style="overflow-x:auto;margin-top:6px;"><table class="sec-table"><tr><th>Role</th><th style="text-align:right;">Attempts</th><th style="text-align:right;">Failures</th><th style="text-align:right;">Gate-caused</th><th style="text-align:right;">Success rate</th></tr>${roles}</table></div>` : ''}
+    ${packs ? `<div style="overflow-x:auto;margin-top:6px;"><table class="sec-table"><tr><th>Product</th><th>Pack</th><th>Currency</th><th></th></tr>${packs}</table></div>` : ''}
+    <div class="std-note" style="margin-top:4px;">${escHtml(tp.note || '')}</div>
+  </div>`;
+}
+
+// ---- alerts ---------------------------------------------------------------
+function secLeadAlertsHtml(a) {
+  const items = (a.alerts || []).map(x => {
+    const sev = x.severity === 'block' ? 'var(--red, #d9534f)' : 'var(--text2)';
+    return `<div class="std-row" style="border-left:3px solid ${sev};padding-left:8px;margin-bottom:6px;${x.acknowledged ? 'opacity:.6;' : ''}">
+      <div style="display:flex;gap:6px;align-items:baseline;flex-wrap:wrap;">
+        <b style="font-size:11.5px;">${escHtml(x.title)}</b>
+        <span class="std-note">${escHtml(x.category || '')}${x.age_days === null || x.age_days === undefined ? '' : ` · ${x.age_days}d`}</span>
+        <span style="flex:1"></span>
+        <button class="btn btn-ghost btn-sm" onclick="secLeadAck('${escHtml(x.id)}','acknowledged')">Ack</button>
+        <button class="btn btn-ghost btn-sm" onclick="secLeadAck('${escHtml(x.id)}','snoozed')" title="Hide for 7 days; it returns if the finding is still true">Snooze 7d</button>
+        ${x.link ? `<button class="btn btn-ghost btn-sm" onclick="secLeadOpenJson('${escHtml(x.link)}')">Open</button>` : ''}
+      </div>
+      <div style="font-size:11.5px;color:var(--text2);">${escHtml(x.detail || '')}</div>
+      ${x.action ? `<div class="std-note">Next: ${escHtml(x.action)}</div>` : ''}
+      ${x.acknowledged ? `<div class="std-note">Acknowledged by ${escHtml(String(x.acknowledged_by || ''))}${x.acknowledged_at ? ' · ' + escHtml(String(x.acknowledged_at).slice(0, 16)) : ''}${x.acknowledgement_stale ? ' · finding has changed since' : ''}</div>` : ''}
+    </div>`;
+  }).join('');
+  return `<div class="sec-card" style="margin-bottom:8px;">
+    <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;">
+      <h3 style="font-size:13px;margin:0;"><i class="fas fa-bell" style="color:var(--teal);"></i> Alerts (${(a.alerts || []).length})</h3>
+      <span class="std-note"><b style="${a.open_blocking ? 'color:var(--red, #d9534f);' : ''}">${a.open_blocking || 0}</b> open blocking · ${a.warnings || 0} warning(s) · ${a.acknowledged || 0} acknowledged</span>
+      <span style="flex:1"></span>
+      <label class="std-note" style="display:flex;gap:4px;align-items:center;"><input type="checkbox" id="secLeadShowAck2" ${document.getElementById('secLeadShowAck') && document.getElementById('secLeadShowAck').checked ? 'checked' : ''} onchange="secLeadSyncAck(this.checked)"> show acknowledged</label>
+    </div>
+    <div style="margin-top:6px;">${items || '<span class="std-note">Nothing needs a person right now. That is a finding, not an absence of checks.</span>'}</div>
+  </div>`;
+}
+
+function secLeadSyncAck(on) {
+  const a = document.getElementById('secLeadShowAck');
+  if (a) a.checked = on;
+  const b = document.getElementById('secLeadShowAck2');
+  if (b) b.checked = on;
+  secLeadLoad(true);
+}
+
+// ---- exceptions & change log ---------------------------------------------
+function secLeadExceptionsHtml(x) {
+  const rows = (x.exceptions || []).map(e =>
+    `<tr${e.expired ? ' style="color:var(--red, #d9534f);"' : ''}>
+      <td><b>${escHtml(e.product || '')}</b><div class="std-note">${escHtml(String(e.tier || '').replace(/_/g, ' '))} · residual ${secLeadNum(e.residual_pct, '%')}</div></td>
+      <td>${escHtml(e.actor || '—')}<div class="std-note">${escHtml(String(e.granted_at || '').slice(0, 10))}</div></td>
+      <td>${escHtml(e.rationale || '—')}</td>
+      <td>${escHtml(String(e.expires_at || 'never').slice(0, 10))}
+        ${e.expired ? '<div style="color:var(--red, #d9534f);font-weight:700;">EXPIRED — re-evaluation due</div>'
+          : `<div class="std-note">${e.days_remaining}d remaining</div>`}</td>
+      <td>${e.expired ? `<button class="btn btn-ghost btn-sm" onclick="secLeadOpenAssessment(${e.assessment_id})">Re-evaluate</button>` : '<span class="std-note">—</span>'}</td>
+    </tr>`).join('');
+  return `<div class="sec-card" style="margin-bottom:8px;">
+    <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;">
+      <h3 style="font-size:13px;margin:0;"><i class="fas fa-file-signature" style="color:var(--teal);"></i> Exception register (${x.count || 0})</h3>
+      <span class="std-note">${escHtml(x.note || '')}</span>
+    </div>
+    ${rows ? `<div style="overflow-x:auto;margin-top:6px;"><table class="sec-table"><tr><th>Product</th><th>Granted by</th><th>Rationale</th><th>Expiry</th><th></th></tr>${rows}</table></div>`
+      : '<div class="std-note" style="margin-top:6px;">No time-bounded exceptions in force.</div>'}
+  </div>`;
+}
+
+function secLeadChangeLogHtml(c) {
+  const rows = (c.superseded || []).slice(0, 25).map(s =>
+    `<tr><td class="std-note">${escHtml(String(s.created_at || '').slice(0, 10))}</td>
+      <td>${escHtml(s.product || '')}<div class="std-note">${escHtml(s.path || '')}${s.investigation_title ? ' · ' + escHtml(s.investigation_title) : ''}</div></td>
+      <td style="text-align:right;">${secLeadNum(s.verified_residual_pct, '%')}</td>
+      <td style="text-align:right;">${secLeadNum(s.declared_residual_pct, '%')}</td>
+      <td style="text-align:right;">${secLeadNum(s.evidence_confidence_pct, '%')}</td>
+      <td class="std-note">${escHtml(s.threat_pack_version || 'unversioned')}</td>
+      <td><button class="btn btn-ghost btn-sm" onclick="secLeadOpenAssessment(${s.assessment_id})">open</button></td></tr>`).join('');
+  const cur = (c.current || []).length;
+  return `<div class="sec-card" style="margin-bottom:8px;">
+    <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;">
+      <h3 style="font-size:13px;margin:0;"><i class="fas fa-clock-rotate-left" style="color:var(--teal);"></i> Change log</h3>
+      <span class="std-note">${cur} current · ${c.superseded_count || 0} superseded. ${escHtml(c.note || '')}</span>
+    </div>
+    ${rows ? `<div style="overflow-x:auto;margin-top:6px;"><table class="sec-table"><tr><th>Scored</th><th>Product</th><th style="text-align:right;">Verified</th><th style="text-align:right;">Declared</th><th style="text-align:right;">Confidence</th><th>Pack</th><th></th></tr>${rows}</table></div>`
+      : '<div class="std-note" style="margin-top:6px;">No superseded assessments — nothing has been re-scored over yet.</div>'}
+  </div>`;
+}
+
+// ---- actions --------------------------------------------------------------
+const SEC_LEAD_LABELS = {
+  accept: 'Accept the verified residual',
+  accept_with_mandatory_guardrails: 'Accept with mandatory guardrails',
+  reject: 'Reject until the architecture gate closes',
+  exception: 'Time-bounded exception',
+};
+
+// Every decision asks for an actor and a rationale before it is sent, because
+// the endpoint refuses an unattributable decision anyway -- better to be asked
+// here than to eat a 422 and lose the typed rationale.
+function secLeadDecide(assessmentId, decision) {
+  const q = secLeadCache && secLeadCache.decision_queue;
+  const row = q && (q.items || []).find(r => r.assessment_id === assessmentId);
+  const label = SEC_LEAD_LABELS[decision] || decision;
+  const who = (prompt(`Recording: "${label}"\n\nWho is deciding? This is stored with the decision and written to the ledger as the accountable human.`, '') || '').trim();
+  if (!who) return;
+  const suggested = row && row.recommended_decision === decision
+    ? 'Agreed with the computed recommendation. ' : '';
+  let rationale = (prompt(`Rationale — one or two lines, kept with the decision in the ledger.\n\n${suggested}Why is this the right call?`, '') || '').trim();
+  let expires = null;
+  if (decision === 'exception') {
+    rationale = (prompt('An exception REQUIRES a written rationale — it is what an auditor reads first.', '') || '').trim();
+    if (!rationale) { alert('An exception requires a written rationale.'); return; }
+    const days = (prompt('Expires in how many days? An exception without an expiry is a permanent override wearing a temporary label.\n\n(90 is the default.)', '90') || '').trim();
+    const n = parseInt(days, 10);
+    if (!Number.isFinite(n) || n <= 0) { alert('Enter a positive number of days.'); return; }
+    expires = n;
+  }
+  secLeadSubmitDecision(assessmentId, decision, who, rationale, expires);
+}
+
+async function secLeadSubmitDecision(assessmentId, decision, actor, rationale, expiresDays) {
+  const payload = { decision, actor, rationale };
+  if (expiresDays) payload.expires_days = expiresDays;
+  try {
+    const r = await fetch(`${API}/security/assessments/${assessmentId}/decision`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
+    secLeadNote = d.overrode_derivation
+      ? `Recorded ${d.decision} on assessment ${assessmentId}, overriding the computed ${d.decision_derived}. Ledger event ${String(d.ledger_event || '').slice(0, 12)}.`
+      : `Recorded ${d.decision} on assessment ${assessmentId}. Ledger event ${String(d.ledger_event || '').slice(0, 12)}.`;
+    secLeadOffset = 0;
+    await secLeadLoad(true);
+  } catch (e) {
+    secLeadNote = `Could not record the decision: ${e.message || e}`;
+    secLeadRender();
+  }
+}
+
+async function secLeadAck(alertId, status) {
+  let note = '';
+  if (status === 'snoozed') note = (prompt('Snooze for 7 days. It comes back if the finding is still true.\n\nNote (optional):', '') || '').trim();
+  try {
+    const r = await fetch(`${API}/leadership/alerts/ack`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ alert_id: alertId, status, note }),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
+    await secLeadLoad(true);
+  } catch (e) {
+    secLeadNote = `Could not record the acknowledgement: ${e.message || e}`;
+    secLeadRender();
+  }
+}
+
+// Drill-downs. The queue already knows which link answers which question, so
+// these open the endpoint the backend picked rather than guessing a route here.
+function secLeadOpenAssessment(id) {
+  switchApp('security');
+  secSwitchPaneTab('results');
+  if (typeof loadSecurityById === 'function') loadSecurityById(id);
+  else window.open(`${API}/security/assessments/${id}`, '_blank');
+}
+
+function secLeadOpenJson(path) {
+  if (!path) return;
+  window.open(path.startsWith('/api') ? path : `${API}${path}`, '_blank');
+}
+
+function secLeadExport() {
+  const sc = secLeadScope();
+  const p = new URLSearchParams();
+  const inv = secDashInv();
+  if (inv) p.set('investigation_id', inv);
+  p.set('window_days', sc.window_days);
+  p.set('persona', secLeadPersona);
+  if (sc.initiative_id) p.set('initiative_id', sc.initiative_id);
+  if (sc.layer) p.set('layer', sc.layer);
+  window.open(`${API}/leadership/board.md?${p.toString()}`, '_blank');
+}
+
+// Live refresh. The board is a position that changes while you are reading it,
+// so an interval keeps the alerts honest; it pauses on hidden tabs so a
+// backgrounded dashboard is not polling the server nobody is looking at.
+function secLeadPollStart() {
+  secLeadPollStop();
+  secLeadPoll = setInterval(() => {
+    if (document.hidden || secLeadLayer !== 'board') return;
+    secLeadLoad(true);
+  }, 60000);
+  const el = document.getElementById('secLeadLive');
+  if (el) el.textContent = 'auto-refreshing every 60s';
+}
+
+function secLeadPollStop() {
+  if (secLeadPoll) { clearInterval(secLeadPoll); secLeadPoll = null; }
+}
+
+// ---- small helpers --------------------------------------------------------
+function secLeadNum(v, suffix) {
+  if (v === null || v === undefined) return '<span class="std-note">—</span>';
+  const n = Number(v);
+  if (!Number.isFinite(n)) return '<span class="std-note">—</span>';
+  const txt = Number.isInteger(n) ? String(n) : n.toFixed(1);
+  return (suffix ? `${txt}${suffix}` : txt);
+}
+
+// A sparkline is a hint, not a number: the delta beside it carries the value, so
+// nothing here can be quoted as a figure. null buckets stay blank.
+function secLeadSpark(series) {
+  if (!series || !series.length) return '<span class="std-note">—</span> ';
+  const vals = series.filter(v => v !== null && v !== undefined);
+  if (!vals.length) return '<span class="std-note">—</span> ';
+  const max = Math.max.apply(null, vals), min = Math.min.apply(null, vals);
+  const span = (max - min) || 1;
+  const bars = series.map(v => {
+    if (v === null || v === undefined) return '<span style="opacity:.2;">▁</span>';
+    const h = 3 + Math.round(((v - min) / span) * 7);
+    return `<span title="${v}">${'▁▂▃▄▅▆▇█'[h]}</span>`;
+  }).join('');
+  return `<span style="font-family:monospace;letter-spacing:-1px;">${bars}</span> `;
 }
 
 </script>

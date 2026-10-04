@@ -2773,7 +2773,6 @@ def leadership_acknowledge_alert(data: AlertAckRequest, request: Request,
     finding that is still true.
     """
     from . import leadership as _ld
-    from . import assurance_ledger_api as ledger_api
     actor = (data.actor or "").strip() or ledger_api.request_actor_or_empty(request)
     try:
         return _ld.acknowledge_alert(

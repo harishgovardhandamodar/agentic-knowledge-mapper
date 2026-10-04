@@ -1308,14 +1308,21 @@ def alerts(db, investigation_id: Optional[int] = None, *,
         })
     order = {"block": 0, "warn": 1, "info": 2}
     out.sort(key=lambda a: (order.get(a["severity"], 9), str(a["id"])))
-    out = _apply_alert_state(db, out, include_acknowledged=include_acknowledged)
-    return {"alerts": out,
-            "blocking": sum(1 for a in out if a["severity"] == "block"),
-            "warnings": sum(1 for a in out if a["severity"] == "warn"),
-            "acknowledged": sum(1 for a in out if a.get("acknowledged")),
-            "open_blocking": sum(1 for a in out
+    # Annotate the full set first, then decide what to show. Counting the
+    # responses off the full set matters: filtering acknowledged alerts out of the
+    # panel and then reporting "0 acknowledged" would read as "nobody has
+    # responded" when the truth is "everybody already has".
+    annotated = _apply_alert_state(db, out, include_acknowledged=True)
+    responded = sum(1 for a in annotated if a.get("suppressed"))
+    shown = annotated if include_acknowledged else [
+        a for a in annotated if not a.get("suppressed")]
+    return {"alerts": shown,
+            "blocking": sum(1 for a in shown if a["severity"] == "block"),
+            "warnings": sum(1 for a in shown if a["severity"] == "warn"),
+            "acknowledged": responded,
+            "open_blocking": sum(1 for a in shown
                                  if a["severity"] == "block"
-                                 and not a.get("acknowledged")),
+                                 and not a.get("suppressed")),
             "sla_days": sla_days,
             "generated": _now().isoformat()}
 
@@ -1336,6 +1343,19 @@ def _alert_finding_hash(alert: dict[str, Any]) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:32]
 
 
+def _aware(ts: Optional[datetime]) -> Optional[datetime]:
+    """Coerce a stored timestamp to UTC-aware.
+
+    SQLite hands back naive datetimes and Postgres hands back aware ones, so a
+    direct comparison against ``_now()`` works on one backend and raises
+    ``TypeError`` on the other. Normalising at the boundary means the snooze and
+    expiry comparisons are written once and hold on both.
+    """
+    if ts is None:
+        return None
+    return ts if ts.tzinfo is not None else ts.replace(tzinfo=timezone.utc)
+
+
 def _apply_alert_state(db, alerts_in: list[dict[str, Any]], *,
                        include_acknowledged: bool = False
                        ) -> list[dict[str, Any]]:
@@ -1354,20 +1374,28 @@ def _apply_alert_state(db, alerts_in: list[dict[str, Any]], *,
         row = stored.get(str(a["id"]))
         a = {**a, "finding_hash": _alert_finding_hash(a)}
         if row is None:
-            a.update({"acknowledged": False, "acknowledged_by": None,
+            a.update({"acknowledged": False, "suppressed": False,
+                      "acknowledged_by": None,
                       "acknowledged_at": None, "acknowledged_note": None,
                       "snoozed_until": None, "acknowledgement_stale": False})
         else:
-            snoozed = bool(row.snoozed_until and row.snoozed_until > now)
+            snoozed_until = _aware(row.snoozed_until)
+            snoozed = bool(snoozed_until and snoozed_until > now)
+            # ``acknowledged`` means "a named person responded"; ``suppressed``
+            # is what the filter acts on. A live snooze is a response, so it
+            # suppresses too -- otherwise "snooze 7 days" would be a button that
+            # changes nothing at all.
             acked = (row.status in ("acknowledged", "resolved") and not snoozed)
+            suppress = acked or snoozed
             a.update({
                 "acknowledged": acked,
+                "suppressed": suppress,
                 "acknowledged_by": row.acknowledged_by,
                 "acknowledged_at": (row.acknowledged_at.isoformat()
                                     if row.acknowledged_at else None),
                 "acknowledged_note": row.note,
-                "snoozed_until": (row.snoozed_until.isoformat()
-                                  if row.snoozed_until else None),
+                "snoozed_until": (snoozed_until.isoformat()
+                                  if snoozed_until else None),
                 "snoozed": snoozed,
                 "acknowledgement_stale": bool(
                     row.finding_hash and row.finding_hash != a["finding_hash"]),
@@ -1376,7 +1404,8 @@ def _apply_alert_state(db, alerts_in: list[dict[str, Any]], *,
             # at a different finding.
             if a["acknowledgement_stale"]:
                 a["acknowledged"] = False
-        if a.get("acknowledged") and not include_acknowledged:
+                a["suppressed"] = False
+        if a.get("suppressed") and not include_acknowledged:
             continue
         out.append(a)
     return out
