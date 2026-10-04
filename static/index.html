@@ -2936,7 +2936,7 @@ function renderGraph() {
     .map(e => ({
     from: e.from, to: e.to, label: e.label, title: e.title,
     color: { color: isLight ? '#0969da44' : '#58a6ff66', highlight: '#58a6ff', hover: '#58a6ff' },
-    font: { size: 9, strokeWidth: 0 },
+    font: { size: 9, color: isLight ? '#1f2328' : '#d1d5db', strokeWidth: 0 },
     width: 2, smooth: { type: 'continuous' },
     arrows: { to: { enabled: true, scaleFactor: 0.6 } },
   })));
@@ -9910,7 +9910,7 @@ function secLeadRenderGraph(filterIds) {
     .map(e => ({
       from: e.from, to: e.to, label: e.label, title: e.title,
       color: { color: isLight ? '#0969da44' : '#58a6ff55', highlight: '#58a6ff', hover: '#58a6ff' },
-      font: { size: 9, strokeWidth: 0 },
+      font: { size: 9, color: isLight ? '#1f2328' : '#d1d5db', strokeWidth: 0 },
       width: e.label === 'collected_in' ? 1 : 2,
       label: secLeadGraphEdgeLabels ? (e.label || '') : '',
       smooth: { type: 'continuous' },
