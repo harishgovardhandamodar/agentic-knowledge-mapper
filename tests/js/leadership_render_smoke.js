@@ -98,7 +98,27 @@ if (start < 0) {
   console.error('FAIL: leadership slice not found in the app script');
   process.exit(1);
 }
-const slice = block.slice(start);
+
+// The coverage card folds its registers with the shared foldSection helper,
+// which lives earlier in the script than the leadership slice. Pull the real
+// helper (and the state it reads) in so the slice does not dodge the actual
+// code path.
+function extractFold(name) {
+  const re = new RegExp('\\b(async\\s+)?function ' + name + '\\s*\\([^)]*\\)\\s*\\{');
+  const m = re.exec(block);
+  if (!m) throw new Error('fold helper ' + name + ' not found');
+  let i = block.indexOf('{', m.index);
+  let depth = 0;
+  for (; i < block.length; i++) {
+    if (block[i] === '{') depth++;
+    else if (block[i] === '}') { depth--; if (depth === 0) break; }
+  }
+  return block.slice(m.index, i + 1);
+}
+const foldSrc = 'const FOLD_STORE = "akm.folds";\nlet _foldCache = null;\n'
+  + ['_foldAll', '_foldSet', 'foldIsOpen', 'foldSection', 'foldToggle']
+      .map(extractFold).join('\n') + '\n';
+const slice = foldSrc + block.slice(start);
 
 // Every onclick="fn(...)" in the slice must resolve to a function we defined.
 // A handler that does not exist throws only when a reader clicks it.

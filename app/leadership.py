@@ -1699,12 +1699,41 @@ def coverage(db, investigation_id: Optional[int] = None, *,
     falsifier_pct = (round(100.0 * covered_falsifiers / open_falsifiers)
                      if open_falsifiers else None)
 
+    # The registers behind the aggregates: every investigation and every
+    # experiment plan in the scope, so a board reader can see *which* rows are
+    # covered rather than only how many. This is what makes the coverage view
+    # actionable -- "33 unassessed" is a mood until it is a list of names.
+    assessed_ids = {a["investigation_id"] for a in latest}
+    inv_rows = (db.query(Investigation).order_by(Investigation.id).all()
+                if investigation_id is None else
+                db.query(Investigation).filter(
+                    Investigation.id == int(investigation_id)).all())
+    titles = {r.id: (r.title or "Untitled") for r in inv_rows}
+    inv_detail = [
+        {"investigation_id": r.id, "title": titles.get(r.id, "Untitled"),
+         "assessed": r.id in assessed_ids,
+         "assessments": sum(1 for a in latest
+                            if a["investigation_id"] == r.id)}
+        for r in inv_rows
+    ]
+    exp_detail = [
+        {"assessment_id": rec.id,
+         "investigation_id": rec.investigation_id,
+         "investigation": titles.get(rec.investigation_id, "Untitled"),
+         "product": (rec.product_name or rec.product_family or ""),
+         **er}
+        for rec, er in zip(model_recs, exp_rows)
+    ]
+    exp_detail.sort(key=lambda e: (str(e["investigation"]).lower(),
+                                   str(e["product"]).lower()))
+
     return {
         "investigations": {
             "total": total_inv,
             "assessed": assessed_inv,
             "unassessed": unassessed,
             "coverage_pct": inv_pct,
+            "items": inv_detail,
         },
         "experiments": {
             "model_assessments": len(model_recs),
@@ -1715,6 +1744,7 @@ def coverage(db, investigation_id: Optional[int] = None, *,
             "open_falsifiers": open_falsifiers,
             "covered_falsifiers": covered_falsifiers,
             "falsifier_coverage_pct": falsifier_pct,
+            "items": exp_detail,
         },
         "note": ("Investigation coverage counts investigations with at least "
                  "one assessment in this scope; experiment coverage is "
@@ -2165,6 +2195,29 @@ def export_markdown(db, investigation_id: Optional[int] = None, *,
     L.append("")
     L.append(f"> {cov['note']}")
     L.append("")
+    # The registers only make sense globally: a board scoped to one
+    # investigation already shows that investigation, so repeating a one-row
+    # table adds noise to every single-investigation snapshot.
+    if b["scope"].get("investigation_id") is None:
+        L.append("All investigations in scope:")
+        L.append("")
+        L.append("| Investigation | Assessed | Assessments |")
+        L.append("|---|---:|---:|")
+        for it in inv["items"]:
+            L.append(f"| {it['title']} | {'yes' if it['assessed'] else '**no**'} "
+                     f"| {it['assessments']} |")
+        L.append("")
+        L.append("Experiment plans in scope:")
+        L.append("")
+        L.append("| Investigation | Model | Planned | Falsifiers covered/open |")
+        L.append("|---|---|---:|---:|")
+        for exi in exp["items"]:
+            L.append(f"| {exi['investigation']} | {exi['product'] or '—'} "
+                     f"| {exi['planned']} | "
+                     f"{exi['covered_falsifiers']}/{exi['open_falsifiers']}"
+                     + (" (plan unbuildable)" if exi["planner_unavailable"] else "")
+                     + " |")
+        L.append("")
 
     L.append(f"## Decision queue ({q['count']} item(s))")
     L.append("")

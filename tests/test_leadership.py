@@ -1375,3 +1375,66 @@ class TestCoverage(LeadershipTestBase):
         md = LD.export_markdown(self.db, self.inv.id)
         self.assertIn("## Coverage", md)
         self.assertIn("1/1", md)
+
+
+class TestCoverageRegister(LeadershipTestBase):
+    """The per-row registers behind the coverage aggregates: *which* rows are
+    covered, so a global board reader gets names, not just counts."""
+
+    def test_global_coverage_lists_every_investigation(self):
+        assessed = Investigation(title="Assessed one")
+        unassessed = Investigation(title="Never assessed")
+        self.db.add_all([assessed, unassessed])
+        self.db.commit()
+        _row(self.db, assessed.id, name="a", tier="internal", run_id=1,
+             verified=40.0, confidence=0.5)
+        _row(self.db, self.inv.id, name="b", tier="internal", run_id=2,
+             verified=35.0, confidence=0.5)
+        c = LD.coverage(self.db)
+        items = c["investigations"]["items"]
+        self.assertEqual(len(items), 3)
+        by_title = {i["title"]: i for i in items}
+        self.assertTrue(by_title["Assessed one"]["assessed"])
+        self.assertTrue(by_title["ACME Support Copilot"]["assessed"])
+        self.assertFalse(by_title["Never assessed"]["assessed"])
+        self.assertEqual(c["investigations"]["unassessed"], 1)
+
+    def test_global_coverage_lists_every_experiment_plan(self):
+        _model_row(self.db, self.inv.id, name="m1", run_id=1,
+                   experiments=[{"id": "EX-01", "title": "x",
+                                 "method_type": "canary_probe",
+                                 "targets": {"hypothesis_ids": ["H01"]}}],
+                   hypotheses=[{"hypothesis_id": "H01", "status": "untested"}])
+        other = Investigation(title="Second")
+        self.db.add(other)
+        self.db.commit()
+        _model_row(self.db, other.id, name="m2", run_id=2,
+                   experiments=[{"id": "EX-02", "title": "y",
+                                 "method_type": "mi_probe",
+                                 "targets": {"hypothesis_ids": ["H09"]}}],
+                   hypotheses=[{"hypothesis_id": "H09", "status": "contested"}])
+        c = LD.coverage(self.db)
+        items = c["experiments"]["items"]
+        self.assertEqual(len(items), 2)
+        got = {(i["investigation"], i["product"]) for i in items}
+        self.assertIn(("ACME Support Copilot", "m1"), got)
+        self.assertIn(("Second", "m2"), got)
+        self.assertEqual(c["experiments"]["planned"], 2)
+
+    def test_markdown_export_carries_the_registers_when_global(self):
+        _model_row(self.db, self.inv.id, name="m1", run_id=1,
+                   experiments=[{"id": "EX-01", "title": "x",
+                                 "method_type": "canary_probe",
+                                 "targets": {"hypothesis_ids": ["H01"]}}],
+                   hypotheses=[{"hypothesis_id": "H01", "status": "untested"}])
+        md = LD.export_markdown(self.db, window_days=90)
+        self.assertIn("All investigations in scope", md)
+        self.assertIn("Experiment plans in scope", md)
+        self.assertIn("ACME Support Copilot", md)
+
+    def test_scoped_export_does_not_repeat_a_one_row_register(self):
+        _row(self.db, self.inv.id, name="a", tier="internal", run_id=1,
+             verified=40.0, confidence=0.5)
+        md = LD.export_markdown(self.db, self.inv.id)
+        self.assertNotIn("All investigations in scope", md)
+        self.assertNotIn("Experiment plans in scope", md)

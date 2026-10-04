@@ -9462,7 +9462,21 @@ function secDashBrief(fmt) {
 // those is not a decision item -- it is a number.
 
 let secLeadCache = null, secLeadLayer = 'board', secLeadPersona = 'executive',
-    secLeadOffset = 0, secLeadPoll = null, secLeadErr = '', secLeadNote = '';
+    secLeadOffset = 0, secLeadPoll = null, secLeadErr = '', secLeadNote = '',
+    secLeadGlobal = false;
+
+// Global scope flips the board from one investigation to the whole portfolio.
+// The backend has always accepted investigation_id=None; the UI refused to
+// send it so no-one could look at a portfolio position they had not asked
+// about. Coverage is the one section that is *about* the whole portfolio --
+// "33 unassessed" is a list of names, not a mood -- so the toggle is on the
+// board header and every section reads the same global scope when it is on.
+function secLeadSetGlobal(v) {
+  secLeadGlobal = !!v;
+  secLeadOffset = 0;
+  secLeadCache = null;
+  secLeadLoad(true);
+}
 
 function secLeadRefresh() {
   return secLeadLayer === 'register' ? secLoadDashboard(true) : secLeadLoad(true);
@@ -9512,7 +9526,7 @@ function secLeadScope() {
 
 function secLeadQuery(sc) {
   const p = new URLSearchParams();
-  const inv = secDashInv();
+  const inv = secLeadGlobal ? null : secDashInv();
   if (inv) p.set('investigation_id', inv);
   p.set('window_days', sc.window_days);
   p.set('persona', secLeadPersona);
@@ -9534,8 +9548,8 @@ async function secLeadLoad(force) {
   const body = document.getElementById('secLeadBody');
   if (!body) return;
   const inv = secDashInv();
-  if (!inv) {
-    body.innerHTML = '<div class="std-err">Open an investigation first — the board is scoped to one investigation, never global.</div>';
+  if (!inv && !secLeadGlobal) {
+    body.innerHTML = '<div class="std-err">Open an investigation first — the board is scoped to one investigation unless Global is switched on.</div>';
     return;
   }
   if (!force && secLeadCache) { secLeadRender(); return; }
@@ -9648,6 +9662,7 @@ function secLeadHeaderHtml(b) {
         <option value="7">7d</option><option value="14" selected>14d</option><option value="30">30d</option><option value="90">90d</option>
       </select>
       <label class="std-note" style="display:flex;gap:4px;align-items:center;" title="Also shows alerts that were snoozed, with their end date."><input type="checkbox" id="secLeadShowAck" onchange="secLeadLoad(true)"> show acknowledged &amp; snoozed</label>
+      <label class="std-note" style="display:flex;gap:4px;align-items:center;font-weight:600;" title="Show the whole portfolio in one view — every investigation and every experiment plan, not just the investigation currently open. The backend has always supported portfolio-wide reads; this exposes it."><input type="checkbox" id="secLeadGlobal" onchange="secLeadSetGlobal(this.checked)"> Global · all investigations</label>
       <span class="std-note" id="secLeadLive" style="margin-left:auto;"></span>
     </div>
     <div class="lb-kpis">${secLeadKpis(b)}</div>
@@ -9681,6 +9696,26 @@ function secLeadCoverageHtml(c) {
     : (inv.total ? `<span class="std-note">every investigation in scope has an assessment.</span>` : '');
   const planFlag = (ex.planner_unavailable || 0)
     ? `<span class="std-note" style="color:var(--orange, #f0ad4e);">${ex.planner_unavailable} experiment plan(s) could not be built.</span>` : '';
+  // The registers behind the aggregates: *which* investigations and *which*
+  // experiment plans, so "33 unassessed" is a list of names rather than a
+  // mood. Folded by default because a 100-row table is a lookup, not a read.
+  const invRows = (inv.items || []).map(i =>
+    `<tr><td>${escHtml(i.title || '')}${i.assessed ? '' : ' <span class="drift-pill">unassessed</span>'}</td>
+     <td style="text-align:center;">${i.assessed ? '<i class="fas fa-check" style="color:var(--green, #28a745);"></i>' : '<i class="fas fa-times" style="color:var(--red, #d9534f);"></i>'}</td>
+     <td style="text-align:right;">${i.assessments || 0}</td></tr>`).join('');
+  const expRows = (ex.items || []).map(e =>
+    `<tr><td>${escHtml(e.investigation || '')}</td>
+     <td>${escHtml(e.product || '—')}</td>
+     <td style="text-align:right;">${e.planned || 0}${e.planner_unavailable ? ' <span class="drift-pill" title="The plan could not be built">unbuildable</span>' : ''}</td>
+     <td style="text-align:right;">${e.covered_falsifiers || 0}/${e.open_falsifiers || 0}</td></tr>`).join('');
+  const regKey = secLeadGlobal ? 'all' : (inv.items && inv.items[0] ? inv.items[0].investigation_id : 'all');
+  const registers = `
+    ${foldSection(`cov:inv:${regKey}`, 'All investigations',
+      `<table class="audit-tbl"><thead><tr><th>Investigation</th><th>Assessed</th><th>Assessments</th></tr></thead><tbody>${invRows || '<tr><td colspan="3">no investigations in scope</td></tr>'}</tbody></table>`,
+      { open: false, count: (inv.items || []).length, unit: 'investigations', icon: 'fa-folder-tree' })}
+    ${foldSection(`cov:exp:${regKey}`, 'Experiment plans',
+      `<table class="audit-tbl"><thead><tr><th>Investigation</th><th>Model</th><th>Planned</th><th>Falsifiers covered/open</th></tr></thead><tbody>${expRows || '<tr><td colspan="4">no model assessments in scope</td></tr>'}</tbody></table>`,
+      { open: false, count: (ex.items || []).length, unit: 'plans', icon: 'fa-vial' })}`;
   return `<div class="sec-card" style="margin-bottom:8px;">
     <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;">
       <h3 style="font-size:13px;margin:0;"><i class="fas fa-expand" style="color:var(--teal);"></i> Coverage of this scope</h3>
@@ -9694,6 +9729,7 @@ function secLeadCoverageHtml(c) {
       <span>Experiments planned: <b>${ex.planned || 0}</b> (plan-only, never executed) · ${ex.with_plan || 0} assessment${(ex.with_plan || 0) === 1 ? '' : 's'} carry a plan</span>
       ${flagged} ${planFlag}
     </div>
+    ${registers}
   </div>`;
 }
 
