@@ -2588,84 +2588,237 @@ def assurance_re_score(assessment_id: int,
 
 # ------------------------------------- leadership dashboard endpoints -----
 
+def _csv_states(raw: Optional[str]) -> Optional[list[str]]:
+    """Parse a comma-separated query list, keeping ``None`` meaning 'default'.
+
+    An empty string is a caller asking for an empty set rather than the
+    default, so it is preserved as an empty list instead of collapsing to None.
+    """
+    if raw is None:
+        return None
+    return [s.strip() for s in str(raw).split(",") if s.strip()]
+
+
 @app.get("/api/leadership/board")
 def leadership_board(investigation_id: Optional[int] = None,
                      window_days: int = 90, persona: str = "executive",
+                     initiative_id: Optional[int] = None,
+                     layer: Optional[str] = None,
+                     exposure: Optional[str] = None,
+                     tier: Optional[str] = None,
+                     states: Optional[str] = None,
+                     sort: str = "residual",
+                     limit: int = 25, offset: int = 0,
+                     sla_days: int = 14,
+                     include_acknowledged: bool = False,
                      db: Session = Depends(get_db)):
     """The leadership decision view: risk position, decision queue, assurance
-    health, exposure lens, system integrity and alerts in one payload."""
+    health, exposure lens, system integrity, alerts, exceptions and the change
+    log in one payload, layered by persona lens.
+
+    ``states`` is a comma-separated list, so the queue can be reviewed after the
+    fact (``accepted``) instead of only ever showing what is still open.
+    """
     from . import leadership as _ld
-    return _ld.board(db, investigation_id, window_days=window_days,
-                     persona=persona)
+    try:
+        return _ld.board(db, investigation_id, window_days=window_days,
+                         persona=persona, initiative_id=initiative_id,
+                         layer=layer, exposure=exposure, tier=tier,
+                         queue_states=_csv_states(states), sort=sort,
+                         limit=limit, offset=offset, sla_days=sla_days,
+                         include_acknowledged=include_acknowledged)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+
+
+@app.get("/api/leadership/board.md")
+def leadership_board_markdown(investigation_id: Optional[int] = None,
+                              window_days: int = 90, persona: str = "executive",
+                              initiative_id: Optional[int] = None,
+                              layer: Optional[str] = None,
+                              db: Session = Depends(get_db)):
+    """The board as one Markdown snapshot, for a regulator or an archive."""
+    from fastapi.responses import PlainTextResponse
+    from . import leadership as _ld
+    try:
+        md = _ld.export_markdown(db, investigation_id, window_days=window_days,
+                                 persona=persona, initiative_id=initiative_id,
+                                 layer=layer)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    return PlainTextResponse(md, media_type="text/markdown; charset=utf-8")
+
+
+@app.get("/api/leadership/personas")
+def leadership_personas(db: Session = Depends(get_db)):
+    """The persona lenses and what each one emphasises."""
+    from . import leadership as _ld
+    return {"personas": _ld.persona_names()}
 
 
 @app.get("/api/leadership/risk-position")
 def leadership_risk_position(investigation_id: Optional[int] = None,
                              window_days: int = 90,
+                             initiative_id: Optional[int] = None,
+                             layer: Optional[str] = None,
+                             exposure: Optional[str] = None,
                              db: Session = Depends(get_db)):
     """Verified residual by data tier, each with its evidence confidence."""
     from . import leadership as _ld
-    return _ld.risk_position(db, investigation_id, window_days=window_days)
+    try:
+        return _ld.risk_position(db, investigation_id, window_days=window_days,
+                                 initiative_id=initiative_id, layer=layer,
+                                 exposure=exposure)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
 
 
 @app.get("/api/leadership/decision-queue")
 def leadership_decision_queue(investigation_id: Optional[int] = None,
+                              states: Optional[str] = None,
+                              tier: Optional[str] = None,
+                              sort: str = "residual",
+                              limit: int = 25, offset: int = 0,
+                              sla_days: int = 14,
+                              initiative_id: Optional[int] = None,
+                              layer: Optional[str] = None,
                               db: Session = Depends(get_db)):
     """Everything waiting on a decision, and what would change the answer."""
     from . import leadership as _ld
-    return _ld.decision_queue(db, investigation_id)
+    try:
+        return _ld.decision_queue(db, investigation_id,
+                                  states=_csv_states(states), limit=limit,
+                                  offset=offset, tier=tier, sort=sort,
+                                  sla_days=sla_days,
+                                  initiative_id=initiative_id, layer=layer)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
 
 
 @app.get("/api/leadership/assurance-health")
 def leadership_assurance_health(investigation_id: Optional[int] = None,
+                                initiative_id: Optional[int] = None,
+                                layer: Optional[str] = None,
                                 db: Session = Depends(get_db)):
     """Controls verified vs declared, forensics, ledger integrity, stalled runs."""
     from . import leadership as _ld
-    return _ld.assurance_health(db, investigation_id)
+    try:
+        return _ld.assurance_health(db, investigation_id,
+                                   initiative_id=initiative_id, layer=layer)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
 
 
 @app.get("/api/leadership/exposure")
 def leadership_exposure(investigation_id: Optional[int] = None,
-                       db: Session = Depends(get_db)):
+                        initiative_id: Optional[int] = None,
+                        layer: Optional[str] = None,
+                        db: Session = Depends(get_db)):
     """Restricted/confidential assets, privileged users and material items."""
     from . import leadership as _ld
-    return _ld.exposure_lens(db, investigation_id)
+    try:
+        return _ld.exposure_lens(db, investigation_id,
+                                 initiative_id=initiative_id, layer=layer)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
 
 
 @app.get("/api/leadership/system-integrity")
 def leadership_system_integrity(investigation_id: Optional[int] = None,
+                                initiative_id: Optional[int] = None,
+                                layer: Optional[str] = None,
                                 db: Session = Depends(get_db)):
     """Swarm health, threat-pack currency, ledger completeness, time-to-close."""
     from . import leadership as _ld
-    return _ld.system_integrity(db, investigation_id)
+    try:
+        return _ld.system_integrity(db, investigation_id,
+                                    initiative_id=initiative_id, layer=layer)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
 
 
 @app.get("/api/leadership/alerts")
 def leadership_alerts(investigation_id: Optional[int] = None,
+                      initiative_id: Optional[int] = None,
+                      layer: Optional[str] = None,
+                      sla_days: int = 14,
+                      include_acknowledged: bool = False,
                       db: Session = Depends(get_db)):
     """What needs a person now, at block/warn severity."""
     from . import leadership as _ld
-    return _ld.alerts(db, investigation_id)
+    try:
+        return _ld.alerts(db, investigation_id, initiative_id=initiative_id,
+                          layer=layer, sla_days=sla_days,
+                          include_acknowledged=include_acknowledged)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+
+
+class AlertAckRequest(BaseModel):
+    alert_id: str
+    actor: str = ""
+    status: str = "acknowledged"
+    note: str = ""
+    snooze_days: Optional[int] = None
+    finding_hash: Optional[str] = None
+
+
+@app.post("/api/leadership/alerts/ack")
+def leadership_acknowledge_alert(data: AlertAckRequest, request: Request,
+                                 db: Session = Depends(get_db)):
+    """Record that a named person has seen an alert.
+
+    Only the response is stored. The alert itself is recomputed from live state
+    every call, so acknowledging hides a notification and never suppresses a
+    finding that is still true.
+    """
+    from . import leadership as _ld
+    from . import assurance_ledger_api as ledger_api
+    actor = (data.actor or "").strip() or ledger_api.request_actor_or_empty(request)
+    try:
+        return _ld.acknowledge_alert(
+            db, data.alert_id, actor=actor, status=data.status, note=data.note,
+            snooze_days=data.snooze_days, finding_hash=data.finding_hash)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
 
 
 @app.get("/api/leadership/exceptions")
 def leadership_exceptions(investigation_id: Optional[int] = None,
+                          initiative_id: Optional[int] = None,
+                          layer: Optional[str] = None,
                           db: Session = Depends(get_db)):
     """Time-bounded exceptions and their expiry status."""
     from . import leadership as _ld
-    return _ld.exception_register(db, investigation_id)
+    try:
+        return _ld.exception_register(db, investigation_id,
+                                      initiative_id=initiative_id, layer=layer)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+
+
+@app.get("/api/leadership/change-log")
+def leadership_change_log(investigation_id: Optional[int] = None,
+                          initiative_id: Optional[int] = None,
+                          layer: Optional[str] = None,
+                          db: Session = Depends(get_db)):
+    """Current vs superseded assessments, portfolio-wide when unscoped."""
+    from . import leadership as _ld
+    try:
+        return _ld.change_log(db, investigation_id,
+                              initiative_id=initiative_id, layer=layer)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
 
 
 @app.get("/api/leadership/change-log/{investigation_id}")
-def leadership_change_log(investigation_id: int,
-                          db: Session = Depends(get_db)):
-    """Current vs superseded assessments for one investigation."""
-    from . import leadership as _ld
+def leadership_change_log_for_investigation(investigation_id: int,
+                                            db: Session = Depends(get_db)):
+    """Path form of the change log, kept so existing callers keep working."""
     inv = db.query(Investigation).filter(Investigation.id == investigation_id).first()
     if not inv:
         raise HTTPException(404, "Investigation not found")
-    return {"investigation_id": investigation_id,
-            **_ld.change_log(db, investigation_id)}
+    return leadership_change_log(investigation_id=investigation_id, db=db)
 
 
 def _hypothesis_rec(assessment_id: int, db: Session):

@@ -46,7 +46,58 @@ STATE_BLOCKED = "blocked_on_architecture"
 #: permanent override wearing a temporary label.
 DEFAULT_EXCEPTION_DAYS = 90
 
+#: How long a decision may sit in the queue before leadership is told. An SLA is
+#: only useful if something raises its voice when it is missed, so
+#: :func:`alerts` turns an overdue item into a notification rather than leaving
+#: "overdue" as a column nobody reads.
+DECISION_SLA_DAYS = 14
+
 TIER_ORDER = ("restricted_data", "confidential_data", "internal", "public")
+
+#: Layers an assessment row can belong to. A model assessment carries model_json;
+#: everything else assessed a product. Privacy and supply-chain rows are register
+#: risks, not assessments, so they cannot appear in this view at all.
+LAYER_ORDER = ("product", "model")
+
+#: Accepted spellings for a recorded decision, mapped onto the stored constants.
+#: The short forms are what a person says out loud in a review, so the API takes
+#: them and canonicalises once, here -- rather than 422-ing a caller who typed
+#: the word the UI shows.
+DECISION_ALIASES: dict[str, str] = {
+    A.DECISION_ACCEPT: A.DECISION_ACCEPT,
+    "accepted": A.DECISION_ACCEPT,
+    A.DECISION_GUARDRAILS: A.DECISION_GUARDRAILS,
+    "guardrails": A.DECISION_GUARDRAILS,
+    A.DECISION_REJECT: A.DECISION_REJECT,
+    "reject": A.DECISION_REJECT,
+    "rejected": A.DECISION_REJECT,
+    "exception": "exception",
+}
+
+#: Every decision state a queue row can hold, for filters and counts.
+ALL_STATES = (STATE_BLOCKED, STATE_GUARDRAILS, STATE_OPEN,
+              STATE_ACCEPTED, STATE_REJECTED)
+
+#: Sort orders for the decision queue. ``residual`` puts the biggest exposure in
+#: front; ``age`` puts the longest-waiting in front, which is the order a
+#: backlog is actually cleared in; ``confidence`` surfaces the rows whose number
+#: is least trustworthy.
+QUEUE_SORTS = ("residual", "age", "confidence", "product")
+
+
+def canonical_decision(value: str) -> Optional[str]:
+    """Map any accepted spelling of a decision onto its stored constant.
+
+    Returns ``None`` for anything unrecognised so the caller can raise with the
+    full set of accepted spellings rather than silently persisting a value that
+    no reader of the row will recognise.
+    """
+    return DECISION_ALIASES.get(str(value or "").strip().lower())
+
+
+def _layer_of(rec: Any) -> str:
+    """Which layer an assessment row belongs to, from what it actually stores."""
+    return "model" if getattr(rec, "model_json", None) else "product"
 
 
 def _now() -> datetime:
@@ -113,6 +164,8 @@ def _assessment_dict(rec: Any) -> dict[str, Any]:
                        if getattr(rec, "assurance_decision_expires_at", None) else None),
         "created_at": created.isoformat() if created else None,
         "scoring_path": scoring.get("assessment_path") or "standard",
+        "layer": _layer_of(rec),
+        "initiative_id": getattr(rec, "initiative_id", None),
     }
 
 
@@ -180,13 +233,69 @@ def _latest_per_investigation(rows: list[Any]) -> list[dict[str, Any]]:
     return [_assessment_dict(rec) for rec in best.values()]
 
 
-def _assessments(db, investigation_id: Optional[int] = None) -> list[Any]:
+def resolve_scope(investigation_id: Optional[int] = None, *,
+                  initiative_id: Optional[int] = None,
+                  layer: Optional[str] = None,
+                  exposure: Optional[str] = None,
+                  window_days: int = 90) -> dict[str, Any]:
+    """Validate and normalise the board's read scope.
+
+    A filter is never applied silently: an unknown layer or a bad window raises
+    rather than quietly widening or narrowing the population, because a board
+    that silently drops rows is worse than one that refuses.
+    """
+    try:
+        window = max(1, int(window_days))
+    except (TypeError, ValueError):
+        raise ValueError(f"window_days must be a number, got {window_days!r}")
+    if layer and layer not in LAYER_ORDER:
+        raise ValueError(f"unknown layer: {layer} (expected one of {list(LAYER_ORDER)})")
+    if exposure and exposure not in TIER_ORDER:
+        raise ValueError(f"unknown exposure tier: {exposure}")
+    return {
+        "investigation_id": int(investigation_id) if investigation_id else None,
+        "initiative_id": int(initiative_id) if initiative_id else None,
+        "layer": layer or None,
+        "exposure": exposure or None,
+        "window_days": window,
+    }
+
+
+def _assessments(db, investigation_id: Optional[int] = None, *,
+                 initiative_id: Optional[int] = None,
+                 layer: Optional[str] = None,
+                 exposure: Optional[str] = None) -> list[Any]:
+    """Assessment rows in scope, newest first.
+
+    ``initiative_id`` and ``exposure`` are stored columns and filter in SQL;
+    ``layer`` is derived from whether the row carries model metadata, so it is
+    applied in Python where that derivation lives.
+    """
     from .models import SecurityAssessment
 
     q = db.query(SecurityAssessment)
     if investigation_id:
         q = q.filter(SecurityAssessment.investigation_id == int(investigation_id))
-    return q.order_by(SecurityAssessment.created_at.desc()).all()
+    if initiative_id:
+        q = q.filter(SecurityAssessment.initiative_id == int(initiative_id))
+    if exposure:
+        q = q.filter(SecurityAssessment.exposure == exposure)
+    rows = q.order_by(SecurityAssessment.created_at.desc()).all()
+    if layer:
+        rows = [r for r in rows if _layer_of(r) == layer]
+    return rows
+
+
+def _in_scope(rows: list[Any], *, initiative_id: Optional[int] = None,
+              layer: Optional[str] = None) -> list[Any]:
+    """Apply the derived filters to an already-investigation-narrowed list."""
+    out = rows
+    if initiative_id:
+        out = [r for r in out
+               if getattr(r, "initiative_id", None) == int(initiative_id)]
+    if layer:
+        out = [r for r in out if _layer_of(r) == layer]
+    return out
 
 
 def _investigations(db, ids: set[int]) -> dict[int, str]:
@@ -201,7 +310,10 @@ def _investigations(db, ids: set[int]) -> dict[int, str]:
 # ------------------------------------------- A. Executive risk position ----
 
 def risk_position(db, investigation_id: Optional[int] = None, *,
-                  window_days: int = 90) -> dict[str, Any]:
+                  window_days: int = 90,
+                  initiative_id: Optional[int] = None,
+                  layer: Optional[str] = None,
+                  exposure: Optional[str] = None) -> dict[str, Any]:
     """Aggregate verified residual by data tier, with confidence beside it.
 
     Segmented by tier because "Public" and "Restricted" averaged into one
@@ -209,7 +321,8 @@ def risk_position(db, investigation_id: Optional[int] = None, *,
     figure: a 24 with 30% evidence confidence is a different decision from a
     24 with 85%.
     """
-    rows = _assessments(db, investigation_id)
+    rows = _assessments(db, investigation_id, initiative_id=initiative_id,
+                        layer=layer, exposure=exposure)
     latest = _latest_per_investigation(rows)
     titles = _investigations(db, {a["investigation_id"] for a in latest})
     now = _now()
@@ -221,6 +334,10 @@ def risk_position(db, investigation_id: Optional[int] = None, *,
     confidences: list[float] = []
     blocked_items: dict[str, int] = {}
     top_threats: list[dict[str, Any]] = []
+    # Per-tier threat dominance: which T##s actually drive a tier's residual, so
+    # "restricted is the worst tier" can be answered with the specific threat
+    # rather than left as a mood.
+    threats_by_tier: dict[str, dict[str, dict[str, Any]]] = {}
     # §9.3 A: percentage of the residual reduction that rests on verified
     # primary evidence, not on declared controls nobody has substantiated.
     reductions = {"claimed": 0.0, "verified": 0.0}
@@ -266,7 +383,7 @@ def risk_position(db, investigation_id: Optional[int] = None, *,
             verified_vals.append(float(v))
         for t in (a.get("threats") or [])[:4]:
             if isinstance(t, dict) and t.get("verified_residual") is not None:
-                top_threats.append({
+                entry = {
                     "threat_id": t.get("id"),
                     "title": str(t.get("title") or "")[:70],
                     "verified_residual": t.get("verified_residual"),
@@ -275,7 +392,19 @@ def risk_position(db, investigation_id: Optional[int] = None, *,
                     "forced_to_inherent": t.get("forced_to_inherent"),
                     "product": a["product_name"],
                     "assessment_id": a["assessment_id"],
-                })
+                    "tier": tier,
+                }
+                top_threats.append(entry)
+                bucket = threats_by_tier.setdefault(tier, {})
+                key = str(t.get("id") or entry["title"])
+                # One threat id can appear on several products; keep the worst
+                # instance so the tier list ranks by severity, not by how many
+                # rows happened to mention it.
+                prev = bucket.get(key)
+                if prev is None or (float(entry["verified_residual"] or 0)
+                                    > float(prev["verified_residual"] or 0)):
+                    entry["products"] = 1 if prev is None else int(prev.get("products") or 1) + 1
+                    bucket[key] = entry
 
     def _mean(xs: list[float]) -> Optional[float]:
         return round(sum(xs) / len(xs), 1) if xs else None
@@ -288,7 +417,26 @@ def risk_position(db, investigation_id: Optional[int] = None, *,
     top_threats.sort(key=lambda t: -(float(t.get("verified_residual") or 0)))
     trend = _trend(rows, cutoff)
 
+    tier_threats = []
+    for tier in TIER_ORDER:
+        bucket = threats_by_tier.get(tier)
+        if not bucket:
+            continue
+        ranked = sorted(bucket.values(),
+                        key=lambda t: -(float(t.get("verified_residual") or 0)))[:5]
+        tier_threats.append({
+            "tier": tier,
+            "threats": ranked,
+            "distinct_threats": len(bucket),
+            "forced_to_inherent": sum(1 for t in ranked if t.get("forced_to_inherent")),
+            "note": ("forced_to_inherent counts threats the evidence gate could "
+                     "not substantiate, so the score fell back to inherent risk."),
+        })
+
     return {
+        "scope": {"investigation_id": investigation_id,
+                  "initiative_id": initiative_id, "layer": layer,
+                  "exposure": exposure, "window_days": window_days},
         "tiers": [by_tier[t] for t in TIER_ORDER if t in by_tier],
         "assessments": len(latest),
         "decisions": states,
@@ -314,7 +462,10 @@ def risk_position(db, investigation_id: Optional[int] = None, *,
                               for k, v in sorted(blocked_items.items(),
                                                  key=lambda e: -e[1])],
         "top_residual_threats": top_threats[:10],
+        "top_threats_by_tier": tier_threats,
         "trend": trend,
+        "trend_windows": _trend_windows(rows),
+        "tier_trends": _tier_trends(rows),
         "investigations": [{"id": a["investigation_id"],
                             "title": titles.get(a["investigation_id"], "")}
                            for a in latest],
@@ -371,34 +522,171 @@ def _trend(rows: list[Any], cutoff: datetime) -> dict[str, Any]:
     }
 
 
+#: Windows the trend strip reports at once. One number answers "is it getting
+#: better"; three answer "over what horizon", which is the question a reviewer
+#: actually asks when a quarter looks worse than a week.
+TREND_WINDOWS = (30, 90, 365)
+
+
+def _row_point(rec: Any) -> tuple[Optional[datetime], Optional[float], Optional[float]]:
+    """(created_at, residual_pct, confidence) for one row, normalised once."""
+    created = rec.created_at
+    if created and created.tzinfo is None:
+        created = created.replace(tzinfo=timezone.utc)
+    a = _assessment_dict(rec)
+    v = a.get("verified_residual_pct")
+    if v is None:
+        v = a.get("declared_residual_pct")
+    conf = a.get("evidence_confidence")
+    return (created, float(v) if v is not None else None,
+            float(conf) if conf is not None else None)
+
+
+def _trend_windows(rows: list[Any], windows=TREND_WINDOWS) -> list[dict[str, Any]]:
+    """Residual and confidence at several horizons, so short and long views can
+    disagree honestly instead of one window being chosen to suit the story."""
+    now = _now()
+    points = [(c, v, cf) for (c, v, cf) in (_row_point(r) for r in rows) if c]
+    out = []
+    for days in windows:
+        cutoff = now - timedelta(days=days)
+        win = [p for p in points if p[0] >= cutoff]
+        prior = [p for p in points if p[0] < cutoff]
+        wv = [p[1] for p in win if p[1] is not None]
+        pv = [p[1] for p in prior if p[1] is not None]
+        wc = [p[2] for p in win if p[2] is not None]
+        pc = [p[2] for p in prior if p[2] is not None]
+        wm = round(sum(wv) / len(wv), 1) if wv else None
+        pm = round(sum(pv) / len(pv), 1) if pv else None
+        delta = round(wm - pm, 1) if (wm is not None and pm is not None) else None
+        out.append({
+            "window_days": days,
+            "mean_residual_pct": wm,
+            "prior_mean_residual_pct": pm,
+            "delta_pct_points": delta,
+            "direction": ("improving" if delta is not None and delta < 0
+                          else "worsening" if delta is not None and delta > 0
+                          else "flat" if delta == 0 else "insufficient_history"),
+            "mean_confidence_pct": (round(sum(wc) / len(wc) * 100)
+                                    if wc else None),
+            "prior_mean_confidence_pct": (round(sum(pc) / len(pc) * 100)
+                                          if pc else None),
+            "samples": len(win),
+            "prior_samples": len(prior),
+        })
+    return out
+
+
+def _tier_trends(rows: list[Any], window_days: int = 90) -> list[dict[str, Any]]:
+    """Per-tier residual at the window and before it.
+
+    Averaging the tiers together to draw one trend line is the same mistake as
+    averaging them into one score, one level up: a flat portfolio line can be
+    four tiers moving in opposite directions.
+    """
+    cutoff = _now() - timedelta(days=max(1, window_days))
+    buckets: dict[str, dict[str, list[float]]] = {}
+    for rec in rows:
+        a = _assessment_dict(rec)
+        tier = a["exposure"] if a["exposure"] in TIER_ORDER else "internal"
+        created, v, _cf = _row_point(rec)
+        if v is None or created is None:
+            continue
+        slot = buckets.setdefault(tier, {"prior": [], "window": []})
+        slot["window" if created >= cutoff else "prior"].append(v)
+    out = []
+    for tier in TIER_ORDER:
+        slot = buckets.get(tier)
+        if not slot:
+            continue
+        wv = slot["window"]
+        pv = slot["prior"]
+        wm = round(sum(wv) / len(wv), 1) if wv else None
+        pm = round(sum(pv) / len(pv), 1) if pv else None
+        out.append({
+            "tier": tier,
+            "window_mean_residual_pct": wm,
+            "prior_mean_residual_pct": pm,
+            "delta_pct_points": (round(wm - pm, 1)
+                                 if (wm is not None and pm is not None) else None),
+            "window_samples": len(wv),
+            "prior_samples": len(pv),
+            "series": _sparkline((pv or []) + (wv or [])),
+        })
+    return out
+
+
+def _sparkline(values: list[float], buckets: int = 12) -> list[Optional[int]]:
+    """Residual values folded into a fixed-width series for a sparkline.
+
+    Values are counts, not risk: a bucket with no rows is ``None`` so the
+    renderer leaves a gap rather than drawing a zero that reads as "safe".
+    """
+    if not values:
+        return []
+    if len(values) <= buckets:
+        return [int(round(v)) for v in values]
+    out: list[Optional[int]] = []
+    size = len(values) / float(buckets)
+    for i in range(buckets):
+        chunk = values[int(i * size):max(int((i + 1) * size), int(i * size) + 1)]
+        if chunk:
+            out.append(int(round(sum(chunk) / len(chunk))))
+    return out
+
+
 # ------------------------------------------------- B. Decision queue -------
 
 def decision_queue(db, investigation_id: Optional[int] = None, *,
                    states: Optional[list[str]] = None,
-                   limit: int = 25) -> dict[str, Any]:
+                   limit: int = 25, offset: int = 0,
+                   tier: Optional[str] = None,
+                   sort: str = "residual",
+                   sla_days: int = DECISION_SLA_DAYS,
+                   initiative_id: Optional[int] = None,
+                   layer: Optional[str] = None) -> dict[str, Any]:
     """Everything waiting on a leadership decision, with what would change it.
 
     Each row carries the verified residual *and* its evidence confidence,
     architecture-gate status and blast-radius summary: the four things a
-    sign-off is actually accepting.
+    sign-off is actually accepting. Age is on the row too, because a queue
+    nobody can tell is stale is a queue that only ever grows.
     """
-    rows = _assessments(db, investigation_id)
+    if sort not in QUEUE_SORTS:
+        raise ValueError(f"unknown sort: {sort} (expected one of {list(QUEUE_SORTS)})")
+    if tier and tier not in TIER_ORDER:
+        raise ValueError(f"unknown exposure tier: {tier}")
+    rows = _assessments(db, investigation_id, initiative_id=initiative_id, layer=layer)
     latest = _latest_per_investigation(rows)
     titles = _investigations(db, {a["investigation_id"] for a in latest})
     now = _now()
     wanted = set(states) if states else {STATE_OPEN, STATE_GUARDRAILS, STATE_BLOCKED}
+    unknown_states = sorted(wanted - set(ALL_STATES))
+    if unknown_states:
+        raise ValueError(f"unknown state(s): {unknown_states} "
+                         f"(expected from {list(ALL_STATES)})")
     queue = []
     for a in latest:
         state = _decision_state(a, now)
         if state not in wanted:
             continue
+        norm_tier = a["exposure"] if a["exposure"] in TIER_ORDER else "internal"
+        if tier and norm_tier != tier:
+            continue
         radius = a.get("blast_radius") or {}
+        # Age is measured from the assessment, and an accepted row is aged from
+        # when it was signed rather than from when it was scored: a decision
+        # taken in week one does not stay "waiting" forever.
+        anchor = a.get("decision_at") if state == STATE_ACCEPTED else a.get("created_at")
+        age_days = _days_between(anchor, now)
         queue.append({
             "assessment_id": a["assessment_id"],
             "investigation_id": a["investigation_id"],
             "investigation_title": titles.get(a["investigation_id"], ""),
+            "initiative_id": a.get("initiative_id"),
+            "layer": a.get("layer"),
             "product": a["product_name"],
-            "tier": a["exposure"],
+            "tier": norm_tier,
             "state": state,
             "verified_residual_pct": a.get("verified_residual_pct"),
             "declared_residual_pct": a.get("declared_residual_pct"),
@@ -414,19 +702,42 @@ def decision_queue(db, investigation_id: Optional[int] = None, *,
             "recommended_headline": a.get("decision_headline"),
             "gates_open": a.get("gates_open") or [],
             "recorded_decision": a.get("decision_recorded"),
+            "decision_actor": a.get("decision_actor"),
+            "decision_note": a.get("decision_note"),
+            "decision_at": a.get("decision_at"),
             "expires_at": a.get("expires_at"),
+            "created_at": a.get("created_at"),
+            "age_days": age_days,
+            "sla_days": sla_days,
+            "over_sla": bool(age_days is not None and age_days > sla_days),
             "dossier_link": f"/api/investigations/{a['investigation_id']}/dossier/markdown",
+            "assessment_link": f"/api/security/assessments/{a['assessment_id']}",
             "vendor_questionnaire_available": bool(
                 (a.get("architecture_gate") or {}).get("open_items")),
+            "vendor_questionnaire_link": (
+                f"/api/security/assessments/{a['assessment_id']}/vendor-questionnaire"
+                if (a.get("architecture_gate") or {}).get("open_items") else None),
+            "review_queue_link": f"/api/security/assessments/{a['assessment_id']}/review-queue",
         })
-    order = {STATE_BLOCKED: 0, STATE_GUARDRAILS: 1, STATE_OPEN: 2}
-    queue.sort(key=lambda r: (order.get(r["state"], 9),
-                              -(r.get("verified_residual_pct") or 0)))
+    queue.sort(key=_queue_sort_key(sort))
+    total = len(queue)
+    off = max(0, int(offset or 0))
+    lim = max(1, int(limit or 25))
+    page = queue[off:off + lim]
     return {
-        "items": queue[:limit],
-        "count": len(queue),
-        "states": {s: sum(1 for r in queue if r["state"] == s)
-                   for s in (STATE_BLOCKED, STATE_GUARDRAILS, STATE_OPEN)},
+        "items": page,
+        "count": total,
+        "returned": len(page),
+        "offset": off,
+        "limit": lim,
+        "has_more": (off + len(page)) < total,
+        "over_sla": sum(1 for r in page if r["over_sla"]),
+        "over_sla_total": sum(1 for r in queue if r["over_sla"]),
+        "sort": sort,
+        "tier": tier,
+        "states": {s: sum(1 for r in queue if r["state"] == s) for s in ALL_STATES},
+        "by_tier": {t: sum(1 for r in queue if r["tier"] == t) for t in TIER_ORDER},
+        "sla_days": sla_days,
         "note": ("Every row shows verified residual with its evidence "
                  "confidence and gate status. A residual without them is not a "
                  "decision item."),
@@ -434,12 +745,54 @@ def decision_queue(db, investigation_id: Optional[int] = None, *,
     }
 
 
+def _days_between(anchor: Optional[str], now: datetime) -> Optional[float]:
+    """Whole-ish days from an ISO timestamp to now, or None when unknown."""
+    if not anchor:
+        return None
+    try:
+        ts = datetime.fromisoformat(str(anchor).replace("Z", "+00:00"))
+    except Exception:
+        return None
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    return max(0, int((now - ts).total_seconds() // 86400))
+
+
+def _queue_sort_key(sort: str):
+    """Sort key for one queue order, always with a stable tiebreak.
+
+    Every order falls back to the same severity key, so two rows with equal
+    residual do not swap places between page loads and make a paginated queue
+    feel like it is shuffling.
+    """
+    state_order = {STATE_BLOCKED: 0, STATE_GUARDRAILS: 1, STATE_OPEN: 2,
+                   STATE_ACCEPTED: 3, STATE_REJECTED: 4}
+
+    def tiebreak(r: dict[str, Any]):
+        return (state_order.get(r["state"], 9), str(r.get("product") or ""),
+                r["assessment_id"])
+
+    if sort == "age":
+        return lambda r: (-(r.get("age_days") or 0),) + tiebreak(r)
+    if sort == "confidence":
+        # Ascending: the least trustworthy number is the one needing a decision.
+        return lambda r: (r.get("evidence_confidence_pct")
+                          if r.get("evidence_confidence_pct") is not None else 101,
+                          ) + tiebreak(r)
+    if sort == "product":
+        return lambda r: (str(r.get("product") or "").lower(),) + tiebreak(r)
+    return lambda r: (-(r.get("verified_residual_pct") or 0),) + tiebreak(r)
+
+
 # ------------------------------------- C. Control & assurance health -------
 
-def assurance_health(db, investigation_id: Optional[int] = None) -> dict[str, Any]:
+def assurance_health(db, investigation_id: Optional[int] = None, *,
+                     initiative_id: Optional[int] = None,
+                     layer: Optional[str] = None) -> dict[str, Any]:
     """Controls verified vs declared, forensics across the portfolio, ledger
     integrity, interrupted runs, overdue evidence reviews."""
-    rows = _assessments(db, investigation_id)
+    rows = _assessments(db, investigation_id, initiative_id=initiative_id,
+                        layer=layer)
     latest = _latest_per_investigation(rows)
 
     verified = declared = unknown = 0
@@ -639,9 +992,12 @@ def _overdue_evidence(db, investigation_id: Optional[int] = None,
 
 # ------------------------------------------ D. Exposure & blast radius -----
 
-def exposure_lens(db, investigation_id: Optional[int] = None) -> dict[str, Any]:
+def exposure_lens(db, investigation_id: Optional[int] = None, *,
+                  initiative_id: Optional[int] = None,
+                  layer: Optional[str] = None) -> dict[str, Any]:
     """Restricted/Confidential assets, privileged users, materiality flags."""
-    rows = _assessments(db, investigation_id)
+    rows = _assessments(db, investigation_id, initiative_id=initiative_id,
+                        layer=layer)
     latest = _latest_per_investigation(rows)
     restricted = confidential = users = 0
     quantified = unquantified = 0
@@ -686,14 +1042,18 @@ def exposure_lens(db, investigation_id: Optional[int] = None) -> dict[str, Any]:
 # ------------------------------------------ E. System & process integrity ---
 
 def system_integrity(db, investigation_id: Optional[int] = None,
-                     limit: int = 20) -> dict[str, Any]:
+                     limit: int = 20, *,
+                     initiative_id: Optional[int] = None,
+                     layer: Optional[str] = None) -> dict[str, Any]:
     """Swarm health, pack currency, ledger completeness, time-to-close."""
-    rows = _assessments(db, investigation_id)
+    rows = _assessments(db, investigation_id, initiative_id=initiative_id,
+                        layer=layer)
     latest = _latest_per_investigation(rows)
 
     swarm_stats: dict[str, Any] = {"roles": [], "hops": 0, "failures": 0,
+                                   "gate_failures": 0,
                                    "retries": 0, "overall_success_rate": None,
-                                   "gate_failure_rate": None}
+                                   "failure_rate": None, "gate_failure_rate": None}
     pack_rows: list[dict[str, Any]] = []
     stale = 0
     for a in latest:
@@ -705,14 +1065,17 @@ def system_integrity(db, investigation_id: Optional[int] = None,
             h = SW.health(events)
             swarm_stats["hops"] += h["hops"]
             swarm_stats["failures"] += h["failures"]
+            swarm_stats["gate_failures"] += h["gate_failures"]
             swarm_stats["retries"] += h["retries"]
             merged: dict[str, dict[str, Any]] = {}
             for r in h["roles"]:
                 slot = merged.setdefault(r["role"], {**r, "attempts": 0,
-                                                     "completions": 0, "failures": 0})
+                                                     "completions": 0, "failures": 0,
+                                                     "gate_failures": 0})
                 slot["attempts"] += r["attempts"]
                 slot["completions"] += r["completions"]
                 slot["failures"] += r["failures"]
+                slot["gate_failures"] += r["gate_failures"]
                 slot["success_rate"] = (round(slot["completions"] / slot["attempts"], 2)
                                         if slot["attempts"] else None)
             swarm_stats["roles"] = sorted(merged.values(),
@@ -728,11 +1091,24 @@ def system_integrity(db, investigation_id: Optional[int] = None,
     swarm_stats["overall_success_rate"] = (
         round(sum(r["completions"] for r in swarm_stats["roles"]) / total_attempts, 2)
         if total_attempts else None)
+    # Two different rates, because they answer two different questions. Fabric
+    # reliability is failures over role attempts; the gate rate is the share of
+    # failures the policy engine caused -- a gate doing its job, not flakiness.
+    # Reporting one as the other made a working gate look like a broken swarm.
+    swarm_stats["failure_rate"] = (
+        round(swarm_stats["failures"] / total_attempts, 2)
+        if total_attempts else None)
     swarm_stats["gate_failure_rate"] = (
-        round(swarm_stats["failures"] / swarm_stats["hops"], 2)
-        if swarm_stats["hops"] else None)
+        round(swarm_stats["gate_failures"] / swarm_stats["failures"], 2)
+        if swarm_stats["failures"] else None)
+    swarm_stats["rate_note"] = (
+        "failure_rate = role failures / role attempts (fabric reliability). "
+        "gate_failure_rate = gate-caused failures / all failures (a high share "
+        "means the architecture gate is working, not that the swarm is broken)."
+    )
 
-    health = assurance_health(db, investigation_id)
+    health = assurance_health(db, investigation_id, initiative_id=initiative_id,
+                              layer=layer)
     ttc = _time_to_close(db, investigation_id)
     return {
         "swarm": swarm_stats,
@@ -823,104 +1199,375 @@ def _time_to_close(db, investigation_id: Optional[int] = None) -> dict[str, Any]
 
 # ------------------------------------------------------- alerting --------
 
-def alerts(db, investigation_id: Optional[int] = None) -> dict[str, Any]:
+def alerts(db, investigation_id: Optional[int] = None, *,
+           initiative_id: Optional[int] = None,
+           layer: Optional[str] = None,
+           sla_days: int = DECISION_SLA_DAYS,
+           include_acknowledged: bool = False,
+           queue_states: Optional[list[str]] = None) -> dict[str, Any]:
     """Notifications, not just tiles: what needs a person now."""
     out: list[dict[str, Any]] = []
-    q = decision_queue(db, investigation_id)
+    q = decision_queue(db, investigation_id, sla_days=sla_days,
+                       initiative_id=initiative_id, layer=layer,
+                       states=queue_states,
+                       limit=1000)
     for item in q["items"]:
         if item["state"] == STATE_BLOCKED:
             out.append({
                 "id": f"gate-blocked-{item['assessment_id']}",
                 "severity": "block",
+                "category": "architecture_gate",
                 "title": f"{item['product']}: scoring blocked on architecture",
                 "detail": (f"Open: {', '.join(item['architecture_open_items'])}"
                            if item["architecture_open_items"]
                            else "architecture gate incomplete"),
+                "assessment_id": item["assessment_id"],
+                "age_days": item["age_days"],
                 "link": item["dossier_link"],
+                "action": "close the architecture questions, then re-score",
             })
         if item["quantified"] is False and str(item["tier"]) in A.RESTRICTED_TIERS:
             out.append({
                 "id": f"unquantified-{item['assessment_id']}",
                 "severity": "warn",
+                "category": "blast_radius",
                 "title": f"{item['product']}: blast radius not quantified",
                 "detail": "A go/no-go on this tier requires an exposure inventory.",
+                "assessment_id": item["assessment_id"],
+                "age_days": item["age_days"],
                 "link": item["dossier_link"],
+                "action": "supply the exposure inventory for this assessment",
             })
         conf = item.get("evidence_confidence_pct")
         if conf is not None and conf < 40:
             out.append({
                 "id": f"low-confidence-{item['assessment_id']}",
                 "severity": "warn",
+                "category": "evidence_confidence",
                 "title": f"{item['product']}: evidence confidence {conf}%",
                 "detail": ("Most of the residual reduction rests on unevidenced "
                            "controls; the verified residual is the one to read."),
+                "assessment_id": item["assessment_id"],
+                "age_days": item["age_days"],
                 "link": item["dossier_link"],
+                "action": "accept evidence, or sign the higher declared residual",
             })
-    h = assurance_health(db, investigation_id)
+        if item["over_sla"]:
+            out.append({
+                "id": f"over-sla-{item['assessment_id']}",
+                "severity": "warn",
+                "category": "decision_sla",
+                "title": (f"{item['product']}: decision {item['age_days']}d old "
+                          f"(SLA {sla_days}d)"),
+                "detail": ("A leadership decision has been waiting past the "
+                           "review window; an unrecorded residual is still an "
+                           "open risk, not a managed one."),
+                "assessment_id": item["assessment_id"],
+                "age_days": item["age_days"],
+                "link": item["dossier_link"],
+                "action": f"record accept, guardrails, reject or exception",
+            })
+    h = assurance_health(db, investigation_id, initiative_id=initiative_id,
+                         layer=layer)
     for alert in (h["ledger"].get("blocking_alerts") or []):
         out.append({
             "id": f"ledger-{alert.get('run_id')}-{alert.get('id')}",
             "severity": "block",
+            "category": "ledger_integrity",
             "title": f"Ledger: {alert.get('condition')}",
             "detail": alert.get("why_it_matters"),
+            "age_days": None,
             "link": "/api/ledger/verify-export",
+            "action": "investigate the ledger gap before relying on these scores",
         })
     if h["overdue_evidence"]["overdue"]:
         out.append({
             "id": "evidence-backlog",
             "severity": "warn",
+            "category": "evidence_backlog",
             "title": (f"{h['overdue_evidence']['overdue']} evidence review(s) "
                       "overdue"),
             "detail": h["overdue_evidence"]["note"],
+            "age_days": h["overdue_evidence"]["oldest_days"],
             "link": "/api/investigations",
+            "action": f"review or reject the {h['overdue_evidence']['overdue']} "
+                      f"ageing artifact(s)",
         })
     if h["stalled_runs"]["explainer_gap_open"]:
         failed = h["stalled_runs"].get("explainer_gap_failed") or 0
         out.append({
             "id": "explainer-gap-open",
             "severity": "warn" if not failed else "block",
+            "category": "stalled_runs",
             "title": (f"{h['stalled_runs']['explainer_gap_open']} interrupted "
                       f"explainer_gap run(s), {failed} failed"),
             "detail": h["stalled_runs"]["note"],
+            "age_days": None,
             "link": "/api/investigations",
+            "action": "re-run the interrupted explainer_gap jobs",
         })
     order = {"block": 0, "warn": 1, "info": 2}
-    out.sort(key=lambda a: order.get(a["severity"], 9))
-    return {"alerts": out, "blocking": sum(1 for a in out if a["severity"] == "block"),
-            "warnings": sum(1 for a in out if a["severity"] == "warn")}
+    out.sort(key=lambda a: (order.get(a["severity"], 9), str(a["id"])))
+    out = _apply_alert_state(db, out, include_acknowledged=include_acknowledged)
+    return {"alerts": out,
+            "blocking": sum(1 for a in out if a["severity"] == "block"),
+            "warnings": sum(1 for a in out if a["severity"] == "warn"),
+            "acknowledged": sum(1 for a in out if a.get("acknowledged")),
+            "open_blocking": sum(1 for a in out
+                                 if a["severity"] == "block"
+                                 and not a.get("acknowledged")),
+            "sla_days": sla_days,
+            "generated": _now().isoformat()}
+
+
+def _alert_finding_hash(alert: dict[str, Any]) -> str:
+    """Stable digest of what the alert is *about*.
+
+    The acknowledgement is bound to this, so a condition that changes substance
+    (a different open question, a new residual) reads as stale rather than
+    inheriting somebody's "seen it" for the previous version.
+    """
+    import hashlib
+
+    payload = json.dumps({k: alert.get(k) for k in
+                          ("severity", "title", "detail", "assessment_id",
+                           "category")},
+                         sort_keys=True, default=str)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:32]
+
+
+def _apply_alert_state(db, alerts_in: list[dict[str, Any]], *,
+                       include_acknowledged: bool = False
+                       ) -> list[dict[str, Any]]:
+    """Annotate alerts with acknowledgement state; drop acknowledged ones unless
+    asked for. The finding is never suppressed -- only its acknowledgement."""
+    from .ledger_models import LeadershipAlertState
+
+    if not alerts_in:
+        return []
+    ids = [str(a["id"]) for a in alerts_in]
+    stored = {r.alert_id: r for r in db.query(LeadershipAlertState)
+              .filter(LeadershipAlertState.alert_id.in_(ids)).all()}
+    now = _now()
+    out: list[dict[str, Any]] = []
+    for a in alerts_in:
+        row = stored.get(str(a["id"]))
+        a = {**a, "finding_hash": _alert_finding_hash(a)}
+        if row is None:
+            a.update({"acknowledged": False, "acknowledged_by": None,
+                      "acknowledged_at": None, "acknowledged_note": None,
+                      "snoozed_until": None, "acknowledgement_stale": False})
+        else:
+            snoozed = bool(row.snoozed_until and row.snoozed_until > now)
+            acked = (row.status in ("acknowledged", "resolved") and not snoozed)
+            a.update({
+                "acknowledged": acked,
+                "acknowledged_by": row.acknowledged_by,
+                "acknowledged_at": (row.acknowledged_at.isoformat()
+                                    if row.acknowledged_at else None),
+                "acknowledged_note": row.note,
+                "snoozed_until": (row.snoozed_until.isoformat()
+                                  if row.snoozed_until else None),
+                "snoozed": snoozed,
+                "acknowledgement_stale": bool(
+                    row.finding_hash and row.finding_hash != a["finding_hash"]),
+            })
+            # A stale acknowledgement does not carry over: the person was looking
+            # at a different finding.
+            if a["acknowledgement_stale"]:
+                a["acknowledged"] = False
+        if a.get("acknowledged") and not include_acknowledged:
+            continue
+        out.append(a)
+    return out
+
+
+def acknowledge_alert(db, alert_id: str, *, actor: str,
+                      status: str = "acknowledged", note: str = "",
+                      snooze_days: Optional[int] = None,
+                      finding_hash: Optional[str] = None) -> dict[str, Any]:
+    """Record that a named person has seen an alert, and optionally snoozed it.
+
+    Only the response is stored. A snooze has an end date because an alert
+    silenced with no expiry is a risk switched off, not a risk triaged.
+    """
+    from .ledger_models import LeadershipAlertState
+
+    actor = str(actor or "").strip()
+    if not actor:
+        raise ValueError("acknowledging an alert requires a named actor")
+    status = str(status or "acknowledged").strip().lower()
+    if status not in ("acknowledged", "snoozed", "resolved", "unacknowledged"):
+        raise ValueError("status must be one of acknowledged|snoozed|resolved|"
+                         "unacknowledged")
+    alert_id = str(alert_id or "").strip()
+    if not alert_id:
+        raise ValueError("alert_id is required")
+    now = _now()
+    snoozed_until = None
+    if status == "snoozed":
+        days = snooze_days if snooze_days and snooze_days > 0 else 7
+        snoozed_until = now + timedelta(days=days)
+    row = db.query(LeadershipAlertState).filter(
+        LeadershipAlertState.alert_id == alert_id).first()
+    if row is None:
+        row = LeadershipAlertState(alert_id=alert_id)
+        db.add(row)
+    row.status = status
+    row.acknowledged_by = actor
+    row.acknowledged_at = now
+    row.note = str(note or "")
+    row.snoozed_until = snoozed_until
+    row.finding_hash = finding_hash
+    db.commit()
+    return {
+        "alert_id": alert_id,
+        "status": status,
+        "acknowledged_by": actor,
+        "acknowledged_at": now.isoformat(),
+        "note": row.note,
+        "snoozed_until": snoozed_until.isoformat() if snoozed_until else None,
+        "note_text": ("Acknowledgement hides a notification, never the "
+                      "condition. The alert is still derived from live state "
+                      "and returns if the underlying finding changes."),
+    }
 
 
 # --------------------------------------------------- the layered board ----
 
+#: The persona lenses. Each entry is a *lens*, not a separate number: every
+#: persona reads the same rows, so two people cannot quote two residuals.
+PERSONAS: dict[str, dict[str, Any]] = {
+    "executive": {
+        "label": "Executive",
+        "blurb": "One screen: exposure, confidence, and what needs a signature.",
+        "emphasis": ["risk_position", "decision_queue", "alerts"],
+    },
+    "ciso": {
+        "label": "CISO",
+        "blurb": "The security position plus the health of the system that produced it.",
+        "emphasis": ["risk_position", "assurance_health", "system_integrity",
+                     "decision_queue"],
+    },
+    "dpo": {
+        "label": "DPO",
+        "blurb": "Where the data actually sits and how big the exposure is.",
+        "emphasis": ["exposure_lens", "risk_position", "decision_queue"],
+    },
+    "legal": {
+        "label": "Legal",
+        "blurb": "Defensibility: is the record complete and the system auditable.",
+        "emphasis": ["assurance_health", "system_integrity", "decision_queue"],
+    },
+    "audit": {
+        "label": "Audit",
+        "blurb": "Evidence trail and change history, with no forward-looking noise.",
+        "emphasis": ["assurance_health", "system_integrity", "change_log"],
+    },
+    "security_engineering": {
+        "label": "Security Engineering",
+        "blurb": ("Owns the evaluation system itself: swarm health, ledger "
+                  "completeness, rate and scope control."),
+        "emphasis": ["system_integrity", "assurance_health", "risk_position",
+                     "alerts", "decision_queue"],
+    },
+}
+
+
+def persona_names() -> list[dict[str, str]]:
+    return [{"id": k, "label": v["label"], "blurb": v["blurb"]}
+            for k, v in PERSONAS.items()]
+
+
 def board(db, investigation_id: Optional[int] = None, *,
-          window_days: int = 90, persona: str = "executive") -> dict[str, Any]:
+          window_days: int = 90, persona: str = "executive",
+          initiative_id: Optional[int] = None,
+          layer: Optional[str] = None,
+          exposure: Optional[str] = None,
+          tier: Optional[str] = None,
+          queue_states: Optional[list[str]] = None,
+          sort: str = "residual",
+          limit: int = 25,
+          offset: int = 0,
+          sla_days: int = DECISION_SLA_DAYS,
+          include_acknowledged: bool = False) -> dict[str, Any]:
     """The layered dashboard: one executive screen, drill-down beneath it.
 
     Same underlying data for every persona, different default emphasis — a
     role-based view is a lens, not a separate number, so two personas can never
     quote different residuals for the same assessment.
     """
-    persona = (persona or "executive").lower()
-    emphasis = {
-        "executive": ["risk_position", "decision_queue", "alerts"],
-        "ciso": ["risk_position", "assurance_health", "system_integrity", "decision_queue"],
-        "dpo": ["exposure_lens", "risk_position", "decision_queue"],
-        "legal": ["assurance_health", "system_integrity", "decision_queue"],
-        "audit": ["assurance_health", "system_integrity"],
-        # Security Engineering owns the evaluation system itself: swarm health,
-        # ledger completeness and rate/scope control are its first screen.
-        "security_engineering": ["system_integrity", "assurance_health",
-                                 "risk_position", "alerts", "decision_queue"],
-    }.get(persona, ["risk_position", "decision_queue", "alerts"])
+    scope = resolve_scope(investigation_id, initiative_id=initiative_id,
+                          layer=layer, exposure=exposure, window_days=window_days)
+    persona = (persona or "executive").strip().lower()
+    if persona not in PERSONAS:
+        raise ValueError(f"unknown persona: {persona} "
+                         f"(expected one of {sorted(PERSONAS)})")
+    emphasis = PERSONAS[persona]["emphasis"]
+    shared = {"investigation_id": scope["investigation_id"],
+              "initiative_id": scope["initiative_id"],
+              "layer": scope["layer"]}
+    queue = decision_queue(db, scope["investigation_id"],
+                           initiative_id=scope["initiative_id"],
+                           layer=scope["layer"], states=queue_states,
+                           sort=sort, limit=limit, offset=offset,
+                           sla_days=sla_days)
     return {
         "persona": persona,
+        "persona_label": PERSONAS[persona]["label"],
+        "persona_blurb": PERSONAS[persona]["blurb"],
+        "personas": persona_names(),
         "emphasis": emphasis,
-        "risk_position": risk_position(db, investigation_id, window_days=window_days),
-        "decision_queue": decision_queue(db, investigation_id),
-        "assurance_health": assurance_health(db, investigation_id),
-        "exposure_lens": exposure_lens(db, investigation_id),
-        "system_integrity": system_integrity(db, investigation_id),
-        "alerts": alerts(db, investigation_id),
+        "scope": scope,
+        "risk_position": risk_position(db, scope["investigation_id"],
+                                       window_days=scope["window_days"],
+                                       initiative_id=scope["initiative_id"],
+                                       layer=scope["layer"],
+                                       exposure=scope["exposure"]),
+        "decision_queue": queue,
+        "assurance_health": assurance_health(db, scope["investigation_id"],
+                                            initiative_id=scope["initiative_id"],
+                                            layer=scope["layer"]),
+        "exposure_lens": exposure_lens(db, scope["investigation_id"],
+                                       initiative_id=scope["initiative_id"],
+                                       layer=scope["layer"]),
+        "system_integrity": system_integrity(db, scope["investigation_id"],
+                                             initiative_id=scope["initiative_id"],
+                                             layer=scope["layer"]),
+        "alerts": alerts(db, scope["investigation_id"],
+                         initiative_id=scope["initiative_id"],
+                         layer=scope["layer"], sla_days=sla_days,
+                         include_acknowledged=include_acknowledged),
+        "exceptions": exception_register(db, scope["investigation_id"],
+                                         initiative_id=scope["initiative_id"],
+                                         layer=scope["layer"]),
+        "change_log": change_log(db, scope["investigation_id"],
+                                 initiative_id=scope["initiative_id"],
+                                 layer=scope["layer"]),
+        "decisions_available": {
+            "options": [
+                {"value": A.DECISION_ACCEPT, "label": "Accept"},
+                {"value": A.DECISION_GUARDRAILS,
+                 "label": "Accept with mandatory guardrails"},
+                {"value": A.DECISION_REJECT,
+                 "label": "Reject until architecture gate closes"},
+                {"value": "exception",
+                 "label": "Time-bounded exception (requires rationale + expiry)"},
+            ],
+            "aliases": sorted(DECISION_ALIASES),
+            "endpoint": "/api/security/assessments/{assessment_id}/decision",
+            "requires_actor": True,
+            "exception_requires_rationale": True,
+            "default_exception_days": DEFAULT_EXCEPTION_DAYS,
+        },
+        "queue_filters": {
+            "sorts": list(QUEUE_SORTS),
+            "states": list(ALL_STATES),
+            "tiers": list(TIER_ORDER),
+            "layers": list(LAYER_ORDER),
+            "default_states": [STATE_OPEN, STATE_GUARDRAILS, STATE_BLOCKED],
+            "sla_days": sla_days,
+        },
         "contract": {
             "residual_always_with_confidence": True,
             "gate_status_always_shown": True,
@@ -929,6 +1576,7 @@ def board(db, investigation_id: Optional[int] = None, *,
                      "without confidence, snapshots detached from the ledger, "
                      "and swarm health hidden from leadership."),
         },
+        "generated": _now().isoformat(),
     }
 
 
@@ -950,11 +1598,13 @@ def record_decision(db, assessment_id: int, decision: str, *, actor: str,
     rec = db.get(SecurityAssessment, int(assessment_id))
     if not rec:
         raise LookupError("assessment not found")
-    decision = str(decision or "").strip().lower()
-    allowed = {A.DECISION_ACCEPT, A.DECISION_GUARDRAILS, A.DECISION_REJECT,
-               "exception"}
-    if decision not in allowed:
-        raise ValueError(f"decision must be one of {sorted(allowed)}")
+    raw = str(decision or "").strip().lower()
+    decision = canonical_decision(raw) or ""
+    if not decision:
+        raise ValueError(
+            f"decision must be one of {sorted(set(DECISION_ALIASES))} "
+            f"(stored as accept | {A.DECISION_GUARDRAILS} | {A.DECISION_REJECT} "
+            f"| exception)")
     if not str(actor or "").strip():
         raise ValueError("a decision must be attributable to a named actor")
     if decision == "exception" and not str(rationale or "").strip():
@@ -987,6 +1637,7 @@ def record_decision(db, assessment_id: int, decision: str, *, actor: str,
     return {
         "assessment_id": rec.id,
         "decision": decision,
+        "decision_requested": raw,
         "decision_derived": derived,
         "overrode_derivation": bool(decision != derived and decision != "exception"),
         "actor": actor,
@@ -1001,10 +1652,12 @@ def record_decision(db, assessment_id: int, decision: str, *, actor: str,
     }
 
 
-def exception_register(db, investigation_id: Optional[int] = None,
-                       ) -> dict[str, Any]:
+def exception_register(db, investigation_id: Optional[int] = None, *,
+                       initiative_id: Optional[int] = None,
+                       layer: Optional[str] = None) -> dict[str, Any]:
     """Time-bounded exceptions, with expiry status."""
-    rows = _assessments(db, investigation_id)
+    rows = _assessments(db, investigation_id, initiative_id=initiative_id,
+                        layer=layer)
     now = _now()
     out = []
     for rec in rows:
@@ -1017,32 +1670,53 @@ def exception_register(db, investigation_id: Optional[int] = None,
             "assessment_id": rec.id,
             "product": rec.product_name or "",
             "investigation_id": rec.investigation_id,
+            "tier": rec.exposure,
             "actor": rec.assurance_decided_by,
             "rationale": rec.assurance_decision_note,
+            "granted_at": (rec.assurance_decided_at.isoformat()
+                           if rec.assurance_decided_at else None),
             "expires_at": exp.isoformat() if exp else None,
             "expired": bool(exp and exp <= now),
             "days_remaining": (exp - now).days if exp else None,
             "reevaluation_due": bool(exp and exp <= now),
+            "residual_pct": rec.residual_pct,
+            "evidence_confidence_pct": (round(float(rec.evidence_confidence) * 100)
+                                        if rec.evidence_confidence is not None else None),
+            "re_evaluate_link": f"/api/security/assessments/{rec.id}/rescore",
         })
+    order = {"expired": 0}
+    out.sort(key=lambda e: (order.get("expired" if e["expired"] else "active", 1),
+                            -(e["days_remaining"] if e["days_remaining"] is not None else 1e9)))
     return {
         "exceptions": out,
         "count": len(out),
         "expired": sum(1 for e in out if e["expired"]),
+        "active": sum(1 for e in out if not e["expired"]),
+        "next_expiry": next((e["expires_at"] for e in out if not e["expired"]), None),
         "note": ("An expired exception stops protecting the score: the row "
                  "returns to open and re-evaluation is due."),
+        "generated": now.isoformat(),
     }
 
 
-def change_log(db, investigation_id: int) -> dict[str, Any]:
+def change_log(db, investigation_id: Optional[int] = None, *,
+               initiative_id: Optional[int] = None,
+               layer: Optional[str] = None) -> dict[str, Any]:
     """Superseded assessments as a short change-log.
 
     §6's redundancy complaint: multiple overlapping assessments with slight
     threat-list drift, and a reader who has to dig for the current number.
     History stays queryable, but the current row is unambiguous.
+
+    With no investigation the view is portfolio-wide and groups the superseded
+    rows by investigation, because a portfolio board is exactly where a
+    "which number is current" question appears.
     """
-    rows = _assessments(db, investigation_id)
+    rows = _assessments(db, investigation_id, initiative_id=initiative_id,
+                        layer=layer)
     current = _latest_per_investigation(rows)
     current_ids = {a["assessment_id"] for a in current}
+    titles = _investigations(db, {r.investigation_id for r in rows})
     superseded = []
     for rec in rows:
         a = _assessment_dict(rec)
@@ -1050,11 +1724,14 @@ def change_log(db, investigation_id: int) -> dict[str, Any]:
             continue
         a["supersedes_id"] = rec.supersedes_id
         a["threat_pack_version"] = rec.threat_pack_version
+        a["investigation_title"] = titles.get(a["investigation_id"], "")
         superseded.append(a)
     superseded.sort(key=lambda a: a.get("created_at") or "", reverse=True)
-    return {
+    payload = {
+        "investigation_id": investigation_id,
+        "scope": {"initiative_id": initiative_id, "layer": layer},
         "current": [{"assessment_id": a["assessment_id"], "product": a["product_name"],
-                     "path": a["scoring_path"],
+                     "path": a["scoring_path"], "tier": a["exposure"],
                      "verified_residual_pct": a.get("verified_residual_pct"),
                      "evidence_confidence_pct": (
                          round(float(a["evidence_confidence"]) * 100)
@@ -1064,6 +1741,8 @@ def change_log(db, investigation_id: int) -> dict[str, Any]:
         "superseded": [{"assessment_id": a["assessment_id"],
                         "product": a["product_name"],
                         "path": a["scoring_path"],
+                        "investigation_id": a["investigation_id"],
+                        "investigation_title": a.get("investigation_title", ""),
                         "verified_residual_pct": a.get("verified_residual_pct"),
                         "declared_residual_pct": a.get("declared_residual_pct"),
                         "evidence_confidence_pct": (
@@ -1077,4 +1756,186 @@ def change_log(db, investigation_id: int) -> dict[str, Any]:
         "note": ("History is retained, never deleted. The current row is "
                  "identified per (investigation, scoring path) so a reader is "
                  "never shown two current residuals for one product."),
+        "generated": _now().isoformat(),
     }
+    if investigation_id is None:
+        by_inv: dict[int, dict[str, Any]] = {}
+        for a in superseded:
+            slot = by_inv.setdefault(int(a["investigation_id"]),
+                                     {"investigation_id": a["investigation_id"],
+                                      "title": titles.get(a["investigation_id"], ""),
+                                      "count": 0})
+            slot["count"] += 1
+        payload["by_investigation"] = sorted(by_inv.values(),
+                                             key=lambda r: -r["count"])
+    return payload
+
+# -------------------------------------------------- board export -----------
+
+def export_markdown(db, investigation_id: Optional[int] = None, *,
+                    window_days: int = 90, persona: str = "executive",
+                    initiative_id: Optional[int] = None,
+                    layer: Optional[str] = None) -> str:
+    """The whole board as one Markdown snapshot.
+
+    A regulator asks for a document, not a live endpoint. This is that
+    document: the same rows the screen shows, with every number carrying its
+    confidence and gate status, plus the generation time so a snapshot cannot
+    be mistaken for the live position.
+    """
+    b = board(db, investigation_id, window_days=window_days, persona=persona,
+              initiative_id=initiative_id, layer=layer)
+    rp = b["risk_position"]
+    q = b["decision_queue"]
+    ah = b["assurance_health"]
+    si = b["system_integrity"]
+    ex = b["exceptions"]
+    sc = b["scope"]
+    L: list[str] = []
+    L.append("# Leadership board snapshot")
+    L.append("")
+    L.append(f"- Generated: {b['generated']}")
+    L.append(f"- Persona lens: **{b['persona_label']}** — {b['persona_blurb']}")
+    L.append(f"- Scope: investigation={sc['investigation_id'] or 'all'} "
+             f"· initiative={sc['initiative_id'] or 'all'} · layer={sc['layer'] or 'all'} "
+             f"· tier={sc['exposure'] or 'all'} · window={sc['window_days']}d")
+    L.append("")
+    L.append("> A residual without its evidence confidence is not a decision "
+             "item. Every figure below carries both.")
+    L.append("")
+
+    L.append("## Risk position")
+    L.append("")
+    L.append("| Tier | Assessments | Verified residual | Declared residual | Forensics | "
+             "Blast radius quantified | Gate-blocked |")
+    L.append("|---|---:|---:|---:|---:|---:|---:|")
+    for t in rp["tiers"]:
+        L.append(f"| {t['tier']} | {t['count']} | "
+                 f"{_pct_or_dash(t.get('mean_verified_residual'))} | "
+                 f"{_pct_or_dash(t.get('mean_declared_residual'))} | "
+                 f"{_pct_or_dash(t.get('mean_forensics'))} | "
+                 f"{t.get('quantified', 0)}/{t['count']} | {t.get('blocked', 0)} |")
+    L.append("")
+    vvd = rp["verified_vs_declared"]
+    L.append(f"- Verified share of claimed reduction: "
+             f"{_pct_or_dash(vvd.get('verified_share_pct'))} "
+             f"({vvd.get('verified_reduction_pct_points')} of "
+             f"{vvd.get('claimed_reduction_pct_points')} points evidenced)")
+    L.append(f"- Mean evidence confidence: "
+             f"{_pct_or_dash(rp['evidence_confidence'].get('mean_pct'))}")
+    tr = rp.get("trend") or {}
+    L.append(f"- Trend ({sc['window_days']}d window): {tr.get('direction', 'unknown')} "
+             f"· delta {_num(tr.get('delta'))} points")
+    L.append("")
+    if rp.get("architecture_gaps"):
+        L.append("Open architecture gate items:")
+        for g in rp["architecture_gaps"][:10]:
+            L.append(f"- {g['item']} ({g['assessments']} assessment(s))")
+        L.append("")
+    if rp.get("top_threats_by_tier"):
+        L.append("Dominant threats per tier:")
+        for tb in rp["top_threats_by_tier"]:
+            names = ", ".join(f"{t.get('threat_id')} ({_num(t.get('verified_residual'))})"
+                              for t in tb["threats"][:3])
+            L.append(f"- **{tb['tier']}**: {names or 'none scored'}")
+        L.append("")
+
+    L.append(f"## Decision queue ({q['count']} item(s))")
+    L.append("")
+    if not q["items"]:
+        L.append("Nothing is waiting on a leadership decision.")
+    else:
+        L.append("| Product | Tier | State | Verified residual | Confidence | Age | SLA | Recommendation |")
+        L.append("|---|---|---|---:|---:|---:|---|---|")
+        for r in q["items"]:
+            L.append(f"| {r['product']} | {r['tier']} | {r['state']} | "
+                     f"{_pct_or_dash(r.get('verified_residual_pct'))} | "
+                     f"{_pct_or_dash(r.get('evidence_confidence_pct'))} | "
+                     f"{_num(r.get('age_days'))}d | "
+                     f"{'OVER' if r.get('over_sla') else 'ok'} | "
+                     f"{r.get('recommended_decision') or '—'} |")
+    L.append("")
+
+    L.append("## Assurance health")
+    L.append("")
+    c = ah["controls"]
+    L.append(f"- Controls: {c['verified']} evidenced · {c['declared']} declared · "
+             f"{c['unknown']} unknown ({_pct_or_dash(c.get('verified_pct'))}% evidenced)")
+    f = ah["forensics"]
+    L.append(f"- Forensics: mean {_num(f.get('mean_score'))} · "
+             f"{f.get('reconstructable')}/{f.get('scored')} reconstructable")
+    lg = ah["ledger"]
+    L.append(f"- Ledger: {lg.get('chains_intact')}/{lg.get('runs_checked')} chains "
+             f"intact · mean {lg.get('mean_event_classes_recorded')} of "
+             f"{lg.get('mandatory_event_classes')} mandatory event classes recorded")
+    oe = ah["overdue_evidence"]
+    L.append(f"- Evidence backlog: {oe.get('pending')} pending, "
+             f"{oe.get('overdue')} overdue (oldest {oe.get('oldest_days')}d)")
+    L.append("")
+
+    L.append("## System integrity")
+    L.append("")
+    sw = si["swarm"]
+    L.append(f"- Swarm: {sw.get('hops')} hops · {sw.get('failures')} failures "
+             f"({sw.get('gate_failures')} gate-caused) · "
+             f"success rate {_num(sw.get('overall_success_rate'))}")
+    L.append(f"- Failure rate {_num(sw.get('failure_rate'))} · "
+             f"gate failure rate {_num(sw.get('gate_failure_rate'))}")
+    tp = si["threat_pack"]
+    L.append(f"- Threat pack currency: {_pct_or_dash(tp.get('currency_pct'))}% "
+             f"({tp.get('stale')} of {tp.get('assessments')} stale)")
+    L.append("")
+
+    L.append("## Alerts")
+    L.append("")
+    al = b["alerts"]
+    if not al["alerts"]:
+        L.append("No open alerts.")
+    else:
+        for a_ in al["alerts"]:
+            L.append(f"- **{a_['severity'].upper()}** {a_['title']} — {a_['detail']} "
+                     f"_(next: {a_['action']})_")
+    L.append("")
+
+    L.append(f"## Exception register ({ex['count']})")
+    L.append("")
+    if not ex["exceptions"]:
+        L.append("No time-bounded exceptions are in force.")
+    else:
+        for e in ex["exceptions"]:
+            L.append(f"- {e['product']} — granted by {e['actor']}, "
+                     f"expires {e.get('expires_at')} "
+                     f"({e.get('days_remaining')}d remaining)"
+                     + (" — **EXPIRED, re-evaluation due**" if e["expired"] else ""))
+            if e.get("rationale"):
+                L.append(f"  - Rationale: {e['rationale']}")
+    L.append("")
+
+    cl = b["change_log"]
+    L.append(f"## Change log ({cl['superseded_count']} superseded)")
+    L.append("")
+    for s in cl["superseded"][:15]:
+        L.append(f"- {s['created_at']} · {s['product']} · "
+                 f"verified {_pct_or_dash(s.get('verified_residual_pct'))} · "
+                 f"pack {s.get('threat_pack_version') or 'unversioned'}"
+                 + (f" · supersedes {s['supersedes_id']}"
+                    if s.get("supersedes_id") else ""))
+    L.append("")
+    L.append("---")
+    L.append("")
+    L.append(f"_{b['contract']['note']}_")
+    return "\n".join(L)
+
+
+def _num(v: Any) -> str:
+    if v is None:
+        return "—"
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return str(v)
+    return str(int(f)) if f == int(f) else f"{f:g}"
+
+
+def _pct_or_dash(v: Any) -> str:
+    return "—" if v is None else f"{_num(v)}%"

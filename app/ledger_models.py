@@ -179,3 +179,35 @@ class LedgerApproval(Base):
     decided_at = Column(DateTime, nullable=True)
     note = Column(Text, nullable=True)
     event_hash = Column(String(64), nullable=True)  # decision event hash, for the chain
+
+
+class LeadershipAlertState(Base):
+    """What a person did about a leadership alert.
+
+    :func:`app.leadership.alerts` recomputes its alert list from live state on
+    every call, which is right for the finding and wrong for the response: an
+    alert nobody can dismiss reappears on every poll and trains people to ignore
+    the panel. This table stores the *acknowledgement* only -- never the finding
+    -- so dismissing an alert can never hide a risk that is still true.
+
+    Keyed by the stable alert id (never by row id), because the whole point is
+    that the same condition keeps producing the same id across reloads. The
+    payload is hashed into ``finding_hash`` so a changed finding shows up as
+    ``stale`` instead of silently inheriting an old acknowledgement.
+    """
+
+    __tablename__ = "leadership_alert_states"
+    __table_args__ = (
+        UniqueConstraint("alert_id", name="uq_leadership_alert_states_alert_id"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    alert_id = Column(String(200), nullable=False, index=True)
+    finding_hash = Column(String(64), nullable=True, index=True)
+    status = Column(String(20), nullable=False, default="acknowledged")  # acknowledged|snoozed|resolved
+    acknowledged_by = Column(String(200), nullable=True)
+    acknowledged_at = Column(DateTime, default=_now)
+    note = Column(Text, nullable=True)
+    snoozed_until = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=_now)
+    updated_at = Column(DateTime, default=_now, onupdate=_now)
