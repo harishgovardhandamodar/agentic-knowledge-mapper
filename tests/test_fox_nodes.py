@@ -81,9 +81,14 @@ class StatusCase(unittest.TestCase):
         nodes = {n["id"]: n for n in info["nodes"]}
         self.assertEqual(nodes["axiom"]["status"]["state"], "down")
         self.assertIn("Timeout", nodes["axiom"]["status"]["error"])
-        # an unconfigured node is unprobed, not down
-        self.assertEqual(nodes["axiom-dgx"]["status"]["state"], "unprobed")
-        self.assertIn("no probe endpoint", nodes["axiom-dgx"]["status"]["error"])
+
+    def test_a_node_with_no_probe_target_is_unprobed_not_down(self):
+        # The registry now gives every node a Tailscale host, so the unprobed
+        # state is exercised directly on the probe, not via a node that happens
+        # to be unconfigured.
+        st = F._probe_http(None, None, "/", 1.0)
+        self.assertEqual(st["state"], "unprobed")
+        self.assertIn("no probe endpoint", st["error"])
 
     @mock.patch("app.fox_nodes.httpx.get")
     @mock.patch("app.fox_nodes.osh.broker_status")

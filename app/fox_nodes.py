@@ -57,7 +57,7 @@ FOX_NODES: list[dict] = [
         "id": "axiom",
         "name": "axiom",
         "role": "LLM gateway + OpenShell broker — primary inference host",
-        "host": os.environ.get("FOX_NODE_AXIOM_HOST", "192.168.1.173"),
+        "host": os.environ.get("FOX_NODE_AXIOM_HOST", "axiom-1"),
         "port": int(os.environ.get("FOX_NODE_AXIOM_PORT", "8210")),
         "probe": "broker",
         "trust_boundary": TRUST_INSIDE,
@@ -67,14 +67,14 @@ FOX_NODES: list[dict] = [
         "ram": "64 GB",
         "storage": "2 TB",
         "note": ("Runs the fox-services broker and the LLM gateway; agent tool "
-                 "calls and inference go through it. Hardware declared by the "
-                 "operator."),
+                 "calls and inference go through it. Addressed by its Tailscale "
+                 "MagicDNS name (axiom-1). Hardware declared by the operator."),
     },
     {
         "id": "axiom-dgx",
         "name": "axiom-dgx",
         "role": "Declared GPU inference node",
-        "host": os.environ.get("FOX_NODE_AXIOM_DGX_HOST"),
+        "host": os.environ.get("FOX_NODE_AXIOM_DGX_HOST", "axiom-dgx"),
         "port": int(os.environ.get("FOX_NODE_AXIOM_DGX_PORT", "8210")),
         "probe": "http",
         "trust_boundary": TRUST_INSIDE,
@@ -83,15 +83,16 @@ FOX_NODES: list[dict] = [
         "gpu": "NVIDIA GB10",
         "ram": "128 GB",
         "storage": "4 TB",
-        "note": ("Declared in the fox-services pool with operator-declared "
-                 "hardware. No probe endpoint is configured, so status stays "
-                 "unprobed until FOX_NODE_AXIOM_DGX_HOST is set."),
+        "note": ("This host. Runs a fox-services gateway, addressed by its "
+                 "Tailscale MagicDNS name (axiom-dgx). Hardware declared by the "
+                 "operator."),
     },
     {
         "id": "harishs-macbook-pro",
         "name": "Harishs-MacBook-Pro",
         "role": "Developer workstation — local fallback gateway",
-        "host": os.environ.get("FOX_NODE_MAC_HOST") or _fb_host,
+        "host": (os.environ.get("FOX_NODE_MAC_HOST") or _fb_host
+                 or "harishs-macbook-pro-1"),
         "port": int(os.environ.get("FOX_NODE_MAC_PORT") or _fb_port or 8210),
         "probe": "gateway",
         "trust_boundary": TRUST_LOCAL,
@@ -100,10 +101,11 @@ FOX_NODES: list[dict] = [
         "gpu": "Apple M2 Max",
         "ram": "96 GB",
         "storage": "4 TB",
-        "note": ("Local gateway for offline development, outside the managed "
-                 "perimeter, so it may only carry public/synthetic data. "
-                 "Hardware declared by the operator; probe target derives from "
-                 "LLM_FALLBACK_URL when set."),
+        "note": ("Local developer workstation, outside the managed perimeter, "
+                 "so it may only carry public/synthetic data. Addressed by its "
+                 "Tailscale MagicDNS name (harishs-macbook-pro-1); the gateway "
+                 "probe reports whatever that host's :8210 serves rather than "
+                 "assuming fox-services."),
     },
 ]
 
