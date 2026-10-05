@@ -163,6 +163,15 @@ def on_start():
                 Investigation.id == r.investigation_id).first()
             if inv and inv.status == "running":
                 inv.status = "ready"
+        # Explanations run on bare threads too (launch_explanation), so a
+        # restart mid-answer leaves the row `running` with no worker to ever
+        # finish it -- and the UI polls it forever. There is no queue entry to
+        # resume, so mark it interrupted; the reader can re-ask.
+        for e in db.query(Explanation).filter(Explanation.status == "running").all():
+            e.status = "error"
+            e.error = "interrupted by server restart"
+            e.finished_at = datetime.now(timezone.utc)
+            db.add(e)
         db.commit()
     finally:
         db.close()
