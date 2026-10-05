@@ -7,13 +7,12 @@ services:
     environment:
       # LLM inference routes to the fox-services gateway over Tailscale. All
       # nodes are on the tailnet, so MagicDNS names are used rather than a LAN
-      # IP that only resolves on one segment: axiom-dgx is this host's own
-      # gateway (primary), axiom-1 the 2x RTX 5080 peer (fallback). The chain
-      # is only walked when the primary raises, so a healthy primary is always
-      # the one that serves.
+      # IP that only resolves on one segment: axiom-1 (the 2x RTX 5080 peer)
+      # is primary, axiom-dgx (this host) the fallback. The chain is only
+      # walked when the primary raises, so a healthy axiom-1 always serves.
       # Direct web fetches go through the local broker's OpenShell sandbox.
-      - LLM_BASE_URL=${LLM_BASE_URL:-http://axiom-dgx.tailb61a66.ts.net:8210/v1}
-      - LLM_FALLBACK_URL=${LLM_FALLBACK_URL:-http://axiom-1.tailb61a66.ts.net:8210/v1}
+      - LLM_BASE_URL=${LLM_BASE_URL:-http://axiom-1.tailb61a66.ts.net:8210/v1}
+      - LLM_FALLBACK_URL=${LLM_FALLBACK_URL:-http://axiom-dgx.tailb61a66.ts.net:8210/v1}
       - LLM_MODEL=${LLM_MODEL:-qwen3.8:27b}
       - LLM_FALLBACK_MODEL=${LLM_FALLBACK_MODEL:-qwen3.8:27b}
       - LLM_TIMEOUT_S=${LLM_TIMEOUT_S:-180}
