@@ -906,7 +906,18 @@ _MODEL_QUERY_TERMS = frozenset(
      "classifier", "regressor", "detector", "embedding", "embeddings",
      "checkpoint", "weights", "fine-tun", "pre-train", "pretrain",
      "distill", "diffusion", "tabpfn", "tabnet", "bert", "gpt", "llama",
-     "mistral", "xgboost", "lightgbm", "catboost", "whisper"))
+     "mistral", "xgboost", "lightgbm", "catboost", "whisper",
+     # Architecture names are model signals too. Without these a subject that
+     # names its architecture ("Temporal Graph Neural networks", "autoregressive
+     # auto encoder") but never the word "model" fell to the product path and
+     # was assessed as an LLM usage instead of a model. Whole-word matching
+     # keeps the short acronyms honest ("gru" cannot fire inside "grumpy").
+     "neural network", "neural networks", "neural net", "deep neural",
+     "deep learning", "graph neural", "gnn", "graph network", "temporal graph",
+     "autoencoder", "auto-encoder", "auto encoder", "variational autoencoder",
+     "vae", "encoder-decoder", "encoder decoder", "autoregressive",
+     "recurrent neural", "convolutional neural", "cnn", "rnn", "lstm", "gru",
+     "generative adversarial", "diffusion model"))
 # "model" inside these phrases is not a machine-learning model.
 _MODEL_QUERY_EXCLUSIONS = (
     re.compile(r"threat[\s-]?models?\b"),
@@ -938,6 +949,13 @@ _MODEL_ARCH_TERMS: tuple[tuple[str, str], ...] = (
     ("graph neural", "graph neural network"), ("gnn", "graph neural network"),
     ("tabular network", "tabular neural network"),
     ("mlp", "multilayer perceptron"),
+    ("neural network", "neural network"),
+    ("autoencoder", "autoencoder"), ("auto-encoder", "autoencoder"),
+    ("auto encoder", "autoencoder"), ("vae", "autoencoder"),
+    ("variational autoencoder", "autoencoder"),
+    ("encoder-decoder", "encoder-decoder"), ("encoder decoder", "encoder-decoder"),
+    ("autoregressive", "autoregressive"),
+    ("generative adversarial", "generative adversarial network"),
 )
 _MODEL_DATA_TERMS: tuple[tuple[str, str], ...] = (
     ("tabular", "tabular records"), ("spreadsheet", "tabular records"),

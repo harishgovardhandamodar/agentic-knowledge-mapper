@@ -53,6 +53,25 @@ class TestProfileModelSubject(unittest.TestCase):
                                       ["chatbot"])
         self.assertFalse(p["is_model_query"])
 
+    def test_architecture_named_subject_is_a_model_query(self):
+        # A subject that names its architecture but never the word "model"
+        # must still route to the model path. "Temporal Graph Neural networks
+        # ... autoregressive auto encoder" was assessed as an LLM usage because
+        # none of those phrases were model signals.
+        p = sec.profile_model_subject(
+            "Temporal Graph Neural networks too be used in the context of "
+            "Autoregressive auto encoder network for synthetic data gene",
+            "synthetic data generation in financial messages", [])
+        self.assertTrue(p["is_model_query"])
+        self.assertIn("graph neural network", p["architectures"])
+        self.assertIn("autoencoder", p["architectures"])
+
+    def test_a_plain_network_is_not_a_model_query(self):
+        # Guard against over-broad matching: a payment network is not a model.
+        p = sec.profile_model_subject("SWIFT network",
+                                      "settlement messaging over the wire", [])
+        self.assertFalse(p["is_model_query"])
+
     def test_vague_brief_yields_unknowns_not_guesses(self):
         p = sec.profile_model_subject("Q3 review", "look at the numbers", [])
         self.assertFalse(p["is_model_query"])
