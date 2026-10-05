@@ -68,5 +68,26 @@ class TestLenientJson(unittest.TestCase):
             _parse_json_lenient("")
 
 
+class PostErrorCase(unittest.TestCase):
+    def test_http_error_surfaces_the_gateway_body(self):
+        # A bare "400 Bad Request" hides whether the fault is the prompt, the
+        # model name, or the gateway routing. The gateway body carries the
+        # reason, so the raised error must include it.
+        from unittest import mock
+        import app.llm as llm
+
+        resp = mock.Mock(
+            status_code=400,
+            text='{"error":{"message":"\\"nomic-embed-text\\" does not support chat"}}')
+        client = mock.MagicMock()
+        client.__enter__.return_value.post.return_value = resp
+        with mock.patch("app.llm.httpx.Client", return_value=client):
+            with self.assertRaises(llm.LLMError) as ctx:
+                llm._post("http://gw:8210/v1", {"model": "x"})
+        msg = str(ctx.exception)
+        self.assertIn("400", msg)
+        self.assertIn("does not support chat", msg)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -90,10 +90,22 @@ def _post(base: str, payload: dict, extra_headers: dict | None = None) -> tuple[
         with httpx.Client(timeout=TIMEOUT_S) as client:
             resp = client.post(url, json=payload,
                                headers={"X-Service-Name": SERVICE_NAME, **(extra_headers or {})})
-            resp.raise_for_status()
-            return resp.json(), dict(resp.headers)
     except Exception as e:
         raise LLMError(f"{url}: {e}")
+    if resp.status_code >= 400:
+        # The gateway body says *why* (unknown model, "does not support chat",
+        # context length); a bare status code turns an upstream routing fault
+        # into a mystery the caller cannot act on. Surface a short excerpt.
+        detail = ""
+        try:
+            detail = " ".join(resp.text.split())[:300]
+        except Exception:
+            pass
+        raise LLMError(f"{url}: HTTP {resp.status_code}{(', ' + detail) if detail else ''}")
+    try:
+        return resp.json(), dict(resp.headers)
+    except Exception as e:
+        raise LLMError(f"{url}: invalid JSON response: {e}")
 
 
 def _prompt_text(messages: list) -> str:
