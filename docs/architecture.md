@@ -4,8 +4,8 @@ How the Agentic Knowledge Mapper fits together: system context, containers,
 components, and the data flow between them.
 
 Related: [agent-loop](agent-loop.md) · [explainer](explainer.md) ·
-[security-agent](security-agent.md) · [data-model](data-model.md) ·
-[frontend](frontend.md) · [operations](operations.md)
+[security-agent](security-agent.md) · [analysis-engine](analysis-engine.md) ·
+[data-model](data-model.md) · [frontend](frontend.md) · [operations](operations.md)
 
 ## System context
 

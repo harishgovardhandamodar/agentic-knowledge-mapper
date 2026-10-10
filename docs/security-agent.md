@@ -9,6 +9,7 @@ to an auditable trace.
 
 Related: [architecture](architecture.md) · [data-model](data-model.md) ·
 [frontend](frontend.md) · [threatpack](threatpack.md) ·
+[analysis-engine](analysis-engine.md) ·
 [../design/controls.md](../design/controls.md)
 
 ## Agent cards
