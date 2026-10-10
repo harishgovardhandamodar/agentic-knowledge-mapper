@@ -2614,6 +2614,20 @@ def review_assurance_evidence(assessment_id: int, artifact_id: int,
         raise HTTPException(422, "review must be accepted or rejected")
     reviewer = (data.reviewer or "").strip() or ledger_api.request_actor(request)
     art.review = review
+    # The row keeps the latest verdict for its existing readers, but every
+    # judgment is also recorded with its author: a second reviewer must not
+    # destroy the first's work, and their disagreement is measurable input,
+    # not a conflict to resolve by last-write-wins.
+    from .models import ArtifactReview as _AR
+    existing = db.query(_AR).filter(
+        _AR.artifact_id == artifact_id, _AR.reviewer == reviewer).first()
+    if existing:
+        existing.verdict = review
+        if data.note:
+            existing.note = data.note
+    else:
+        db.add(_AR(artifact_id=artifact_id, reviewer=reviewer,
+                   verdict=review, note=data.note or None))
     if data.note:
         art.relevance_reason = (art.relevance_reason or "")
         art.description = data.note
@@ -3827,6 +3841,64 @@ def run_assessment_probe(assessment_id: int, data: ProbeRunRequest,
             "attributed_to": data.attribute_to})
     result["efficacy_provenance"] = provenance
     return result
+
+
+@app.get("/api/investigations/{inv_id}/dataset")
+def investigation_dataset(inv_id: int, db: Session = Depends(get_db)):
+    """One investigation as tidy, versioned tables for external analysis.
+
+    Assessments, threats, controls, artifacts and reviews as flat dicts with
+    stable columns, plus a manifest carrying the schema version and a content
+    fingerprint. Re-exporting the same rows yields the same fingerprint, so a
+    paper can cite the dataset by hash. Missing values are null, never
+    defaulted; scores travel with the pack that produced them.
+    """
+    from . import datasets as _ds
+    from .models import ArtifactReview as _AR
+    inv = db.query(Investigation).filter(Investigation.id == inv_id).first()
+    if not inv:
+        raise HTTPException(404, "Investigation not found")
+    assessments = db.query(SecurityAssessment).filter(
+        SecurityAssessment.investigation_id == inv_id).all()
+    artifacts = db.query(Artifact).filter(
+        Artifact.investigation_id == inv_id).all()
+    reviews: dict = {}
+    if artifacts:
+        for r in db.query(_AR).filter(
+                _AR.artifact_id.in_([a.id for a in artifacts])).all():
+            reviews.setdefault(r.artifact_id, []).append({
+                "artifact_id": r.artifact_id, "reviewer": r.reviewer,
+                "verdict": r.verdict, "note": r.note,
+                "created_at": (r.created_at.isoformat()
+                               if r.created_at else None)})
+    return _ds.build_dataset(inv_id, assessments, artifacts, reviews)
+
+
+@app.get("/api/security/assessments/{assessment_id}/reviews/disagreements")
+def assessment_review_disagreements(assessment_id: int,
+                                    db: Session = Depends(get_db)):
+    """Where the reviewers of this assessment's evidence disagree.
+
+    Returns the conflicting artifacts with every reviewer's verdict, plus the
+    three agreement coefficients over rater pairs. A group whose members never
+    judge the same artifact has unmeasured agreement -- reported as such, not
+    as unanimous.
+    """
+    from . import benchmarks as B
+    from .models import ArtifactReview as _AR
+    rec = _assessment_or_404(assessment_id, db)
+    arts = db.query(Artifact).filter(
+        Artifact.assessment_id == rec.id).all()
+    if not arts:
+        arts = db.query(Artifact).filter(
+            Artifact.investigation_id == rec.investigation_id).all()
+    rows = []
+    if arts:
+        for r in db.query(_AR).filter(
+                _AR.artifact_id.in_([a.id for a in arts])).all():
+            rows.append({"artifact_id": r.artifact_id, "reviewer": r.reviewer,
+                         "verdict": r.verdict})
+    return {"assessment_id": rec.id, **B.reviewer_disagreement(rows)}
 
 
 @app.get("/api/security/assessments/{assessment_id}/markdown")

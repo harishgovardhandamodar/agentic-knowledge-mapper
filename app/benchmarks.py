@@ -637,3 +637,80 @@ def render_research_report(*, assessment: dict[str, Any],
     lines.append("*Generated from the measured properties of this assessment; "
                  "the limitations are part of the result, not a disclaimer.*")
     return "\n".join(lines)
+
+
+def reviewer_disagreement(reviews: list[dict[str, Any]]) -> dict[str, Any]:
+    """Where a group of reviewers disagrees, with the agreement to prove it.
+
+    ``reviews`` are ``{"artifact_id", "reviewer", "verdict"}`` rows. Returns
+    the artifacts with conflicting verdicts, per-reviewer agreement with the
+    majority, and the three agreement coefficients over rater pairs -- kappa,
+    Krippendorff's alpha and Gwet's AC1 side by side, because kappa alone
+    understates agreement exactly where verdicts skew accept (which they do:
+    most reviewed artifacts are accepted).
+
+    A group whose members never disagree has no measurable reliability; an
+    empty conflict list with a single reviewer says "unmeasured", not
+    "unanimous".
+    """
+    by_artifact: dict[Any, dict[str, str]] = {}
+    for r in reviews or []:
+        if not isinstance(r, dict) or not r.get("reviewer"):
+            continue
+        by_artifact.setdefault(r.get("artifact_id"), {})[r["reviewer"]] = (
+            r.get("verdict") or r.get("review") or "pending")
+
+    conflicts = []
+    agreements: dict[str, dict[str, int]] = {}
+    pair_rows: list[tuple[str, str]] = []
+    reviewers: set[str] = set()
+    for aid, votes in by_artifact.items():
+        reviewers |= set(votes)
+        vals = sorted(set(votes.values()))
+        # Majority verdict, ties broken toward "accepted" only in the sense
+        # that the row is named; the conflict itself is what matters.
+        majority = max(vals, key=lambda v: (sum(1 for x in votes.values()
+                                                if x == v), v))
+        for who, what in votes.items():
+            slot = agreements.setdefault(who, {"agree": 0, "total": 0})
+            slot["total"] += 1
+            slot["agree"] += 1 if what == majority else 0
+        who = sorted(votes)
+        for i in range(len(who)):
+            for j in range(i + 1, len(who)):
+                pair_rows.append((votes[who[i]], votes[who[j]]))
+        if len(vals) > 1:
+            conflicts.append({
+                "artifact_id": aid,
+                "votes": dict(votes),
+                "n_reviewers": len(votes),
+                "majority": majority,
+            })
+
+    conflicts.sort(key=lambda c: (-c["n_reviewers"], str(c["artifact_id"])))
+    stats = {
+        "n_reviewers": len(reviewers),
+        "reviewers": sorted(reviewers),
+        "n_artifacts_judged": len(by_artifact),
+        "n_conflicts": len(conflicts),
+        "per_reviewer": {
+            who: {"agree_with_majority": (round(v["agree"] / v["total"], 3)
+                                          if v["total"] else None),
+                  "n_judged": v["total"]}
+            for who, v in agreements.items()
+        },
+    }
+    if len(pair_rows) >= 2:
+        stats["kappa"] = cohens_kappa([a for a, _ in pair_rows],
+                                      [b for _, b in pair_rows])
+        stats["krippendorff_alpha"] = krippendorff_alpha(pair_rows)
+        stats["gwet_ac1"] = gwet_ac1(pair_rows)
+    else:
+        # Fewer than two paired judgments: agreement is unmeasured, and the
+        # absence of a number must not read as perfect agreement.
+        stats["kappa"] = None
+        stats["krippendorff_alpha"] = None
+        stats["gwet_ac1"] = None
+        stats["note"] = ("Fewer than two reviewer pairs judged the same "
+                         "artifact; agreement is unmeasured, not perfect.")
+    return {"conflicts": conflicts, "stats": stats}

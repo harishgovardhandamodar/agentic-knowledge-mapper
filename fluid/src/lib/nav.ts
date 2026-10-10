@@ -40,6 +40,7 @@ export const NAV_ITEMS: NavItem[] = [
   { href: '/security', label: 'Security', icon: Shield, hint: 'Threat assessments and residuals', built: true, group: 'analysis' },
   { href: '/calibration', label: 'Calibration', icon: Gauge, hint: 'Score saturation, efficacy provenance, variance budget', built: true, group: 'analysis' },
   { href: '/gaps', label: 'Gaps', icon: Compass, hint: 'Open questions and unasked areas', built: true, group: 'analysis' },
+  { href: '/reviewers', label: 'Reviewers', icon: Users, hint: 'Reviewer agreement and dataset export', built: true, group: 'workspace' },
   { href: '/probes', label: 'Probes', icon: FlaskConical, hint: 'Run adversarial probes and record efficacy trials', built: true, group: 'analysis' },
   { href: '/scenarios', label: 'Scenarios', icon: Network, hint: 'Attack paths derived from control gaps', built: true, group: 'analysis' },
   { href: '/experiments', label: 'Experiments', icon: FlaskConical, hint: 'Planned tests for what is still open', built: true, group: 'analysis' },

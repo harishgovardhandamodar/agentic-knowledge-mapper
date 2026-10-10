@@ -93,6 +93,33 @@ class Artifact(Base):
     investigation = relationship("Investigation", back_populates="artifacts")
 
 
+class ArtifactReview(Base):
+    """One reviewer's verdict on one artifact.
+
+    ``artifacts.review`` holds a single verdict and is overwritten on every
+    review, so two reviewers judging the same artifact destroy each other's
+    work everywhere except the ledger. This table keeps every judgment with
+    its author: disagreement between reviewers is *data* (it feeds the
+    inter-rater statistics), not a conflict to resolve by last-write-wins.
+
+    One row per (artifact, reviewer): a reviewer re-judging updates their own
+    row rather than adding a second, so "who currently believes what" is
+    always answerable. ``artifacts.review`` is maintained as the latest
+    verdict for the readers that predate this table.
+    """
+    __tablename__ = "artifact_reviews"
+
+    id = Column(Integer, primary_key=True, index=True)
+    artifact_id = Column(Integer, ForeignKey("artifacts.id",
+                                             ondelete="CASCADE"),
+                         nullable=False, index=True)
+    reviewer = Column(String(120), nullable=False, index=True)
+    verdict = Column(String(20), nullable=False)  # accepted|rejected
+    note = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=_now)
+    updated_at = Column(DateTime, default=_now, onupdate=_now)
+
+
 class Relationship(Base):
     __tablename__ = "relationships"
 
