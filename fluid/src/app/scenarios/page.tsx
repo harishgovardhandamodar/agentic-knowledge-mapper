@@ -15,6 +15,7 @@ import { SEVERITY_META, severityFromPct } from '@/components/tokens/status';
 import { StatusBadge } from '@/components/ui/status-badge';
 import { ScenarioOriginFilter } from '@/components/charts/scenario-origin-filter';
 import { ScenarioCoverageScatter } from '@/components/charts/scenario-coverage-scatter';
+import { AttackTreeView, type AttackTreeData } from '@/components/charts/attack-tree-view';
 
 const zScenario = z
   .object({
@@ -42,6 +43,34 @@ const zScenarios = z.object({
     floor_capped_rows: z.number(),
   }),
   method: z.object({ id: z.string(), version: z.string() }),
+  note: z.string().optional(),
+});
+
+const zAttackTree = z.object({
+  nodes: z.array(
+    z
+      .object({
+        id: z.string(),
+        title: z.string(),
+        coverage: z.number(),
+        residual: z.number(),
+        floor_capped: z.boolean().optional(),
+      })
+      .passthrough(),
+  ),
+  edges: z
+    .array(
+      z
+        .object({
+          from: z.string(),
+          to: z.string(),
+          uncovered_by: z.array(z.string()),
+          weakest: z.boolean(),
+        })
+        .passthrough(),
+    )
+    .optional(),
+  stats: z.object({ nodes: z.number(), edges: z.number(), max_hops: z.number() }),
   note: z.string().optional(),
 });
 
@@ -78,6 +107,8 @@ export default function ScenariosPage() {
   const [data, setData] = React.useState<z.infer<typeof zScenarios> | null>(null);
   const [loading, setLoading] = React.useState(false);
   const [origin, setOrigin] = React.useState<string>('all');
+  const [tree, setTree] = React.useState<AttackTreeData | null>(null);
+  const [selectedNode, setSelectedNode] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -86,10 +117,13 @@ export default function ScenariosPage() {
       return;
     }
     setLoading(true);
-    getParsed(zScenarios, `/security/assessments/${id}/scenarios`)
+    void getParsed(zScenarios, `/security/assessments/${id}/scenarios`)
       .then((d) => !cancelled && setData(d))
       .catch(() => !cancelled && setData(null))
       .finally(() => !cancelled && setLoading(false));
+    void getParsed(zAttackTree, `/security/assessments/${id}/attack-tree`)
+      .then((d) => !cancelled && setTree({ ...d, edges: d.edges ?? [] }))
+      .catch(() => !cancelled && setTree(null));
     return () => {
       cancelled = true;
     };
@@ -155,6 +189,25 @@ export default function ScenariosPage() {
               <ScenarioCoverageScatter scenarios={data.scenarios} />
             </CardContent>
           </Card>
+
+          {tree && tree.stats.edges > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle>Attack tree</CardTitle>
+                <CardDescription>
+                  Columns are coverage bands: each derived path declines from left to right,
+                  because that decline is the finding. Longest path {tree.stats.max_hops} hops.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <AttackTreeView
+                  data={tree}
+                  selected={selectedNode}
+                  onSelect={setSelectedNode}
+                />
+              </CardContent>
+            </Card>
+          )}
 
           <ScenarioOriginFilter
             byOrigin={data.stats.by_origin}

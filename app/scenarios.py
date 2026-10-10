@@ -57,31 +57,27 @@ def scenario_id(parts: list[str]) -> str:
 
 def uncovered_chains(scoring: dict[str, Any], *,
                      max_chain: int = MAX_CHAIN) -> list[dict[str, Any]]:
-    """Threat pairs whose *composition* is uncovered although neither is alone.
+    """Attack paths whose *composition* is uncovered although no single leg is.
 
-    Two threats compose badly when one supplies a precondition the other
-    exploits, and the control that would break the chain is one that is
-    declared but does not actually cover the exploit leg. Those chains are
-    invisible to per-row scoring by construction.
+    A chain is flagged when two legs disagree about a control by a *material*
+    margin. Set difference alone is too strict, because in this catalogue most
+    controls cover several threats, so two rows almost always share some. The
+    signal is that a control helps the precondition leg but barely touches the
+    exploit leg.
 
-    A chain is flagged when the two rows disagree about a control by a
-    *material* margin -- set difference alone is too strict, because in this
-    catalogue most controls cover several threats, so two rows almost always
-    share some. The signal is that a control helps the precondition leg but
-    barely touches the exploit leg.
+    Chains longer than two are assembled separately by :func:`attack_tree` and
+    merged in here, so ``max_chain`` is a real bound on path length rather than
+    a declared constant.
     """
     rows = _rows(scoring)
-    # How much each control actually contributes to each row: efficacy x the
-    # control's own per-threat weight. This is what makes "covers the
-    # precondition but not the exploit" measurable.
     weights = _control_weights(scoring)
     out: list[dict[str, Any]] = []
+    seen: set[str] = set()
     for a, b in itertools.combinations(rows, 2):
         if a.get("id") == b.get("id"):
             continue
         wa = _row_contribution(a, weights)
         wb = _row_contribution(b, weights)
-        # Controls that materially help one leg and not the other.
         divergent = sorted(
             cid for cid in set(wa) | set(wb)
             if abs(wa.get(cid, 0.0) - wb.get(cid, 0.0)) >= _DIVERGENCE
@@ -96,35 +92,103 @@ def uncovered_chains(scoring: dict[str, Any], *,
             continue  # both legs are fully covered; not a gap
         ww = wa if weak is a else wb
         sw = wb if weak is a else wa
-        # The chain is interesting when the *gap* is on the exploit leg: a
-        # control that carries the precondition but not the exploit.
         only_weak = [cid for cid in divergent if ww.get(cid, 0) - sw.get(cid, 0)
                      <= -_DIVERGENCE]
         if not only_weak:
             continue
-        residual = float(weak.get("residual_score") or 0.0)
-        out.append({
-            "id": scenario_id([str(a.get("id")), str(b.get("id"))]),
-            "origin": ORIGIN_CHAIN,
-            "title": f"{weak.get('id')} reached via {strong.get('id')}",
-            "chain": [strong.get("id"), weak.get("id")],
-            "weakest_link": weak.get("id"),
-            "precondition": strong.get("title") or strong.get("id"),
-            "exploit": weak.get("title") or weak.get("id"),
-            "coverage_of_exploit": round(weak_cov, 1),
-            "residual_score": round(residual, 2),
-            "uncovered_by": sorted(only_weak),
-            "why": (
-                f"{strong.get('id')} is "
-                f"{round(float(strong.get('coverage') or 0), 1)}% covered, but the "
-                f"control(s) {', '.join(sorted(only_weak))} that carry it do not "
-                f"reach {weak.get('id')}, which sits at {round(weak_cov, 1)}%. Each "
-                f"leg scores acceptably; the composition does not."
-            ),
-            "floor_capped": bool(weak.get("floor_capped")),
-        })
+        out.append(_chain_record([strong, weak], only_weak, weights))
+        seen.add(out[-1]["id"])
+
+    if max_chain > 2:
+        for path in _long_chains(rows, weights, max_chain):
+            rec = _chain_record(path, _path_gap(path, weights), weights)
+            if rec["id"] in seen:
+                continue
+            seen.add(rec["id"])
+            out.append(rec)
+
     out.sort(key=lambda s: (-float(s["residual_score"]), s["id"]))
     return out[:24]
+
+
+def _chain_record(legs: list[dict[str, Any]], gap: list[str],
+                  weights: dict[str, dict[str, float]]) -> dict[str, Any]:
+    """Build a scenario record for an ordered path of threat rows."""
+    ids = [str(r.get("id")) for r in legs]
+    weak = min(legs, key=lambda r: float(r.get("coverage") or 0.0))
+    strong = legs[0] if legs and legs[0] is not weak else (legs[-1] if legs else weak)
+    return {
+        "id": scenario_id(ids),
+        "origin": ORIGIN_CHAIN,
+        "title": f"{ids[-1]} reached via {' → '.join(ids[:-1])}"
+        if len(ids) > 2 else f"{weak.get('id')} reached via {strong.get('id')}",
+        "chain": ids,
+        "hops": len(ids),
+        "weakest_link": weak.get("id"),
+        "precondition": strong.get("title") or strong.get("id"),
+        "exploit": weak.get("title") or weak.get("id"),
+        "coverage_of_exploit": round(float(weak.get("coverage") or 0.0), 1),
+        "residual_score": round(float(weak.get("residual_score") or 0.0), 2),
+        "uncovered_by": sorted(gap),
+        "why": (
+            f"{' → '.join(ids)}: the control(s) {', '.join(sorted(gap)) or 'none'} "
+            f"that carry the early legs do not reach {weak.get('id')}, which "
+            f"sits at {round(float(weak.get('coverage') or 0.0), 1)}% coverage. "
+            f"Each leg scores acceptably; the composition does not."
+        ),
+        "floor_capped": bool(weak.get("floor_capped")),
+    }
+
+
+def _path_gap(path: list[dict[str, Any]],
+              weights: dict[str, dict[str, float]]) -> list[str]:
+    """Controls that carry the path's early legs but miss the final one."""
+    if len(path) < 2:
+        return []
+    last = str(path[-1].get("id"))
+    prev = {str(r.get("id")) for r in path[:-1]}
+    gap = []
+    for cid, per_threat in weights.items():
+        on_last = per_threat.get(last, 0.0)
+        on_prev = max((per_threat.get(t, 0.0) for t in prev), default=0.0)
+        if on_prev - on_last >= _DIVERGENCE:
+            gap.append(cid)
+    return sorted(gap)
+
+
+def _long_chains(rows: list[dict[str, Any]],
+                 weights: dict[str, dict[str, float]],
+                 max_chain: int) -> list[list[dict[str, Any]]]:
+    """Enumerate paths of length 3..max_chain that degrade along the way.
+
+    The ordering constraint is what makes this tractable and meaningful: a
+    path is interesting when coverage *falls* as it goes, because each leg is
+    assumed to be handled by the controls for the previous one. Without a
+    monotone decline the enumeration is combinatorial and says nothing.
+    """
+    ordered = sorted(rows, key=lambda r: -float(r.get("coverage") or 0.0))
+    found: list[list[dict[str, Any]]] = []
+    cap = min(max_chain, len(ordered))
+
+    def walk(path: list[dict[str, Any]]) -> None:
+        if len(path) >= cap:
+            return
+        last_cov = float(path[-1].get("coverage") or 0.0)
+        for r in ordered:
+            if any(r.get("id") == p.get("id") for p in path):
+                continue
+            cov = float(r.get("coverage") or 0.0)
+            if cov >= last_cov:
+                continue  # must decline
+            if _path_gap(path + [r], weights):
+                found.append(path + [r])
+                walk(path + [r])
+
+    for r in ordered:
+        walk([r])
+    # Longest paths first: they are the findings a pairwise scan cannot produce.
+    found.sort(key=lambda p: (-len(p), [str(x.get("id")) for x in p]))
+    return found[:12]
 
 
 #: A control's contribution must differ by this much between the two legs
@@ -230,6 +294,46 @@ def crosscutting_gaps(scoring: dict[str, Any]) -> list[dict[str, Any]]:
         })
     out.sort(key=lambda s: (-float(s["residual_score"]), s["id"]))
     return out[:16]
+
+
+def attack_tree(scoring: dict[str, Any], *, limit: int = 24) -> dict[str, Any]:
+    """The uncovered chains as a graph, for rendering as an attack tree.
+
+    Nodes are threat rows, edges are the derived composition paths, and an
+    edge's weight is the coverage the path fails to carry to its target. Kept
+    separate from :func:`scenarios` so a renderer can lay it out without
+    re-deriving anything, and so the graph can be diffed between assessments.
+    """
+    chains = uncovered_chains(scoring, max_chain=MAX_CHAIN)
+    nodes: dict[str, dict[str, Any]] = {}
+    edges: list[dict[str, Any]] = []
+    for ch in chains[:limit]:
+        ids = ch.get("chain") or []
+        for tid in ids:
+            row = next((r for r in _rows(scoring) if r.get("id") == tid), {})
+            nodes.setdefault(str(tid), {
+                "id": str(tid),
+                "title": row.get("title") or str(tid),
+                "coverage": round(float(row.get("coverage") or 0.0), 1),
+                "residual": round(float(row.get("residual_score") or 0.0), 2),
+                "floor_capped": bool(row.get("floor_capped")),
+            })
+        for a, b in zip(ids, ids[1:], strict=False):
+            edges.append({
+                "from": str(a), "to": str(b),
+                "uncovered_by": ch.get("uncovered_by") or [],
+                "weakest": ch.get("weakest_link") == b,
+            })
+    return {
+        "nodes": list(nodes.values()),
+        "edges": edges,
+        "stats": {"nodes": len(nodes), "edges": len(edges),
+                  "max_hops": max((int(c.get("hops") or 2) for c in chains),
+                                  default=0)},
+        "note": ("Edges are derived compositions, not observed attack paths. "
+                 "They say where coverage stops carrying, not that anyone "
+                 "tried it."),
+    }
 
 
 def scenarios(scoring: dict[str, Any], *, limit: int = 40) -> dict[str, Any]:

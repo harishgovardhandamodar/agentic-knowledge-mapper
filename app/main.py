@@ -3759,6 +3759,76 @@ def record_experiment_result(assessment_id: int, experiment_id: str,
                            alpha=data.alpha if data.alpha is not None else 0.05)
 
 
+@app.get("/api/security/assessments/{assessment_id}/attack-tree")
+def get_attack_tree(assessment_id: int, db: Session = Depends(get_db)):
+    """The uncovered chains as a graph, for rendering as an attack tree."""
+    rec = _assessment_or_404(assessment_id, db)
+    scoring = _load_json_safe(getattr(rec, "scoring_json", None))
+    from . import scenarios as _sc
+    return _sc.attack_tree(scoring)
+
+
+@app.get("/api/probes")
+def list_probes():
+    """The probe library: ids, attack classes and descriptions.
+
+    Payloads are not served. A harness whose payloads can be read over HTTP is
+    a harness someone can tune an attack from; selection and reporting do not
+    need them.
+    """
+    from . import probes as _pr
+    return _pr.probe_library()
+
+
+class ProbeRunRequest(BaseModel):
+    """A request to execute one probe against a configured target."""
+    probe_id: str
+    endpoint: str | None = None
+    model: str | None = None
+    trials: int = 1
+    #: Required. Without it the call returns the plan it *would* run.
+    confirm: bool = False
+    #: Record the outcome as an efficacy trial for these controls.
+    attribute_to: list[str] | None = None
+
+
+@app.post("/api/security/assessments/{assessment_id}/probes/run")
+def run_assessment_probe(assessment_id: int, data: ProbeRunRequest,
+                         request: Request, db: Session = Depends(get_db)):
+    """Execute one adversarial probe and record what it measured.
+
+    Refuses to guess a target: the endpoint must be supplied *and* its host
+    must appear in ``PROBE_ALLOWED_HOSTS``. A probe harness that could pick its
+    own target would be a vulnerability, not an instrument.
+
+    Returns the exact interval from ``experiments.score_result`` plus, when the
+    run completed, the updated control-efficacy provenance -- so a completed
+    probe measurably narrows the next assessment's band.
+    """
+    _assessment_or_404(assessment_id, db)  # existence guard
+    from . import probes as _pr
+    allow = [h for h in os.environ.get("PROBE_ALLOWED_HOSTS", "").split(",") if h]
+    result = _pr.run_probe(
+        data.probe_id,
+        target={"endpoint": data.endpoint} if data.endpoint else None,
+        trials=data.trials, model=data.model, confirm=data.confirm,
+        allow_hosts=allow,
+    )
+    provenance: list[dict] = []
+    if data.attribute_to:
+        provenance = _pr.record_probe_as_trial(
+            data.probe_id, result, control_ids=data.attribute_to,
+            source=f"probe {data.probe_id} on assessment {assessment_id}")
+        ledger_api.human_action(request, "probe_executed", {
+            "assessment": assessment_id, "probe": data.probe_id,
+            "status": result.get("status"),
+            "successes": result.get("successes"),
+            "trials": result.get("trials_requested"),
+            "attributed_to": data.attribute_to})
+    result["efficacy_provenance"] = provenance
+    return result
+
+
 @app.get("/api/security/assessments/{assessment_id}/markdown")
 def get_security_markdown(assessment_id: int, db: Session = Depends(get_db)):
     from fastapi.responses import PlainTextResponse

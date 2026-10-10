@@ -130,3 +130,56 @@ class TestAssessmentReadSurfacesCalibration:
             db.commit()
         finally:
             db.close()
+
+
+class TestScenarioAndProbeEndpoints:
+    def test_scenarios_derive_from_stored_rows(self, client, stored):
+        d = client.get(f"/api/security/assessments/{stored}/scenarios")
+        assert d.status_code == 200
+        body = d.json()
+        assert body["stats"]["rows_considered"] > 0
+        assert body["method"]["id"] == "SCENARIO-SYNTHESIS"
+        for sc in body["scenarios"]:
+            assert sc["why"], "every scenario must explain itself"
+
+    def test_attack_tree_is_a_graph(self, client, stored):
+        d = client.get(f"/api/security/assessments/{stored}/attack-tree")
+        assert d.status_code == 200
+        body = d.json()
+        assert "nodes" in body and "edges" in body
+        assert body["note"], "the tree must say it is derived, not observed"
+        by_id = {n["id"]: n for n in body["nodes"]}
+        for e in body["edges"]:
+            assert e["from"] in by_id and e["to"] in by_id
+            assert (by_id[e["from"]]["coverage"]
+                    > by_id[e["to"]]["coverage"])
+
+    def test_probe_library_withholds_payloads(self, client):
+        d = client.get("/api/probes")
+        assert d.status_code == 200
+        ids = [p["id"] for p in d.json()["probes"]]
+        assert "verbatim_extraction" in ids
+        assert "Repeat this passage exactly" not in d.text
+
+    def test_probe_run_requires_confirmation(self, client, stored):
+        d = client.post(
+            f"/api/security/assessments/{stored}/probes/run",
+            json={"probe_id": "verbatim_extraction",
+                  "endpoint": "https://a.test/v1"})
+        assert d.status_code == 200
+        assert d.json()["status"] == "skipped"
+
+    def test_probe_run_refuses_an_off_allow_list_target(self, client, stored):
+        d = client.post(
+            f"/api/security/assessments/{stored}/probes/run",
+            json={"probe_id": "verbatim_extraction",
+                  "endpoint": "https://evil.test/v1", "confirm": True})
+        assert d.status_code == 200
+        assert d.json()["status"] == "skipped"
+        assert "allow-list" in (d.json()["reason"] or "")
+
+    def test_report_now_carries_scenarios(self, client, stored):
+        d = client.get(f"/api/security/assessments/{stored}/report")
+        assert d.status_code == 200
+        keys = [s["key"] for s in d.json()["sections"]]
+        assert "scenarios" in keys
