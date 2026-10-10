@@ -64,6 +64,7 @@ control catalogue, and the assurance closed loop.
 | [docs/explainer.md](docs/explainer.md) | Q&A pipeline, graph-first routing, grounding, write guard, threads/quiz/watch |
 | [docs/security-agent.md](docs/security-agent.md) | A2A envelope protocol, fifteen agent cards (catalog + three model paths), threat model, report structure, the assurance pass |
 | [docs/analysis-engine.md](docs/analysis-engine.md) | How a residual becomes a measured number: calibration, scenarios, probes, pre-registered experiments — class, sequence, activity and state diagrams |
+| [docs/group-research.md](docs/group-research.md) | How a group shares the tool: reviewer identity, measured agreement, dataset export, gap lifecycle, scenario-to-probe loop — class, sequence, activity and state diagrams |
 | [docs/threatpack.md](docs/threatpack.md) | The versioned scoring catalog: 12 threats, 15 controls, exposure tiers, evalkit |
 | [docs/agentic-manager.md](docs/agentic-manager.md) | Command parsing, fan-out, timeline, summary compilation, nesting |
 | [docs/standards-coverage.md](docs/standards-coverage.md) | 34 frameworks × 10 pillars, score matrix, Findings grading, dashboard |
