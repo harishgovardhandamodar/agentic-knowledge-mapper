@@ -9,17 +9,24 @@ Kept out of ``app/models.py`` because the ledger has a different shape from the
 domain models (no investigation FK, string-keyed run ids, hash columns). It is
 still registered on the same ``Base`` metadata, so ``init_db`` creates it.
 """
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
-from sqlalchemy import (Column, DateTime, ForeignKey, Integer, String, Text,
-                        UniqueConstraint)
+from sqlalchemy import (
+    Column,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import relationship
 
 from .database import Base
 
 
 def _now():
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 class LedgerRun(Base):

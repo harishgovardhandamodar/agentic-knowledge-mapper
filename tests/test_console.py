@@ -14,7 +14,11 @@ os.environ["AKM_DATABASE_URL"] = os.environ.get("AKM_TEST_DB") or (
 from app import database as _db  # noqa: E402
 from app import model_eval as me  # noqa: E402
 from app.database import Base, SessionLocal  # noqa: E402
-from app.models import Investigation, SecurityAssessment, Artifact, Initiative  # noqa: E402
+from app.models import (  # noqa: E402
+    Artifact,
+    Investigation,
+    SecurityAssessment,
+)
 
 _db.init_db()
 
@@ -42,6 +46,7 @@ class ConsoleCase(unittest.TestCase):
         Base.metadata.create_all(_db.engine)
         self.db = SessionLocal()
         from fastapi.testclient import TestClient
+
         from app.main import app
         self.client = TestClient(app)
         self.client.__enter__()

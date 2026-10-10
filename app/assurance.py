@@ -45,7 +45,9 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Any, Iterable, Optional
+from collections.abc import Iterable
+from datetime import UTC
+from typing import Any
 
 from . import security as sec
 
@@ -359,7 +361,7 @@ def artifact_provenance(artifact: Any) -> dict[str, Any]:
     }
 
 
-def pending_evidence_weight(artifacts: Optional[list[Any]] = None) -> dict[str, Any]:
+def pending_evidence_weight(artifacts: list[Any] | None = None) -> dict[str, Any]:
     """How much of the collected base is still provisional.
 
     Read by the executive summary so a reader knows what share of the score
@@ -390,7 +392,7 @@ def pending_evidence_weight(artifacts: Optional[list[Any]] = None) -> dict[str, 
     }
 
 
-def review_queue(artifacts: Optional[list[Any]] = None, *,
+def review_queue(artifacts: list[Any] | None = None, *,
                  now: Any = None, timeout_days: int = 14,
                  high_relevance: float = MIN_ACCEPTED_RELEVANCE,
                  ) -> dict[str, Any]:
@@ -402,16 +404,16 @@ def review_queue(artifacts: Optional[list[Any]] = None, *,
     high-relevance and unflagged, reject when it drifted or is off-brief) so
     the backlog cannot grow unbounded without a decision.
     """
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime
 
-    ref = now or datetime.now(timezone.utc)
+    ref = now or datetime.now(UTC)
     if isinstance(ref, str):
         try:
             ref = datetime.fromisoformat(ref.replace("Z", "+00:00"))
         except Exception:
-            ref = datetime.now(timezone.utc)
+            ref = datetime.now(UTC)
     if ref.tzinfo is None:
-        ref = ref.replace(tzinfo=timezone.utc)
+        ref = ref.replace(tzinfo=UTC)
 
     items: list[dict[str, Any]] = []
     overdue = 0
@@ -425,7 +427,7 @@ def review_queue(artifacts: Optional[list[Any]] = None, *,
             try:
                 dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
                 if dt.tzinfo is None:
-                    dt = dt.replace(tzinfo=timezone.utc)
+                    dt = dt.replace(tzinfo=UTC)
                 age_days = max(0, (ref - dt).days)
             except Exception:
                 age_days = 0
@@ -467,8 +469,8 @@ def review_queue(artifacts: Optional[list[Any]] = None, *,
 
 # ----------------------------------------------------- control attestation --
 
-def control_attestation(declared_controls: Optional[Iterable[str]] = None,
-                        artifacts: Optional[list[Any]] = None,
+def control_attestation(declared_controls: Iterable[str] | None = None,
+                        artifacts: list[Any] | None = None,
                         ) -> dict[str, Any]:
     """Per-control evidence standing with the provenance behind it.
 
@@ -517,8 +519,8 @@ def verified_control_ids(attestation: dict[str, Any]) -> list[str]:
                   if (a or {}).get("status") == "evidenced")
 
 
-def _threat_evidence_index(threat_ids: Optional[Iterable[str]] = None,
-                           known_exploits: Optional[list[dict]] = None,
+def _threat_evidence_index(threat_ids: Iterable[str] | None = None,
+                           known_exploits: list[dict] | None = None,
                            ) -> dict[str, set[str]]:
     """Map each threat to the artifact ids that speak to it.
 
@@ -552,7 +554,7 @@ def _threat_evidence_index(threat_ids: Optional[Iterable[str]] = None,
 
 # ------------------------------------------------------ architecture gate --
 
-def architecture_gate(checklist: Optional[dict[str, Any]] = None,
+def architecture_gate(checklist: dict[str, Any] | None = None,
                       exposure: str = "confidential_data",
                       ) -> dict[str, Any]:
     """Mandatory data-flow completeness gate.
@@ -643,9 +645,9 @@ def architecture_gate(checklist: Optional[dict[str, Any]] = None,
 
 # ---------------------------------------------------------- evidence gate --
 
-def evidence_gate(threats: Optional[list[dict[str, Any]]] = None,
-                  artifacts: Optional[list[Any]] = None,
-                  known_exploits: Optional[list[dict]] = None,
+def evidence_gate(threats: list[dict[str, Any]] | None = None,
+                  artifacts: list[Any] | None = None,
+                  known_exploits: list[dict] | None = None,
                   *, min_accepted: int = MIN_ACCEPTED_PER_TOP_THREAT,
                   min_relevance: float = MIN_ACCEPTED_RELEVANCE,
                   top_n: int = TOP_THREAT_GATE_N,
@@ -702,8 +704,8 @@ def evidence_gate(threats: Optional[list[dict[str, Any]]] = None,
 
 # ------------------------------------------------------ exposure / radius --
 
-def blast_radius(residual_pct: Optional[float] = None,
-                 inventory: Optional[dict[str, Any]] = None,
+def blast_radius(residual_pct: float | None = None,
+                 inventory: dict[str, Any] | None = None,
                  exposure: str = "confidential_data",
                  ) -> dict[str, Any]:
     """Turn a residual score into an approximate exposure estimate.
@@ -765,9 +767,9 @@ def blast_radius(residual_pct: Optional[float] = None,
 
 # -------------------------------------------------------------- forensics --
 
-def forensics_readiness(artifacts: Optional[list[Any]] = None,
-                        attestation: Optional[dict[str, Any]] = None,
-                        checklist: Optional[dict[str, Any]] = None,
+def forensics_readiness(artifacts: list[Any] | None = None,
+                        attestation: dict[str, Any] | None = None,
+                        checklist: dict[str, Any] | None = None,
                         ) -> dict[str, Any]:
     """Can an incident responder reconstruct an AI interaction end to end?
 
@@ -825,7 +827,7 @@ def forensics_readiness(artifacts: Optional[list[Any]] = None,
 
 # ------------------------------------------------- injection / chain model --
 
-def adversarial_test_evidenced(artifacts: Optional[list[Any]] = None) -> bool:
+def adversarial_test_evidenced(artifacts: list[Any] | None = None) -> bool:
     """Has an accepted primary artifact recorded an adversarial test result?"""
     for a in (artifacts or []):
         if not _accepted(a):
@@ -838,8 +840,8 @@ def adversarial_test_evidenced(artifacts: Optional[list[Any]] = None) -> bool:
     return False
 
 
-def injection_cap(threats: Optional[list[dict[str, Any]]] = None,
-                  artifacts: Optional[list[Any]] = None,
+def injection_cap(threats: list[dict[str, Any]] | None = None,
+                  artifacts: list[Any] | None = None,
                   *, cap: float = INJECTION_COVERAGE_CAP,
                   ) -> dict[str, Any]:
     """Cap prompt-injection coverage at ``cap`` unless an adversarial test exists.
@@ -868,10 +870,10 @@ def injection_cap(threats: Optional[list[dict[str, Any]]] = None,
     }
 
 
-def detect_chains(threats: Optional[list[dict[str, Any]]] = None,
-                  artifacts: Optional[list[Any]] = None,
+def detect_chains(threats: list[dict[str, Any]] | None = None,
+                  artifacts: list[Any] | None = None,
                   *,
-                  full_metadata_context: Optional[bool] = None,
+                  full_metadata_context: bool | None = None,
                   ) -> list[dict[str, Any]]:
     """Model KE-01 -> KE-06 as one composite path, not two independent threats.
 
@@ -911,8 +913,8 @@ def detect_chains(threats: Optional[list[dict[str, Any]]] = None,
 
 # ---------------------------------------------------------- decision frame --
 
-def decision_frame(*, verified_residual_pct: Optional[float],
-                   declared_residual_pct: Optional[float],
+def decision_frame(*, verified_residual_pct: float | None,
+                   declared_residual_pct: float | None,
                    gate: dict[str, Any],
                    ev_gate: dict[str, Any],
                    forensics: dict[str, Any],
@@ -1017,9 +1019,9 @@ def decision_frame(*, verified_residual_pct: Optional[float],
 
 # ---------------------------------------------------- vendor questionnaire --
 
-def vendor_questionnaire(gate: Optional[dict[str, Any]] = None,
-                         forensics: Optional[dict[str, Any]] = None,
-                         chains: Optional[list[dict[str, Any]]] = None,
+def vendor_questionnaire(gate: dict[str, Any] | None = None,
+                         forensics: dict[str, Any] | None = None,
+                         chains: list[dict[str, Any]] | None = None,
                          ) -> dict[str, Any]:
     """Turn unresolved architecture items into a sendable artefact.
 
@@ -1104,13 +1106,13 @@ def _questionnaire_markdown(items: list[dict[str, Any]]) -> str:
 # ------------------------------------------------------------ entry point --
 
 def assess(*, exposure: str, inherent_threats: list[dict[str, Any]],
-           declared_controls: Optional[Iterable[str]] = None,
-           applicability: Optional[dict[str, float]] = None,
-           artifacts: Optional[list[Any]] = None,
-           architecture_checklist: Optional[dict[str, Any]] = None,
-           exposure_inventory: Optional[dict[str, Any]] = None,
-           known_exploits: Optional[list[dict]] = None,
-           full_metadata_context: Optional[bool] = None,
+           declared_controls: Iterable[str] | None = None,
+           applicability: dict[str, float] | None = None,
+           artifacts: list[Any] | None = None,
+           architecture_checklist: dict[str, Any] | None = None,
+           exposure_inventory: dict[str, Any] | None = None,
+           known_exploits: list[dict] | None = None,
+           full_metadata_context: bool | None = None,
            score_fn=None) -> dict[str, Any]:
     """The full assurance pass over one threat set. Pure; no DB, no LLM.
 
@@ -1275,8 +1277,8 @@ def assess(*, exposure: str, inherent_threats: list[dict[str, Any]],
     }
 
 
-def pack_supersession(threat_version: Optional[str] = None,
-                      threat_fp: Optional[str] = None) -> dict[str, Any]:
+def pack_supersession(threat_version: str | None = None,
+                      threat_fp: str | None = None) -> dict[str, Any]:
     """Has a newer threat pack shipped since this row was scored?
 
     Reported, never acted on: re-scoring an assessment somebody already signed
@@ -1308,7 +1310,7 @@ def pack_supersession(threat_version: Optional[str] = None,
                 "recommendation": f"Pack comparison unavailable: {exc}"}
 
 
-def canonical_register_key(product_family: Optional[str], layer: str,
+def canonical_register_key(product_family: str | None, layer: str,
                            source_ref: str, scope: str = "own") -> str:
     """Stable key for the canonical threat register, per product family.
 

@@ -23,8 +23,8 @@ from unittest import mock
 os.environ["AKM_DATABASE_URL"] = os.environ.get("AKM_TEST_DB") or (
     "sqlite:///" + os.path.join(tempfile.mkdtemp(prefix="akm-model-syn-"), "test.db"))
 
-from app import security as sec  # noqa: E402
 from app import database  # noqa: E402
+from app import security as sec  # noqa: E402
 from app.database import SessionLocal  # noqa: E402
 from app.explainer import investigation_summary  # noqa: E402
 from app.models import Investigation, SecurityAssessment  # noqa: E402

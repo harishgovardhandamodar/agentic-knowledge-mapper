@@ -236,7 +236,7 @@ def assessment_query(assessment: dict[str, Any]) -> tuple[list[str], dict[str, i
         # controls per threat row; fall back to those contributor ids.
         for t in threats:
             if isinstance(t, dict):
-                active.extend((t.get("controls") or []))
+                active.extend(t.get("controls") or [])
     controls = [sec_engine._CONTROL_BY_ID[c] for c in dict.fromkeys(active)
                 if c in sec_engine._CONTROL_BY_ID]
     exploits = assessment.get("known_exploits") or []

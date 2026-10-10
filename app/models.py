@@ -1,13 +1,24 @@
-from datetime import datetime, timezone
-from sqlalchemy import (Column, Integer, String, Text, Float, DateTime, ForeignKey,
-                        UniqueConstraint, Index, text)
+from datetime import UTC, datetime
+
+from sqlalchemy import (
+    Column,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.orm import relationship
 
 from .database import Base
 
 
 def _now():
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 class Investigation(Base):

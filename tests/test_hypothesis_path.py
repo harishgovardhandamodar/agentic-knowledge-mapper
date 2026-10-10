@@ -17,7 +17,6 @@ from the other two rather than a third copy of them:
 """
 import json
 import os
-import re
 import tempfile
 import unittest
 from unittest import mock
@@ -27,9 +26,11 @@ from unittest import mock
 os.environ["AKM_DATABASE_URL"] = os.environ.get("AKM_TEST_DB") or (
     "sqlite:///" + os.path.join(tempfile.mkdtemp(prefix="akm-hyp-path-"), "test.db"))
 
-from app import agents  # noqa: E402
+from app import (
+    agents,  # noqa: E402
+    database,  # noqa: E402
+)
 from app import security as sec  # noqa: E402
-from app import database  # noqa: E402
 from app.database import SessionLocal  # noqa: E402
 from app.models import Investigation, SecurityAssessment  # noqa: E402
 
@@ -682,8 +683,9 @@ class TestGating(unittest.TestCase):
             _store(inv.db, inv.id, _run("target", db=inv.db, inv_id=inv.id))
             _store(inv.db, inv.id, _run("adversarial", db=inv.db, inv_id=inv.id))
             rec = self._record(inv, "hypothesis")
-            from app import main as main_mod
             from fastapi.testclient import TestClient
+
+            from app import main as main_mod
             client = TestClient(main_mod.app)
             r = client.post(f"/api/security/assessments/{rec.id}/rescore",
                             json={"persist": False})
@@ -697,8 +699,9 @@ class TestGating(unittest.TestCase):
         a report that looks like an answer to it."""
         inv = _Inv()
         try:
-            from app import main as main_mod
             from fastapi.testclient import TestClient
+
+            from app import main as main_mod
             client = TestClient(main_mod.app)
             with mock.patch.object(main_mod.security_agent,
                                    "launch_security_assessment") as launch:
@@ -765,8 +768,8 @@ class TestBusyCheck(unittest.TestCase):
     """Distinct modes run together; a duplicate of the same one does not."""
 
     def _running(self, inv, mode):
-        from app.models import AgentRun
         from app import security_agent as sa
+        from app.models import AgentRun
         run = AgentRun(investigation_id=inv.id, status="running",
                        trigger="security",
                        plan=json.dumps({"product": NAME, "assessment_mode": mode}))
@@ -816,8 +819,8 @@ class TestBusyCheck(unittest.TestCase):
         # A legacy in-flight run records no mode and no subject text. There is
         # no honest way to tell whether it duplicates this request, so the old
         # blanket block applies rather than guessing it is a different mode.
-        from app.models import AgentRun
         from app import security_agent as sa
+        from app.models import AgentRun
         inv = _Inv()
         try:
             run = AgentRun(investigation_id=inv.id, status="running",

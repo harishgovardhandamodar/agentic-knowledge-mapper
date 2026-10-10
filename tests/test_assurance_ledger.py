@@ -20,6 +20,8 @@ os.environ["AKM_DATABASE_URL"] = os.environ.get("AKM_TEST_DB") or (
     "sqlite:///" + os.path.join(
         tempfile.mkdtemp(prefix="akm-al-"), "test.db"))
 
+from datetime import UTC
+
 from app import assurance_ledger as AL  # noqa: E402
 from app import ledger as lg  # noqa: E402
 from app.database import SessionLocal, init_db  # noqa: E402
@@ -685,8 +687,7 @@ class TestReScoreTriggers(unittest.TestCase):
     basis changed after the assessment was written."""
 
     def setUp(self):
-        from app.models import (AgentRun, Artifact, Investigation,
-                                SecurityAssessment)
+        from app.models import AgentRun, Artifact, Investigation, SecurityAssessment
         init_db()  # idempotent; creates tables after models are imported
         for m in (SecurityAssessment, AgentRun, Artifact, Investigation,
                   lg.LedgerEvent, lg.LedgerRun):
@@ -711,7 +712,8 @@ class TestReScoreTriggers(unittest.TestCase):
         self.db.close()
 
     def _assessment(self, *, gates_open=None, clean=False, days_ago=10):
-        from datetime import datetime, timedelta, timezone
+        from datetime import datetime, timedelta
+
         from app.models import SecurityAssessment
         ens = {"assessed": True, "evidence_confidence": 0.31,
                "evidence_gate": ({"gated_threats": []} if clean
@@ -730,19 +732,20 @@ class TestReScoreTriggers(unittest.TestCase):
             assurance_json=json.dumps(ens),
             scoring_json=json.dumps({"assessment_path": "standard"}),
             markdown="# stub",
-            created_at=datetime.now(timezone.utc) - timedelta(days=days_ago))
+            created_at=datetime.now(UTC) - timedelta(days=days_ago))
         self.db.add(rec)
         self.db.commit()
         self.db.refresh(rec)
         return rec
 
     def _accepted_artifact(self, days_ago=2):
-        from datetime import datetime, timedelta, timezone
+        from datetime import datetime, timedelta
+
         from app.models import Artifact
         art = Artifact(investigation_id=self.inv_id, title="new evidence",
                        artifact_type="research", source="vendor",
                        review="accepted",
-                       created_at=datetime.now(timezone.utc)
+                       created_at=datetime.now(UTC)
                        - timedelta(days=days_ago))
         self.db.add(art)
         self.db.commit()

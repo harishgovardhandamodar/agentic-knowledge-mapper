@@ -12,9 +12,7 @@ Three read shapes, matching the three questions an auditor asks:
 3. *What if it didn't?*  ``/runs/{id}/drift``, ``/contamination`` -- blast radius
 """
 import json
-import sys
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Body, HTTPException, Query, Request
 from fastapi.responses import Response
@@ -123,7 +121,7 @@ def close_run(run_id: str, payload: dict = Body(default={})):
     db = SessionLocal()
     try:
         row = db.get(LedgerRun, run_id)
-        row.status, row.closed_at = status, datetime.now(timezone.utc)
+        row.status, row.closed_at = status, datetime.now(UTC)
         db.commit()
     finally:
         db.close()
@@ -531,7 +529,7 @@ ACTOR_HEADER = "X-AKM-Actor"
 DEFAULT_ACTOR = "user"
 
 
-def session_key(request: Request) -> Optional[str]:
+def session_key(request: Request) -> str | None:
     """The browser's stable key for "this sitting".
 
     Header first, cookie second: the SPA sends the header from JS, but a curl
@@ -639,7 +637,7 @@ async def open_session(request: Request):
 
 
 def human_action(request: Request, action: str,
-                 detail: dict | None = None) -> Optional[str]:
+                 detail: dict | None = None) -> str | None:
     """Record a human action against whatever is current: the open run if the
     handler scoped one, otherwise the session. Fail-open lives in the ledger, so
     product handlers can call this without a try/except."""

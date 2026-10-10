@@ -12,7 +12,7 @@ import httpx
 
 SERVICE_NAME = "agentic-knowledge-mapper"
 
-BASE_URL = os.environ.get("LLM_BASE_URL", "http://192.168.1.173:8210/v1").rstrip("/")
+BASE_URL = os.environ.get("LLM_BASE_URL", "http://axiom.tailb61a66.ts.net:8210/v1").rstrip("/")
 # Optional second backend (e.g. local gateway as fallback when primary is a
 # mesh peer's Ollama). Tried in order after BASE_URL.
 FALLBACK_URL = os.environ.get("LLM_FALLBACK_URL", "").rstrip("/")

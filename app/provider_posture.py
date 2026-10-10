@@ -537,7 +537,7 @@ def contribution_map(register_rows: list[dict[str, Any]],
 
 def contribution_mermaid(cmap: dict[str, Any], provider: str = "lab") -> str:
     """Indirect/direct diagram for the synthesis artifact. Text, not a claim."""
-    L = ["graph LR", f'    ORG["organisation"]']
+    L = ["graph LR", '    ORG["organisation"]']
     for e in (cmap.get("direct") or []) + (cmap.get("indirect") or []):
         node = e["id"].replace("-", "_")
         style = "" if e["status"] == "active" else ":::possible"

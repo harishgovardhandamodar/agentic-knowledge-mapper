@@ -3,28 +3,34 @@ illustrated explanation (sections + images + key points + sources).
 
 Runs in a background thread; the GUI polls the Explanation record.
 """
+import contextvars
+import io
 import json
 import os
 import re
-import contextvars
-import io
 import threading
 import time
 import traceback
 import urllib.parse
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime
 
 import httpx
 from bs4 import BeautifulSoup
 
+from . import grounding, llm, writeguard
 from .database import SessionLocal
-from .models import (Explanation, Artifact, CorpusPage, Investigation, Relationship,
-                     CveFinding, SecurityAssessment, AgentRun)
-from . import grounding
-from . import writeguard
-from . import llm
-from .search import search_web, UA
+from .models import (
+    AgentRun,
+    Artifact,
+    CorpusPage,
+    CveFinding,
+    Explanation,
+    Investigation,
+    Relationship,
+    SecurityAssessment,
+)
+from .search import UA, search_web
 
 MAX_PAGES = 6
 PAGE_TIMEOUT = 15
@@ -369,8 +375,8 @@ def _pretty_doc_title(url: str, hint: str = "") -> str:
 def _extract_pptx_text(content: bytes, limit_chars: int = TEXT_CAP) -> tuple:
     """Slide text from a .pptx with stdlib only (a pptx is a zip of XML;
     slide copy lives in <a:t> nodes). Returns (text, slide_count)."""
-    import zipfile
     import xml.etree.ElementTree as ET
+    import zipfile
     try:
         slides = []
         with zipfile.ZipFile(io.BytesIO(content)) as z:
@@ -1339,7 +1345,7 @@ def _save_corpus(db, inv_id: int, page: dict) -> None:
         if page.get("cover"):
             data.append({**page["cover"], "hero": True})
         row.images = json.dumps(data)[:8000]
-        row.fetched_at = datetime.now(timezone.utc)
+        row.fetched_at = datetime.now(UTC)
         db.commit()
     except Exception:
         db.rollback()
@@ -1894,7 +1900,7 @@ def investigation_summary(db, inv_id: int) -> dict:
                  f"{flags['rejected']} rejected"
                  f"{'; keywords: ' + inv.keywords if inv.keywords else ''}. "
                  + " ".join(flow_lines)
-                 + (f" Recent answers: "
+                 + (" Recent answers: "
                     + " | ".join((e.question or '')[:90] for e in exps) + "."
                     if exps else ""))
         counts["assessments"] = len(model_synthesis["flows"])
@@ -1965,7 +1971,7 @@ def investigation_summary(db, inv_id: int) -> dict:
         manager_synthesis = None
     return {"investigation": {"id": inv.id, "title": inv.title,
                               "status": inv.status},
-            "generated": datetime.now(timezone.utc).isoformat(),
+            "generated": datetime.now(UTC).isoformat(),
             "executive_summary": synthesis, "synthesis": source,
             "manager_synthesis": manager_synthesis,
             "run_health": run_health,
@@ -2343,7 +2349,7 @@ def run_explainer(exp_id: int, max_pages: int = MAX_PAGES, max_hops: int = 0):
             break
         trace["hops"] = len(hop_list)
         trace["hop_plan"] = hop_list
-        answer["as_of"] = datetime.now(timezone.utc).date().isoformat()
+        answer["as_of"] = datetime.now(UTC).date().isoformat()
         pubmap = {str(p.get("url")): p.get("published") for p in pages
                   if p.get("url") and p.get("published")}
         for s in answer.get("sources") or []:
@@ -2419,7 +2425,7 @@ def run_explainer(exp_id: int, max_pages: int = MAX_PAGES, max_hops: int = 0):
         exp.meta = json.dumps(meta)
         exp.status = "done"
         exp.hops = trace.get("hops", 0)
-        exp.finished_at = datetime.now(timezone.utc)
+        exp.finished_at = datetime.now(UTC)
         db.commit()
     except Exception as e:
         try:
@@ -2427,7 +2433,7 @@ def run_explainer(exp_id: int, max_pages: int = MAX_PAGES, max_hops: int = 0):
             if exp:
                 exp.status = "error"
                 exp.error = f"{e}\n{traceback.format_exc()[-1500:]}"
-                exp.finished_at = datetime.now(timezone.utc)
+                exp.finished_at = datetime.now(UTC)
                 if trace:
                     exp.trace = json.dumps(trace)
                 db.commit()

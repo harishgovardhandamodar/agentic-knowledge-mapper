@@ -10,7 +10,6 @@ os.environ["AKM_DATABASE_URL"] = os.environ.get("AKM_TEST_DB") or (
 
 from app.mermaid_png import collect_sources, render_sources
 
-
 FLOW = ("flowchart TD\n"
         "    A[User] --> B[Assistant]\n"
         "    B --> C[Output]")
@@ -52,6 +51,7 @@ class TestRenderSources(unittest.TestCase):
         # A figure clipped out of its batch is retried alone with the whole
         # page to itself instead of falling back to source text.
         import tempfile
+
         from app import mermaid_png
         a = "flowchart TD\n A-->B"
         b = "sequenceDiagram\n X->>Y: tall"
@@ -83,6 +83,7 @@ class TestRenderSources(unittest.TestCase):
 
     def test_disk_cache_avoids_the_browser(self):
         import tempfile
+
         from app import mermaid_png
         with tempfile.TemporaryDirectory() as tmp:
             key_src = FLOW
@@ -103,8 +104,8 @@ class TestPdfPictures(unittest.TestCase):
           f"```mermaid\n{FLOW}\n```\n")
 
     def test_rendered_figure_prints_as_picture(self):
-        from app import security as sec
         from app import mermaid_png
+        from app import security as sec
         with mock.patch.object(mermaid_png, "render_sources",
                                return_value={FLOW: _fake_png()}):
             pdf = sec.build_pdf(self.MD, title="t")
@@ -119,8 +120,8 @@ class TestPdfPictures(unittest.TestCase):
                         "no embedded image found")
 
     def test_unrendered_figure_keeps_source_fallback(self):
-        from app import security as sec
         from app import mermaid_png
+        from app import security as sec
         with mock.patch.object(mermaid_png, "render_sources", return_value={}):
             pdf = sec.build_pdf(self.MD, title="t")
         import pypdf

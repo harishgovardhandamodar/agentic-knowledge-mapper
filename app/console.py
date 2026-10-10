@@ -7,9 +7,6 @@ shape for the console's persona landings. The classic APIs remain canonical.
 
 from __future__ import annotations
 
-import json
-from typing import Any
-
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
@@ -53,7 +50,6 @@ def console_home(
     privacy_open = [r for r in rows if r.get("layer") == "privacy" and r.get("status") == "open"]
     # provider slice
     try:
-        from . import provider_posture as pp
 
         # count providers with posture
         providers = len({r.get("product_name") for r in rows if r.get("product_name")})

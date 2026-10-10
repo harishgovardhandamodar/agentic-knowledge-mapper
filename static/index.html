@@ -4,6 +4,17 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Agentic Knowledge Mapper</title>
+<script>
+// Classic ⇄ Fluid UI toggle (persisted choice). ?ui=fluid|classic sets it
+// for one load; otherwise a stored "fluid" choice hands off to /fluid/,
+// keeping the deep-link hash (both UIs understand #manager etc.).
+try {
+  var _uiq = new URLSearchParams(location.search).get('ui');
+  if (_uiq === 'fluid') { localStorage.setItem('akm-ui', 'fluid'); }
+  else if (_uiq === 'classic') { localStorage.setItem('akm-ui', 'classic'); }
+  else if (localStorage.getItem('akm-ui') === 'fluid') { location.replace('/fluid/' + location.hash); }
+} catch (e) {}
+</script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/vis-network/9.1.6/standalone/umd/vis-network.min.js"></script>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css">
 <style>
@@ -745,6 +756,24 @@ td.std-threat .std-name { font-weight: 600; display: block; font-size: 11.5px; }
 .gkg-overlay-panel .gkg-e { display: flex; align-items: center; gap: 8px; padding: 5px 0; border-bottom: 1px solid var(--border); font-size: 11.5px; }
 .gkg-overlay-panel .gkg-e:last-child { border-bottom: none; }
 .gkg-overlay-panel .gkg-e a { color: var(--accent); }
+/* ---- global knowledge graph: full-tab viewer ---------------------------
+   Mirrors the design-tab viewer: the whole tab becomes one large canvas so
+   dense portfolios stay navigable. The viewer hosts its own vis-network over
+   the same datasets, so search / filter / theme stay in sync. */
+.gkg-full[hidden] { display: none; }
+.gkg-full { position: fixed; inset: 0; z-index: 800; background: var(--bg); display: flex; flex-direction: column; }
+.gkg-full-bar { display: flex; align-items: center; gap: 8px; padding: 9px 14px; background: var(--bg2);
+  border-bottom: 1px solid var(--border); flex-shrink: 0; flex-wrap: wrap; }
+.gkg-full-title { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 38vw; }
+.gkg-full-count { font-size: 10.5px; color: var(--text2); white-space: nowrap; }
+.gkg-full-tools { margin-left: auto; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.gkg-full-pct { min-width: 46px; text-align: center; font-size: 11.5px; color: var(--text2); font-variant-numeric: tabular-nums; }
+.gkg-full-stage { flex: 1 1 auto; min-height: 0; overflow: hidden; position: relative; background: var(--bg); }
+.gkg-full-canvas { position: absolute; inset: 0; }
+.gkg-full-canvas > div { height: 100% !important; }
+.gkg-full-hint { padding: 6px 14px; font-size: 10.5px; color: var(--text2); border-top: 1px solid var(--border);
+  background: var(--bg2); flex-shrink: 0; }
+.gkg-full-hint kbd { font-family: inherit; background: var(--bg3); border: 1px solid var(--border); border-radius: 4px; padding: 0 5px; }
 
 .std-detail { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 8px; background: var(--bg2); overflow: hidden; }
 .std-detail.dim { opacity: 0.55; }
@@ -948,6 +977,7 @@ body.pane-sec-top-collapsed .sec-topbar-sub { display: none; }
       </select>
       <script>try{const c=localStorage.getItem('console.core')||'fox'; const s=document.getElementById('coreSelectClassic'); if(s) s.value=c;}catch(e){}</script>
       <button onclick="location.href='/console'" class="btn btn-ghost btn-sm" title="Switch to Risk Console"><i class="fas fa-table-columns"></i> Risk Console</button>
+      <button onclick="try{localStorage.setItem('akm-ui','fluid')}catch(e){};location.href='/fluid/'+location.hash" class="btn btn-sm" style="background:linear-gradient(120deg,#2dd4bf,#60a5fa);border:none;color:#06121a;font-weight:700;" title="Switch to the new Fluid UI — choice is remembered"><i class="fas fa-wand-magic-sparkles"></i> Fluid UI</button>
       <button onclick="toggleTheme()" class="btn btn-ghost btn-sm" title="Toggle light/dark"><i id="themeIcon" class="fas fa-moon"></i></button>
       <button onclick="togglePane('top')" class="btn btn-ghost btn-sm" title="Collapse header to give the main panel more room"><i class="fas fa-chevron-up"></i></button>
     </div>
@@ -979,6 +1009,10 @@ body.pane-sec-top-collapsed .sec-topbar-sub { display: none; }
     <button class="app-tab" data-app="design" onclick="switchApp('design')" role="tab">
       <i class="fas fa-compass-drafting"></i> Design &amp; Architecture
       <span class="app-tab-sub">diagrams · data model · privacy</span>
+    </button>
+    <button class="app-tab" onclick="try{localStorage.setItem('akm-ui','fluid')}catch(e){};location.href='/fluid/'+location.hash" role="tab" title="Switch to the new Fluid UI (choice is remembered)" style="position:sticky;right:0;background:var(--bg);box-shadow:-8px 0 12px var(--bg);">
+      <i class="fas fa-wand-magic-sparkles"></i> Fluid UI
+      <span class="app-tab-sub">new · react</span>
     </button>
     <button class="pane-restore-inline" id="topRestore" onclick="togglePane('top')" title="Show header"><i class="fas fa-chevron-down"></i></button>
   </div>
@@ -1549,6 +1583,7 @@ body.pane-sec-top-collapsed .sec-topbar-sub { display: none; }
               <span id="secLeadGraphZoomLvl" class="std-note" style="font-size:11px;min-width:38px;text-align:center;">100%</span>
               <button class="btn btn-ghost btn-sm" onclick="secLeadGraphZoom(0.25)" title="Zoom in"><i class="fas fa-plus"></i></button>
               <button class="btn btn-ghost btn-sm" onclick="secLeadGraphZoomFit()" title="Fit view"><i class="fas fa-expand"></i> Fit</button>
+              <button class="btn btn-ghost btn-sm" onclick="secLeadGraphFullOpen()" title="Open full-tab viewer with zoom (Esc closes)"><i class="fas fa-up-right-and-down-left-from-center"></i> Expand</button>
             </span>
             <button class="btn btn-ghost btn-sm" onclick="secLeadGraphPhysics()" title="Toggle physics"><i class="fas fa-arrows-alt"></i> Physics</button>
             <button class="btn btn-ghost btn-sm" id="secLeadGraphEdgeLabelsBtn" onclick="secLeadGraphToggleEdgeLabels()" title="Show or hide the relation labels on edges"><i class="fas fa-tags"></i> Edge labels</button>
@@ -1570,6 +1605,27 @@ body.pane-sec-top-collapsed .sec-topbar-sub { display: none; }
           <div class="gkg-overlay-panel">
             <div id="secLeadGraphOverlayBody"></div>
           </div>
+        </div>
+        <div class="gkg-full" id="secLeadGraphFull" hidden role="dialog" aria-modal="true" aria-label="Knowledge graph full-tab viewer">
+          <div class="gkg-full-bar">
+            <span class="gkg-full-title"><i class="fas fa-project-diagram" style="color:var(--teal);"></i> Global knowledge graph — full tab</span>
+            <span class="gkg-full-count std-note" id="secLeadGraphFullCount"></span>
+            <div class="gkg-full-tools">
+              <button class="btn btn-ghost btn-sm" onclick="secLeadGraphFullZoomBy(1 / 1.25)" title="Zoom out (−)"><i class="fas fa-minus"></i></button>
+              <button class="btn btn-ghost btn-sm gkg-full-pct" id="secLeadGraphFullPct" onclick="secLeadGraphFullFit()" title="Fit to tab (0)">100%</button>
+              <button class="btn btn-ghost btn-sm" onclick="secLeadGraphFullZoomBy(1.25)" title="Zoom in (+)"><i class="fas fa-plus"></i></button>
+              <button class="btn btn-ghost btn-sm" onclick="secLeadGraphFullNatural()" title="Natural scale (1)">1:1</button>
+              <button class="btn btn-ghost btn-sm" onclick="secLeadGraphFullFit()" title="Fit view (0)"><i class="fas fa-expand"></i> Fit</button>
+              <button class="btn btn-ghost btn-sm" id="secLeadGraphFullPhysicsBtn" onclick="secLeadGraphFullPhysics()" title="Toggle physics"><i class="fas fa-arrows-alt"></i> Physics</button>
+              <button class="btn btn-ghost btn-sm" id="secLeadGraphFullEdgeBtn" onclick="secLeadGraphToggleEdgeLabels()" title="Show or hide the relation labels on edges"><i class="fas fa-tags"></i> Edge labels</button>
+              <button class="btn btn-ghost btn-sm" id="secLeadGraphFullClose" onclick="secLeadGraphFullClose()" title="Close (Esc)"><i class="fas fa-times"></i></button>
+            </div>
+          </div>
+          <div class="gkg-full-stage" id="secLeadGraphFullStage" title="Scroll to zoom · drag to pan · click a node for details">
+            <div class="gkg-full-canvas" id="secLeadGraphFullCanvas"></div>
+            <div id="secLeadGraphFullDetail" class="gkg-detail" hidden></div>
+          </div>
+          <div class="gkg-full-hint">Scroll to zoom · drag to pan · click a node for details · <kbd>+</kbd><kbd>−</kbd> zoom · <kbd>0</kbd> fit · <kbd>1</kbd> natural scale · <kbd>Esc</kbd> close</div>
         </div>
       </div>
     </div>
@@ -4832,6 +4888,7 @@ function switchApp(app) {
   currentApp = app;
   if (app !== 'manager' && mgrRunsTimer) { clearInterval(mgrRunsTimer); mgrRunsTimer = null; }
   if (app !== 'design' && typeof designZoomClose === 'function') designZoomClose();
+  if (app !== 'dashboard' && typeof secLeadGraphFullClose === 'function') secLeadGraphFullClose();
   // The board polls in the background, so leaving the tab has to stop it.
   if (app !== 'dashboard' && typeof secLeadPollStop === 'function') secLeadPollStop();
   document.querySelectorAll('.app-tab').forEach(t => t.classList.toggle('active', t.dataset.app === app));
@@ -8804,6 +8861,8 @@ function mgrRenderRuns(runs) {
         (run.compiled && run.synthesis_artifact_id ? `<button class="btn btn-ghost btn-sm" data-mgr-sumbtn="${run.id}" onclick="mgrToggleSummary(${run.id}, ${run.synthesis_artifact_id})"><i class="fas fa-eye"></i> View summary</button>` : '') +
         `<button class="std-viewbtn${mgrFlowOpen.includes(run.id) ? ' on' : ''}" data-mgr-flowbtn="${run.id}" onclick="mgrToggleFlow(${run.id})">Flow</button>` +
         `<button class="std-viewbtn${mgrReportOpen.includes(run.id) ? ' on' : ''}" data-mgr-reportbtn="${run.id}" onclick="mgrToggleReport(${run.id})" title="Risks, findings, experiments, hypotheses, diagrams + artifact inventory for the whole run"><i class="fas fa-file-lines"></i> Summary report</button>` +
+        `<button class="btn btn-ghost btn-sm" onclick="mgrEditRun(${run.id})" title="Load this run's command and plan into the composer so you can edit it and run again as a new run"><i class="fas fa-pen"></i> Edit &amp; run</button>` +
+        `<button class="btn btn-ghost btn-sm" onclick="mgrRerun(${run.id}, this)" title="Start a new run with the same command, plan and options"><i class="fas fa-rotate-right"></i> Re-run</button>` +
         `<button class="btn btn-primary btn-sm"${canCompile ? '' : ' disabled'} onclick="mgrCompile(${run.id})" title="${canCompile ? 'Synthesize finished children into the summary' : (run.compiled ? 'Already compiled' : 'Waiting for children to finish')}"><i class="fas fa-clipboard-check"></i> Compile summary</button></div>` +
       `<div id="mgrFlow-${run.id}"${mgrFlowOpen.includes(run.id) ? '' : ' hidden'}></div>` +
       `<div id="mgrSummary-${run.id}" hidden></div>` +
@@ -8831,6 +8890,70 @@ async function mgrCompile(id) {
     showNotif(`Summary compiled (artifact #${d.artifact_id})`, 'success');
     mgrLoadRuns();
   } catch (e) { showNotif(`Could not compile: ${e.message}`, 'error'); }
+}
+
+/* Edit & run / Re-run: a finished (or running) run is a reusable plan.
+ * Both create a NEW run — history is never mutated. Edit & run loads the
+ * command and plan into the composer for changes first; Re-run fires the
+ * same command + plan + options immediately.
+ */
+async function mgrFetchRun(id) {
+  const r = await fetch(`${API}/manager/runs/${id}`);
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((d && typeof d.detail === 'string') ? d.detail : `HTTP ${r.status}`);
+  return d;
+}
+
+function mgrPlanFromRun(run) {
+  const topics = (run.topics || []).map(t => {
+    const c = { ...t };
+    delete c.investigation_id;
+    return c;
+  });
+  return {
+    domain: run.domain || '',
+    exposure: run.exposure || 'confidential_data',
+    topics,
+    summary: run.summary || {},
+    parsed_by: 'rerun',
+  };
+}
+
+async function mgrEditRun(id) {
+  try {
+    const run = await mgrFetchRun(id);
+    if (!run.topics || !run.topics.length) throw new Error('that run has no topics to edit');
+    document.getElementById('mgrCommand').value = run.command || '';
+    mgrPlan = mgrPlanFromRun(run);
+    mgrRenderPlan();
+    const opts = run.options || {};
+    const ro = document.getElementById('mgrOptResearch');
+    const ao = document.getElementById('mgrOptAssess');
+    if (ro && opts.research === false) ro.checked = false;
+    if (ao && opts.assessment === false) ao.checked = false;
+    switchApp('manager');
+    document.getElementById('mgrPlanCard').scrollIntoView({ behavior: 'smooth', block: 'center' });
+    showNotif(`Run #${id} loaded below — edit and press Run`, 'success');
+  } catch (e) { showNotif(`Could not load run #${id}: ${e.message}`, 'error'); }
+}
+
+async function mgrRerun(id, btn) {
+  if (btn) btn.disabled = true;
+  try {
+    const run = await mgrFetchRun(id);
+    if (!run.topics || !run.topics.length) throw new Error('that run has no topics to re-run');
+    const options = { research: true, assessment: true, ...(run.options || {}) };
+    if (!options.research && !options.assessment) throw new Error('original run launched neither research nor assessment');
+    const r = await fetch(`${API}/manager/run`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ plan: mgrPlanFromRun(run), options, command: run.command || '' }),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error((d && typeof d.detail === 'string') ? d.detail : `HTTP ${r.status}`);
+    showNotif(`Manager run #${d.id} started from run #${id}`, 'success');
+    mgrLoadRuns();
+  } catch (e) { showNotif(`Could not re-run #${id}: ${e.message}`, 'error'); }
+  if (btn) btn.disabled = false;
 }
 
 /* Mini markdown renderer (no dependency): the synthesis we store uses a
@@ -9625,6 +9748,10 @@ let secLeadGraphSearchTimer = null, secLeadGraphIndex = {},
 // Edge relation labels start visible; the toolbar toggle hides them when a
 // dense graph makes the labels more clutter than signal.
 let secLeadGraphEdgeLabels = true;
+// Physics on/off is tracked here, not read back from the network: this
+// vis-network build has setOptions but no getOptions, so querying the live
+// network throws and breaks the full-tab viewer.
+let secLeadGraphPhysicsOn = true;
 
 // Global scope flips the board from one investigation to the whole portfolio.
 // The backend has always accepted investigation_id=None; the UI refused to
@@ -9658,6 +9785,7 @@ function secLeadSetLayer(layer) {
   document.getElementById('secDashCard').hidden = (secLeadLayer !== 'register');
   document.getElementById('secLeadNodesCard').hidden = (secLeadLayer !== 'nodes');
   document.getElementById('secLeadGraphCard').hidden = (secLeadLayer !== 'graph');
+  if (secLeadLayer !== 'graph' && typeof secLeadGraphFullClose === 'function') secLeadGraphFullClose();
   if (secLeadLayer === 'register') secLoadDashboard(true);
   else if (secLeadLayer === 'nodes') secLeadLoadNodes(true);
   else if (secLeadLayer === 'graph') secLeadLoadGraph(true);
@@ -9953,10 +10081,10 @@ function secLeadRenderGraph(filterIds) {
   secLeadGraphNetwork = new vis.Network(canvas, { nodes: visNodes, edges: visEdges }, {
     nodes: { scaling: { min: 6, max: 40 } },
     edges: { smooth: { type: 'continuous' } },
-    physics: { enabled: true, solver: 'forceAtlas2Based',
+    physics: { enabled: secLeadGraphPhysicsOn, solver: 'forceAtlas2Based',
       forceAtlas2Based: { gravitationalConstant: -50, centralGravity: 0.006, springLength: 160, springConstant: 0.02, damping: 0.4 },
       stabilization: false },
-    interaction: { hover: true, tooltipDelay: 200, hideEdgesOnDrag: true },
+    interaction: { hover: true, tooltipDelay: 200, hideEdgesOnDrag: true, zoomView: true, dragView: true, navigationButtons: false, keyboard: { enabled: false } },
   });
   secLeadGraphNetwork.on('zoom', () => secLeadGraphZoomLvl());
   secLeadGraphNetwork.on('hoverNode', params => { if (!secLeadGraphPinned) secLeadGraphShowDetail(params.node, false); });
@@ -9981,6 +10109,8 @@ function secLeadRenderGraph(filterIds) {
     const m = secLeadGraphMode; secLeadGraphMode = 'off';
     secLeadGraphSetCluster(m);
   } else secLeadGraphCount(0);
+  const fz = document.getElementById('secLeadGraphFull');
+  if (fz && !fz.hidden) secLeadGraphFullRender();
 }
 
 function secLeadGraphDetailHtml(n) {
@@ -10029,6 +10159,8 @@ function secLeadGraphJump(id) {
     try { secLeadGraphNetwork.focus(id, { scale: 1.6, animation: { duration: 400, easingFunction: 'easeInOutQuad' } }); } catch (e) {}
     try { secLeadGraphNetwork.selectNodes([id]); } catch (e) {}
   }
+  const fz = document.getElementById('secLeadGraphFull');
+  if (fz && !fz.hidden) secLeadGraphFullJump(id);
 }
 
 function secLeadGraphOverlayHtml(n) {
@@ -10125,7 +10257,159 @@ function secLeadGraphZoomLvl() {
   if (!el || !secLeadGraphNetwork) return;
   const s = secLeadGraphNetwork.getScale ? secLeadGraphNetwork.getScale() : 1;
   el.textContent = Math.round(s * 100) + '%';
+  secLeadGraphFullLvl(s);
 }
+
+/* ---- global knowledge graph: full-tab viewer ---------------------------
+   Same datasets as the inline graph, own network so the full tab can zoom,
+   pan and focus independently. Search / filter / theme / clusters are
+   re-applied on open, and zoom-level, physics and edge-label state sync. */
+let secLeadGraphFullNet = null, secLeadGraphFullFocus = null;
+
+function secLeadGraphFullOpen() {
+  if (!secLeadGraphData) { showNotif('Load the knowledge graph first', 'warn'); return; }
+  secLeadGraphFullFocus = document.activeElement;
+  document.getElementById('secLeadGraphFull').hidden = false;
+  // Construct on a later frame: vis-network measures its container at build
+  // time, and building synchronously inside a just-unhidden subtree yields a
+  // 0-size canvas that stays blank.
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    try {
+      secLeadGraphFullRender();
+      if (secLeadGraphFullNet) secLeadGraphFullNet.redraw();
+      secLeadGraphFullFit(false);
+    } catch (e) {
+      showNotif('Could not open the full-tab graph: ' + (e.message || e), 'error');
+    }
+  }));
+  document.getElementById('secLeadGraphFullClose').focus();
+}
+
+function secLeadGraphFullClose() {
+  const z = document.getElementById('secLeadGraphFull');
+  if (!z || z.hidden) return;
+  z.hidden = true;
+  if (secLeadGraphFullNet) { try { secLeadGraphFullNet.destroy(); } catch (e) {} secLeadGraphFullNet = null; }
+  const d = document.getElementById('secLeadGraphFullDetail');
+  if (d) d.hidden = true;
+  if (secLeadGraphFullFocus && secLeadGraphFullFocus.focus) secLeadGraphFullFocus.focus();
+  secLeadGraphFullFocus = null;
+}
+
+function secLeadGraphFullRender() {
+  const canvas = document.getElementById('secLeadGraphFullCanvas');
+  const count = document.getElementById('secLeadGraphFullCount');
+  if (!canvas) return;
+  // The inline graph may never have rendered (card was hidden), so there are
+  // no datasets yet: render it first, which refreshes this view via its hook.
+  if (!secLeadGraphNodes || !secLeadGraphEdges) {
+    secLeadRenderGraph(secLeadGraphFilterSet());
+    return;
+  }
+  const isLight = document.documentElement.className === 'light';
+  if (secLeadGraphFullNet) { try { secLeadGraphFullNet.destroy(); } catch (e) {} secLeadGraphFullNet = null; }
+  // The full tab works on copies, not the inline graph's live datasets: each
+  // network keeps per-instance state around the store it is given, so sharing
+  // one store leaves the second canvas empty, and the inline graph rebuilds
+  // its stores on every filter/theme change. Copies also carry x/y over, so
+  // the full tab opens on the same layout with larger labels.
+  let nodes, edges;
+  try {
+    nodes = new vis.DataSet(secLeadGraphNodes.get());
+    edges = new vis.DataSet(secLeadGraphEdges.get());
+    nodes.forEach(n => { nodes.update({ id: n.id, font: nodeFont(isLight, 12) }); });
+  } catch (e) {
+    if (count) count.textContent = 'Could not build the full-tab graph.';
+    showNotif('Could not build the full-tab graph: ' + (e.message || e), 'error');
+    return;
+  }
+  if (!nodes.length) {
+    if (count) count.textContent = 'No nodes match the current filter — clear search / “filter to matches”.';
+    showNotif('No nodes match the current filter', 'warn');
+    return;
+  }
+  secLeadGraphFullNet = new vis.Network(canvas, { nodes, edges }, {
+    nodes: { scaling: { min: 6, max: 40 } },
+    edges: { smooth: { type: 'continuous' } },
+    physics: { enabled: secLeadGraphPhysicsOn,
+      solver: 'forceAtlas2Based',
+      forceAtlas2Based: { gravitationalConstant: -50, centralGravity: 0.006, springLength: 160, springConstant: 0.02, damping: 0.4 },
+      stabilization: false },
+    interaction: { hover: true, tooltipDelay: 200, hideEdgesOnDrag: true, zoomView: true, dragView: true, navigationButtons: false, keyboard: { enabled: false } },
+  });
+  secLeadGraphFullNet.on('zoom', () => secLeadGraphFullLvl());
+  secLeadGraphFullNet.on('click', params => {
+    if (params.nodes.length) { secLeadGraphOpenOverlay(params.nodes[0]); try { secLeadGraphFullNet.selectNodes(params.nodes); } catch (e) {} return; }
+    if (params.edges.length) secLeadGraphOpenEdgeOverlay(params.edges[0]);
+  });
+  const c = secLeadGraphData.counts || {};
+  if (count) count.textContent = `${c.artifacts || 0} artifacts · ${c.investigations || 0} investigations · ${c.relationships || 0} relationships`;
+  const eb = document.getElementById('secLeadGraphFullEdgeBtn');
+  if (eb) eb.classList.toggle('on', secLeadGraphEdgeLabels);
+}
+
+function secLeadGraphFullLvl(scale) {
+  const el = document.getElementById('secLeadGraphFullPct');
+  if (!el) return;
+  let s = scale;
+  if (s === undefined) {
+    if (!secLeadGraphFullNet || !secLeadGraphFullNet.getScale) return;
+    s = secLeadGraphFullNet.getScale();
+  }
+  el.textContent = Math.round(s * 100) + '%';
+}
+
+function secLeadGraphFullZoomBy(factor) {
+  if (!secLeadGraphFullNet) return;
+  const s = secLeadGraphFullNet.getScale ? secLeadGraphFullNet.getScale() : 1;
+  secLeadGraphFullNet.moveTo({ scale: Math.min(8, Math.max(0.1, s * factor)), animation: { duration: 180, easingFunction: 'easeInOutQuad' } });
+  setTimeout(secLeadGraphFullLvl, 200);
+}
+
+function secLeadGraphFullFit(animate = true) {
+  if (!secLeadGraphFullNet) return;
+  try { secLeadGraphFullNet.fit(animate ? { animation: { duration: 320, easingFunction: 'easeInOutQuad' } } : undefined); } catch (e) { try { secLeadGraphFullNet.fit(); } catch (e2) {} }
+  setTimeout(secLeadGraphFullLvl, animate ? 340 : 60);
+}
+
+function secLeadGraphFullNatural() {
+  if (!secLeadGraphFullNet) return;
+  try { secLeadGraphFullNet.moveTo({ scale: 1, animation: { duration: 220, easingFunction: 'easeInOutQuad' } }); } catch (e) {}
+  setTimeout(secLeadGraphFullLvl, 240);
+}
+
+function secLeadGraphFullPhysics() {
+  if (!secLeadGraphFullNet) return;
+  secLeadGraphPhysicsOn = !secLeadGraphPhysicsOn;
+  secLeadGraphFullNet.setOptions({ physics: { enabled: secLeadGraphPhysicsOn } });
+  try { secLeadGraphNetwork.setOptions({ physics: { enabled: secLeadGraphPhysicsOn } }); } catch (e) {}
+}
+
+function secLeadGraphFullJump(id) {
+  if (!secLeadGraphFullNet) return;
+  try { secLeadGraphFullNet.focus(id, { scale: 1.6, animation: { duration: 400, easingFunction: 'easeInOutQuad' } }); } catch (e) {}
+  try { secLeadGraphFullNet.selectNodes([id]); } catch (e) {}
+}
+
+document.addEventListener('keydown', e => {
+  const z = document.getElementById('secLeadGraphFull');
+  if (!z || z.hidden) return;
+  const ov = document.getElementById('secLeadGraphOverlay');
+  if (e.key === 'Escape' && ov && !ov.hidden) return; // overlay closes first
+  if (e.key === 'Escape') { secLeadGraphFullClose(); e.preventDefault(); }
+  else if (e.key === '+' || e.key === '=') { secLeadGraphFullZoomBy(1.25); e.preventDefault(); }
+  else if (e.key === '-' || e.key === '_') { secLeadGraphFullZoomBy(1 / 1.25); e.preventDefault(); }
+  else if (e.key === '0') { secLeadGraphFullFit(); e.preventDefault(); }
+  else if (e.key === '1') { secLeadGraphFullNatural(); e.preventDefault(); }
+});
+
+// A viewport resize leaves the full-tab canvas stale: redraw so it fills the
+// tab again instead of freezing at the old dimensions.
+window.addEventListener('resize', () => {
+  const z = document.getElementById('secLeadGraphFull');
+  if (!z || z.hidden || !secLeadGraphFullNet) return;
+  try { secLeadGraphFullNet.redraw(); } catch (e) {}
+});
 
 function secLeadGraphSearchDebounce(v) {
   clearTimeout(secLeadGraphSearchTimer);
@@ -10268,6 +10552,13 @@ function secLeadGraphTheme() {
     });
   }
   secLeadGraphNetwork.redraw();
+  try { if (secLeadGraphFullNet) secLeadGraphFullNet.redraw(); } catch (e) {}
+  // The full tab renders from copies with baked-in theme colours, so refresh
+  // it while open instead of leaving stale label/edge colours behind.
+  try {
+    const fz = document.getElementById('secLeadGraphFull');
+    if (fz && !fz.hidden && typeof secLeadGraphFullRender === 'function') secLeadGraphFullRender();
+  } catch (e) {}
   if (secLeadGraphMode !== 'off' && secLeadGraphCache[secLeadGraphMode]) {
     const m = secLeadGraphMode;
     secLeadGraphOpenAll();
@@ -10286,8 +10577,9 @@ function secLeadGraphOpenAll() {
 }
 
 function secLeadGraphPhysics() {
-  const on = secLeadGraphNetwork?.getOptions?.()?.physics?.enabled;
-  secLeadGraphNetwork?.setOptions({ physics: { enabled: !on } });
+  secLeadGraphPhysicsOn = !secLeadGraphPhysicsOn;
+  try { secLeadGraphNetwork?.setOptions({ physics: { enabled: secLeadGraphPhysicsOn } }); } catch (e) {}
+  try { secLeadGraphFullNet?.setOptions({ physics: { enabled: secLeadGraphPhysicsOn } }); } catch (e) {}
 }
 function secLeadGraphToggleEdgeLabels() {
   secLeadGraphEdgeLabels = !secLeadGraphEdgeLabels;

@@ -6,7 +6,6 @@ and direct otherwise -- the assessment records which path served each page.
 These tests pin: the C13-C15 catalogue entries, the deterministic policy,
 both fetch paths, and the report posture lines.
 """
-import json
 import os
 import tempfile
 import unittest

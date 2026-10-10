@@ -252,6 +252,7 @@ class TestRegisterRows(PdpCase):
 
     def test_register_tag_filter_finds_posture_rows(self):
         from fastapi.testclient import TestClient
+
         from app.main import app as fastapi_app
         self._assessed()
         client = TestClient(fastapi_app)
@@ -393,7 +394,6 @@ class TestSafetyContext(PdpCase):
 
 class TestIntelSafety(PdpCase):
     def test_new_terms_and_safety_sources_trigger_rereview(self):
-        import datetime as dt
         from app import portfolio as pf
         self._artifact("OpenAI updated privacy policy retention terms",
                        review="accepted", tags="policy")
@@ -450,6 +450,7 @@ class TestEndpoints(PdpCase):
     def setUp(self):
         super().setUp()
         from fastapi.testclient import TestClient  # noqa: E402
+
         from app.main import app as fastapi_app  # noqa: E402
         self.client = TestClient(fastapi_app)
         self.client.__enter__()

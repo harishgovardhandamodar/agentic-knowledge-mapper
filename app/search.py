@@ -4,14 +4,13 @@ Each returns a list of candidate dicts:
   title, url, description, content, source, author, date_published,
   artifact_type, query
 """
-from datetime import datetime, timezone
-from email.utils import parsedate_to_datetime
 import re
 import urllib.parse
 import xml.etree.ElementTree as ET
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 
 import feedparser
-import httpx
 from bs4 import BeautifulSoup
 
 UA = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) agentic-knowledge-mapper/1.0"}
@@ -38,7 +37,7 @@ def _parse_date(value) -> datetime | None:
         return None
     try:
         if isinstance(value, datetime):
-            return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+            return value if value.tzinfo else value.replace(tzinfo=UTC)
         dt = parsedate_to_datetime(str(value))
         return dt
     except Exception:

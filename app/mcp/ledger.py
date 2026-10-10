@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import Any
 
 from .. import ledger as L
-from ..database import SessionLocal
 
 
 def append_event(run_id: str, kind: str, actor: str, data: dict | None = None) -> str:

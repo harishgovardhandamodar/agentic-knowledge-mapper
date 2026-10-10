@@ -14,13 +14,11 @@ The tests that matter most are the ones that would have passed before the fix:
 an approved plan with no approver, and a requester approving their own run.
 """
 import contextlib
-import os
-import tempfile
 import json
 import os
+import tempfile
 import unittest
 from unittest import mock
-
 
 from fastapi.testclient import TestClient  # noqa: E402
 
@@ -29,9 +27,11 @@ from fastapi.testclient import TestClient  # noqa: E402
 os.environ["AKM_DATABASE_URL"] = os.environ.get("AKM_TEST_DB") or (
     "sqlite:///" + os.path.join(tempfile.mkdtemp(prefix="akm-approvals-"), "test.db"))
 
-from app import database  # noqa: E402
-from app import approvals  # noqa: E402
-from app import security_agent  # noqa: E402
+from app import (
+    approvals,  # noqa: E402
+    database,  # noqa: E402
+    security_agent,  # noqa: E402
+)
 from app.database import SessionLocal  # noqa: E402
 from app.models import AgentEvent, AgentRun, Investigation, Job  # noqa: E402
 
@@ -634,6 +634,7 @@ class TestActorIdentity(unittest.TestCase):
         two people apart is the whole job of this check.
         """
         from starlette.requests import Request
+
         from app import ledger_api
 
         def actor_for(headers):

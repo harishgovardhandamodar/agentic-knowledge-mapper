@@ -21,8 +21,8 @@ from __future__ import annotations
 
 import os
 import re
-from datetime import datetime, timezone
-from typing import Any, Optional
+from datetime import UTC, datetime
+from typing import Any
 
 #: Repository root, i.e. the parent of the ``app`` package.
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -101,7 +101,7 @@ def design_dir() -> str:
     return DESIGN_DIR
 
 
-def _entry(doc_id: str) -> Optional[dict[str, str]]:
+def _entry(doc_id: str) -> dict[str, str] | None:
     """Look an id up in the index.
 
     Read from ``_DOCS`` on every call rather than from a dict built at import:
@@ -116,7 +116,7 @@ def _entry(doc_id: str) -> Optional[dict[str, str]]:
 
 
 def _iso(ts: float) -> str:
-    return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
+    return datetime.fromtimestamp(ts, tz=UTC).isoformat()
 
 
 def _resolve(doc_id: str) -> tuple[dict[str, str], str]:

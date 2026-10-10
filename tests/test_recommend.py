@@ -9,8 +9,7 @@ import json
 import os
 import tempfile
 import unittest
-from datetime import datetime, timedelta, timezone
-
+from datetime import UTC, datetime, timedelta
 
 # Pin the database before app.database is imported: a module that omits
 # this can inherit data/akm.db and write test rows into the live store.
@@ -46,7 +45,7 @@ def new_inv(title="frontier model alignment",
 def add_arts(inv_id, specs, days_ago=0):
     db = SessionLocal()
     try:
-        when = datetime.now(timezone.utc) - timedelta(days=days_ago)
+        when = datetime.now(UTC) - timedelta(days=days_ago)
         for i, spec in enumerate(specs):
             title = spec.get("title", f"item {i}")
             a = Artifact(investigation_id=inv_id, title=title,
@@ -184,7 +183,7 @@ class TestStaleBrief(unittest.TestCase):
         db = SessionLocal()
         try:
             row = db.get(Investigation, inv)
-            row.created_at = datetime.now(timezone.utc) - timedelta(days=brief_days)
+            row.created_at = datetime.now(UTC) - timedelta(days=brief_days)
             db.commit()
         finally:
             db.close()
@@ -234,7 +233,7 @@ class TestStaleBrief(unittest.TestCase):
         db = SessionLocal()
         try:
             row = db.get(Investigation, inv)
-            row.created_at = datetime.now(timezone.utc) - timedelta(days=90)
+            row.created_at = datetime.now(UTC) - timedelta(days=90)
             db.commit()
         finally:
             db.close()
@@ -628,6 +627,7 @@ class TestRecommendationsEndpoint(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         from fastapi.testclient import TestClient
+
         from app import main as main_mod
         cls.client = TestClient(main_mod.app)
         cls.n = 0

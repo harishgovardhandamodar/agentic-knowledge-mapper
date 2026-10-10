@@ -13,7 +13,6 @@ Ledger records core: fox vs classic per run.
 from __future__ import annotations
 
 import os
-from typing import Any
 
 from . import swarm as swarm_runtime
 

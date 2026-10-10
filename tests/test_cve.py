@@ -5,12 +5,10 @@ matter how many times collection runs, a failed enrichment still records the
 finding (with unknown standing, never a guess), and the agent run picks CVEs
 up on its own so new investigations do not depend on anyone clicking.
 """
-import json
 import os
 import tempfile
 import unittest
 from unittest import mock
-
 
 # Pin the database before app.database is imported: a module that omits
 # this can inherit data/akm.db and write test rows into the live store.
@@ -21,8 +19,14 @@ from app import agent as agent_mod  # noqa: E402
 from app import cve as cve_mod  # noqa: E402
 from app import database  # noqa: E402
 from app.database import SessionLocal  # noqa: E402
-from app.models import (Artifact, AgentEvent, AgentRun, CveFinding,  # noqa: E402
-                        Investigation, Relationship)
+from app.models import (  # noqa: E402
+    AgentEvent,
+    AgentRun,
+    Artifact,
+    CveFinding,
+    Investigation,
+    Relationship,
+)
 
 database.init_db()
 

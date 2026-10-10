@@ -19,13 +19,24 @@ from unittest import mock
 os.environ["AKM_DATABASE_URL"] = os.environ.get("AKM_TEST_DB") or (
     "sqlite:///" + os.path.join(tempfile.mkdtemp(prefix="akm-dossier-"), "test.db"))
 
-from app import security as sec  # noqa: E402
 from app import database  # noqa: E402
+from app import security as sec  # noqa: E402
 from app.database import SessionLocal  # noqa: E402
-from app.dossier import (investigation_dossier, dossier_markdown,  # noqa: E402
-                         dossier_bundle, artifact_actor, artifact_purpose)
-from app.models import (Investigation, AgentRun, Artifact, Explanation,  # noqa: E402
-                        SecurityAssessment, CveFinding)
+from app.dossier import (  # noqa: E402
+    artifact_actor,
+    artifact_purpose,
+    dossier_bundle,
+    dossier_markdown,
+    investigation_dossier,
+)
+from app.models import (  # noqa: E402
+    AgentRun,
+    Artifact,
+    CveFinding,
+    Explanation,
+    Investigation,
+    SecurityAssessment,
+)
 
 database.init_db()
 
@@ -457,6 +468,7 @@ class TestProvenance(unittest.TestCase):
 class TestEndpoints(unittest.TestCase):
     def setUp(self):
         from fastapi.testclient import TestClient
+
         from app.main import app
         self.client = TestClient(app)
 
@@ -542,6 +554,7 @@ class TestPdfRendersProse(unittest.TestCase):
         except RuntimeError:
             self.skipTest("reportlab not installed")
         import io
+
         import pypdf
         return "\n".join(p.extract_text()
                          for p in pypdf.PdfReader(io.BytesIO(pdf)).pages)
@@ -600,6 +613,7 @@ class TestPdfRendersProse(unittest.TestCase):
             self.skipTest("reportlab not installed")
         import io
         import re as _re
+
         import pypdf
         reader = pypdf.PdfReader(io.BytesIO(pdf))
         limit = 2 * cm + (A4[0] - 2 * 2 * cm)
@@ -803,6 +817,7 @@ class TestDossierBundle(unittest.TestCase):
 
     def _fake_png(self):
         import io as _io
+
         from PIL import Image
         buf = _io.BytesIO()
         Image.new("RGB", (120, 60), (180, 30, 30)).save(buf, format="PNG")
@@ -811,6 +826,7 @@ class TestDossierBundle(unittest.TestCase):
     def test_bundle_has_markdown_pictures_and_fences(self):
         import io as _io
         import zipfile as _zf
+
         from app import mermaid_png
         inv = self._bundled_inv()
         try:
@@ -838,6 +854,7 @@ class TestDossierBundle(unittest.TestCase):
     def test_bundle_without_pictures_is_plain_markdown(self):
         import io as _io
         import zipfile as _zf
+
         from app import mermaid_png
         inv = self._bundled_inv()
         try:
@@ -913,6 +930,7 @@ class TestReportImprovements(unittest.TestCase):
 
     def test_stage_durations_surface_from_events(self):
         from datetime import timedelta
+
         from app.models import AgentEvent
         inv = _Inv()
         try:

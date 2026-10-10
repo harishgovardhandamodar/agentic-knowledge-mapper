@@ -16,9 +16,11 @@ from unittest import mock
 os.environ["AKM_DATABASE_URL"] = os.environ.get("AKM_TEST_DB") or (
     "sqlite:///" + os.path.join(tempfile.mkdtemp(prefix="akm-adv-path-"), "test.db"))
 
-from app import agents  # noqa: E402
+from app import (
+    agents,  # noqa: E402
+    database,  # noqa: E402
+)
 from app import security as sec  # noqa: E402
-from app import database  # noqa: E402
 from app.database import SessionLocal  # noqa: E402
 from app.models import Investigation, SecurityAssessment  # noqa: E402
 
@@ -296,7 +298,6 @@ class TestStandardsSkip(unittest.TestCase):
             db.add(rec)
             db.commit()
             db.refresh(rec)
-            from app import main as main_mod
             from app import standards_matrix as sm
             with mock.patch.object(sm, "load_taxonomy",
                                    return_value={"dimensions": [],

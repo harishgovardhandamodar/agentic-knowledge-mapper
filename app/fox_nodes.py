@@ -14,6 +14,7 @@ says "no probe endpoint configured".
 import json
 import os
 import time
+from datetime import UTC
 from urllib.parse import urlparse
 
 import httpx
@@ -57,7 +58,7 @@ FOX_NODES: list[dict] = [
         "id": "axiom",
         "name": "axiom",
         "role": "LLM gateway + OpenShell broker — primary inference host",
-        "host": os.environ.get("FOX_NODE_AXIOM_HOST", "axiom-1"),
+        "host": os.environ.get("FOX_NODE_AXIOM_HOST", "axiom"),
         "port": int(os.environ.get("FOX_NODE_AXIOM_PORT", "8210")),
         "probe": "broker",
         "trust_boundary": TRUST_INSIDE,
@@ -68,7 +69,7 @@ FOX_NODES: list[dict] = [
         "storage": "2 TB",
         "note": ("Runs the fox-services broker and the LLM gateway; agent tool "
                  "calls and inference go through it. Addressed by its Tailscale "
-                 "MagicDNS name (axiom-1). Hardware declared by the operator."),
+                 "MagicDNS name (axiom). Hardware declared by the operator."),
     },
     {
         "id": "axiom-dgx",
@@ -114,8 +115,8 @@ for _node in FOX_NODES:
 
 
 def _now_iso() -> str:
-    from datetime import datetime, timezone
-    return datetime.now(timezone.utc).isoformat()
+    from datetime import datetime
+    return datetime.now(UTC).isoformat()
 
 
 def _probe_http(host: str | None, port: int | None,

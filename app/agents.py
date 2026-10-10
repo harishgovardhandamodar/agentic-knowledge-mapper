@@ -31,12 +31,10 @@ import json
 import re
 import time
 import uuid
-from datetime import datetime, timezone
-from typing import Any, Optional
+from datetime import UTC, datetime
+from typing import Any
 
-from . import grounding
-from . import ledger
-from . import obs
+from . import grounding, ledger, obs
 
 PROTOCOL = "a2a/1.0"
 
@@ -307,7 +305,7 @@ def get_agent_cards() -> list[dict[str, Any]]:
 # --------------------------------------------------------------- envelopes ---
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def new_task_id(prefix: str = "sec") -> str:
@@ -318,10 +316,10 @@ def new_envelope(
     sender: str,
     recipient: str,
     intent: str,
-    payload: Optional[dict[str, Any]] = None,
-    task_id: Optional[str] = None,
-    trace: Optional[list[dict[str, Any]]] = None,
-    trace_id: Optional[str] = None,
+    payload: dict[str, Any] | None = None,
+    task_id: str | None = None,
+    trace: list[dict[str, Any]] | None = None,
+    trace_id: str | None = None,
     note: str = "",
 ) -> dict[str, Any]:
     env: dict[str, Any] = {
@@ -346,7 +344,7 @@ def reply_envelope(
     request_env: dict[str, Any],
     sender: str,
     intent: str,
-    payload: Optional[dict[str, Any]] = None,
+    payload: dict[str, Any] | None = None,
     note: str = "",
 ) -> dict[str, Any]:
     return new_envelope(
@@ -624,8 +622,8 @@ def risk_intake_handle(env: dict[str, Any], db: Any = None) -> dict[str, Any]:
 
 def risk_triage_handle(env: dict[str, Any], db: Any = None) -> dict[str, Any]:
     """score_priority + cluster_risks + suggest_sla (deterministic)."""
-    from .database import SessionLocal
     from . import risk_scoring as rs
+    from .database import SessionLocal
 
     payload = env.get("payload", {}) or {}
     inv_id = payload.get("investigation_id")
@@ -660,8 +658,8 @@ def risk_triage_handle(env: dict[str, Any], db: Any = None) -> dict[str, Any]:
 
 def risk_treatment_handle(env: dict[str, Any], db: Any = None) -> dict[str, Any]:
     """propose_treatment — extends mitigation-advisor, links controls/experiments."""
-    from .database import SessionLocal
     from . import portfolio as _pf
+    from .database import SessionLocal
 
     payload = env.get("payload", {}) or {}
     inv_id = payload.get("investigation_id")
@@ -686,8 +684,8 @@ def risk_treatment_handle(env: dict[str, Any], db: Any = None) -> dict[str, Any]
 
 def risk_monitor_handle(env: dict[str, Any], db: Any = None) -> dict[str, Any]:
     """detect_stale / drift / attention_queue — deterministic hygiene."""
-    from .database import SessionLocal
     from . import executive as ex
+    from .database import SessionLocal
 
     payload = env.get("payload", {}) or {}
     inv_id = payload.get("investigation_id")
@@ -711,7 +709,7 @@ def risk_monitor_handle(env: dict[str, Any], db: Any = None) -> dict[str, Any]:
                 if item["kind"] not in flags:
                     flags.append(item["kind"])
                 r.monitor_flags_json = json.dumps(flags)
-                r.last_agent_review_at = datetime.now(timezone.utc)
+                r.last_agent_review_at = datetime.now(UTC)
         db.commit()
         return reply_envelope(env, "risk-monitor", "monitor_done", {"attention": len(attn.get("items", [])), "flags_updated": True}, note=f"attention {len(attn.get('items', []))} items")
     finally:
@@ -721,8 +719,8 @@ def risk_monitor_handle(env: dict[str, Any], db: Any = None) -> dict[str, Any]:
 
 def risk_reporter_handle(env: dict[str, Any], db: Any = None) -> dict[str, Any]:
     """draft_brief / digest — structured, persona-aware, no vanity score."""
-    from .database import SessionLocal
     from . import executive as ex
+    from .database import SessionLocal
 
     payload = env.get("payload", {}) or {}
     inv_id = payload.get("investigation_id")
@@ -1932,7 +1930,7 @@ def model_reporter_handle(env: dict[str, Any], db: Any = None) -> dict[str, Any]
 def run_model_a2a_workflow(
     product_name: str,
     use_case: str,
-    focus: Optional[list[str]] = None,
+    focus: list[str] | None = None,
     db: Any = None,
     investigation_id: Any = None,
     exposure_label: str = "",
@@ -3097,7 +3095,6 @@ def hypothesis_verifier_handle(env: dict[str, Any], db: Any = None) -> dict[str,
     "nothing argues against this" is more often a gap in collection than a
     well-supported claim.
     """
-    from . import security as sec
     payload = env.get("payload", {})
     hyps = [h for h in (payload.get("hypotheses") or []) if isinstance(h, dict)]
     evidence = [e for e in (payload.get("evidence") or []) if isinstance(e, dict)]
@@ -3790,7 +3787,7 @@ def model_eval_reporter_handle(env: dict[str, Any],
             for f in pref_findings:
                 A(f"| {f.get('attack_id')} | {f.get('attack_class')} | {f.get('attack_subtype') or '—'} | {f.get('applies_to')} | {float(f.get('confidence', 0)):.0%} |")
             A("")
-        A(f"Mitigations: canaries in preference sets, DP on preference training, feedback disable / no-transcript feedback, data minimization on review queues. Validation via preference-set canary insertion and black-box MI on synthetic preference-style prompts. Honest limits: no attested extraction attempt without authorized testing.")
+        A("Mitigations: canaries in preference sets, DP on preference training, feedback disable / no-transcript feedback, data minimization on review queues. Validation via preference-set canary insertion and black-box MI on synthetic preference-style prompts. Honest limits: no attested extraction attempt without authorized testing.")
         A("")
     A("## W2 — Adoption risk evaluation")
     A("")
@@ -3816,7 +3813,6 @@ def model_eval_reporter_handle(env: dict[str, Any],
             A(f"- {r}")
         A("")
     plan = mitigation.get("plan") or []
-    from . import model_eval as _me
     w3_requested = "mitigation_controls" in (
         meta.get("workflows") or list(_me.WORKFLOWS))
     if w3_requested and not plan:
@@ -4128,7 +4124,7 @@ def run_model_engineering_a2a_workflow(
                       "note": (f"W1 {w1.get('overall_pct')} "
                                f"({w1.get('method')}) · W2 {w2.get('overall_pct')} "
                                f"({w2.get('method')}) · W3 "
-                               f"{len((mitigation.get('plan') or []))} proposed "
+                               f"{len(mitigation.get('plan') or [])} proposed "
                                f"({w3.get('method')})")})
     except Exception as exc:
         trace.append({"agent": "model-eval-orchestrator", "intent": "workflow_error",
@@ -4409,7 +4405,7 @@ def _adversarial_dimension_inputs(scenarios: list[dict[str, Any]],
 def run_model_adversarial_a2a_workflow(
     product_name: str,
     use_case: str,
-    focus: Optional[list[str]] = None,
+    focus: list[str] | None = None,
     db: Any = None,
     investigation_id: Any = None,
     exposure_label: str = "",
@@ -4559,11 +4555,11 @@ _HANDLERS.update(_MODEL_HANDLERS)
 def run_hypothesis_a2a_workflow(
     product_name: str,
     use_case: str,
-    focus: Optional[list[str]] = None,
+    focus: list[str] | None = None,
     db: Any = None,
     investigation_id: Any = None,
-    target_rows: Optional[list[dict[str, Any]]] = None,
-    adversarial_rows: Optional[list[dict[str, Any]]] = None,
+    target_rows: list[dict[str, Any]] | None = None,
+    adversarial_rows: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Hypothesis-synthesis workflow: analyst → collector → verifier →
     scoring (engine) → reporter. Never raises.
@@ -4738,10 +4734,10 @@ def run_security_a2a_workflow(
     overall_pct: float = 0,
     top_k: int = 8,
     exposure: str = "confidential_data",
-    declared_controls: Optional[list[str]] = None,
+    declared_controls: list[str] | None = None,
     score_fn: Any = None,
-    focus: Optional[list[str]] = None,
-    control_plan_override: Optional[dict[str, Any]] = None,
+    focus: list[str] | None = None,
+    control_plan_override: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Orchestrator: control-analyst → collector → intel → writer. Never raises.
 

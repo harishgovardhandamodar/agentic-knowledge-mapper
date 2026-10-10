@@ -2,7 +2,6 @@
 
 Run with:  python3 -m pytest tests/test_payments_eval.py -q
 """
-import json
 import os
 import tempfile
 import unittest
@@ -12,10 +11,13 @@ os.environ["AKM_DATABASE_URL"] = os.environ.get("AKM_TEST_DB") or (
                                 "test.db"))
 
 from app import database as _db  # noqa: E402
-from app.database import Base, SessionLocal  # noqa: E402
-from app.models import (EvaluationCatalog, EvaluationQuestion,  # noqa: E402
-                        EvaluationSection)
 from app import payments_eval as pe  # noqa: E402
+from app.database import Base, SessionLocal  # noqa: E402
+from app.models import (  # noqa: E402
+    EvaluationCatalog,
+    EvaluationQuestion,
+    EvaluationSection,
+)
 
 _db.init_db()
 
@@ -39,7 +41,6 @@ def _make_run(client, actor="tester"):
 
 class TestSeed(unittest.TestCase):
     def _v1_questions(self, db):
-        from sqlalchemy import func
         return (db.query(EvaluationQuestion)
                 .join(EvaluationSection)
                 .filter(EvaluationSection.catalog_id ==
@@ -92,6 +93,7 @@ class PaymentsEvalCase(unittest.TestCase):
         _seed()
         self.db = SessionLocal()
         from fastapi.testclient import TestClient
+
         from app.main import app
         self.client = TestClient(app)
         self.client.__enter__()

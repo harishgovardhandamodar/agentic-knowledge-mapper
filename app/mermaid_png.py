@@ -203,7 +203,7 @@ def _render_batch(binary: str, mermaid_js: str,
         except Exception:
             return got
         pad = PAD_PX * SCALE
-        for box, src in zip(boxes, sources):
+        for box, src in zip(boxes, sources, strict=False):
             try:
                 if not box.get("ok"):
                     continue

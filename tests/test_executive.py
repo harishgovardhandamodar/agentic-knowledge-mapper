@@ -19,10 +19,17 @@ from app import executive as ex  # noqa: E402
 from app import model_eval as me  # noqa: E402
 from app import model_kb as kb  # noqa: E402
 from app.database import Base, SessionLocal, engine  # noqa: E402
-from app.models import (AgentRun, Artifact, CveFinding,  # noqa: E402
-                        DashboardSnapshot, Investigation,
-                        Initiative, Job, RiskEntry, SecurityAssessment)
-
+from app.models import (  # noqa: E402
+    AgentRun,
+    Artifact,
+    CveFinding,
+    DashboardSnapshot,
+    Initiative,
+    Investigation,
+    Job,
+    RiskEntry,
+    SecurityAssessment,
+)
 
 _db.init_db()
 
@@ -438,6 +445,7 @@ class TestDashboardEndpoints(ExecCase):
     def setUp(self):
         super().setUp()
         from fastapi.testclient import TestClient  # noqa: E402
+
         from app.main import app as fastapi_app  # noqa: E402
         self.client = TestClient(fastapi_app)
         self.client.__enter__()

@@ -13,10 +13,10 @@ from unittest import mock
 os.environ["AKM_DATABASE_URL"] = os.environ.get("AKM_TEST_DB") or (
     "sqlite:///" + os.path.join(tempfile.mkdtemp(prefix="akm-versioning-"), "test.db"))
 
-from app import threatpack as tp  # noqa: E402
-from app import model_eval as me  # noqa: E402
 from app import database as _db  # noqa: E402
+from app import model_eval as me  # noqa: E402
 from app import models as _models  # noqa: E402,F401 -- registers tables
+from app import threatpack as tp  # noqa: E402
 
 _db.init_db()
 
@@ -91,7 +91,6 @@ class TestSupersededBadge(unittest.TestCase):
 
     def test_stale_pack_flagged_in_history(self):
         from app.main import list_security_assessments
-        from app.database import SessionLocal
         db, inv_id, rec_id = self._old_pack_inv()
         try:
             items = list_security_assessments(inv_id, db)["items"]
@@ -101,8 +100,8 @@ class TestSupersededBadge(unittest.TestCase):
 
     def test_current_pack_not_badged(self):
         from app import threatpack as tp
-        from app.main import list_security_assessments
         from app.database import SessionLocal
+        from app.main import list_security_assessments
         from app.models import Investigation, SecurityAssessment
         db = SessionLocal()
         try:
@@ -128,6 +127,7 @@ class TestSupersededBadge(unittest.TestCase):
 class TestRescoreNewRow(unittest.TestCase):
     def test_persist_creates_new_row_leaves_old_untouched(self):
         from fastapi.testclient import TestClient
+
         from app import main as main_mod
         from app.database import SessionLocal
         from app.models import SecurityAssessment
@@ -181,8 +181,8 @@ class TestRescoreNewRow(unittest.TestCase):
 
 class TestDeprecation(unittest.TestCase):
     def test_deprecated_control_is_inert_for_new_scores(self):
-        from app import security as sec
         from app import evalkit
+        from app import security as sec
         with mock.patch.dict(sec.DEPRECATED_CONTROLS,
                              {"C01": {"replaced_by": "C02",
                                       "reason": "t"}}):
@@ -257,6 +257,7 @@ class TestDeprecation(unittest.TestCase):
 class TestChangelog(unittest.TestCase):
     def test_endpoint_serves_entries(self):
         from fastapi.testclient import TestClient
+
         from app import main as main_mod
         r = TestClient(main_mod.app).get("/api/packs/changelog")
         self.assertEqual(r.status_code, 200, r.text[:200])
@@ -273,8 +274,8 @@ class TestChangelog(unittest.TestCase):
 
 class TestScorePurity(unittest.TestCase):
     def test_same_inputs_same_numbers(self):
-        from app import security as sec
         from app import evalkit
+        from app import security as sec
         inherent = evalkit._inherent()
         a = sec.score_assessment("confidential_data", inherent,
                                  active_controls=["C01", "C02"])
@@ -283,8 +284,8 @@ class TestScorePurity(unittest.TestCase):
         self.assertEqual(a, b)
 
     def test_inputs_move_numbers(self):
-        from app import security as sec
         from app import evalkit
+        from app import security as sec
         inherent = evalkit._inherent()
         a = sec.score_assessment("confidential_data", inherent,
                                  active_controls=[])
@@ -296,6 +297,7 @@ class TestScorePurity(unittest.TestCase):
 class TestCompareEndpoint(unittest.TestCase):
     def setUp(self):
         from fastapi.testclient import TestClient
+
         from app import main as main_mod
         from app.database import SessionLocal
         from app.models import Investigation, SecurityAssessment

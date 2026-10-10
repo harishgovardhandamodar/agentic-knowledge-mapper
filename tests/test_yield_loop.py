@@ -10,7 +10,6 @@ import os
 import tempfile
 import unittest
 
-
 # Pin the database before app.database is imported: a module that omits
 # this can inherit data/akm.db and write test rows into the live store.
 os.environ["AKM_DATABASE_URL"] = os.environ.get("AKM_TEST_DB") or (
@@ -217,8 +216,9 @@ class TestLoopUsesYield(unittest.TestCase):
             agent_mod.run_investigation_agent(inv, max_items=5, max_rounds=1)
         db = SessionLocal()
         try:
-            from app.models import AgentRun
             import json
+
+            from app.models import AgentRun
             run = (db.query(AgentRun)
                    .filter(AgentRun.investigation_id == inv).first())
             stats = json.loads(run.stats)
@@ -252,6 +252,7 @@ class TestYieldEndpoint(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         from fastapi.testclient import TestClient
+
         from app import main as main_mod
         cls.client = TestClient(main_mod.app)
         cls.n = 0

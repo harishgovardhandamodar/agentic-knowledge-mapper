@@ -11,8 +11,6 @@ AuthZ mirrors the evaluation APIs: a named operator is required, an optional
 
 from __future__ import annotations
 
-from typing import Any, Optional
-
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import Response
 from pydantic import BaseModel
@@ -31,12 +29,12 @@ class DraftRequest(BaseModel):
     domain: str
     target: str = ""
     depth: str = "deep"          # deep | exec
-    axes: Optional[list[str]] = None
+    axes: list[str] | None = None
 
 
 class SeedRequest(BaseModel):
     start_run: bool = False
-    run_target_agent_id: Optional[str] = None
+    run_target_agent_id: str | None = None
     run_title: str = ""
 
 

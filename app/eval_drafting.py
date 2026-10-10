@@ -19,14 +19,17 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy.orm import Session
 
 from . import llm
-from .models import (EvaluationCatalog, EvaluationDraft, EvaluationQuestion,
-                     EvaluationRun, EvaluationSection)
+from .models import (
+    EvaluationCatalog,
+    EvaluationDraft,
+    EvaluationQuestion,
+    EvaluationSection,
+)
 from .payments_eval import create_run
 
 DRAFTING_VERSION = "v1"
@@ -255,8 +258,8 @@ def _fill_pattern(pattern: str, axis: dict[str, str], target: str) -> str:
     if pattern == "recovery":
         return f"How does a user or operator stop, reverse, or dispute an unwanted action initiated by {target or 'the capability'}?"
     if pattern == "worst_case":
-        return (f"What is the maximum blast radius (per user and aggregate) if this capability is "
-                f"fully abused, and what is the accepted residual risk?")
+        return ("What is the maximum blast radius (per user and aggregate) if this capability is "
+                "fully abused, and what is the accepted residual risk?")
     return pattern
 
 

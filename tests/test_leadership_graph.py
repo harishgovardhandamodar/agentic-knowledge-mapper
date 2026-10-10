@@ -5,7 +5,6 @@ but namespaced (``a:`` / ``inv:``) so a global view cannot collide with
 itself, and it carries investigation hub nodes so "what collected what" is
 visible rather than implied by a foreign key.
 """
-import json
 import os
 import tempfile
 import unittest
@@ -15,8 +14,9 @@ os.environ["AKM_DATABASE_URL"] = os.environ.get("AKM_TEST_DB") or (
                                 "akm_test_leadership_graph.db"))
 
 from fastapi.testclient import TestClient
-from app.main import app
+
 from app.database import SessionLocal, init_db
+from app.main import app
 from app.models import Artifact, Investigation, Relationship
 
 

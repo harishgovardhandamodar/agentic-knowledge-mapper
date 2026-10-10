@@ -13,22 +13,17 @@ report-writer), where research-collector searches THIS app's knowledge graph
 evidence.
 """
 import json
-import contextvars
 import re
 import threading
 import traceback
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session
 
-from .database import SessionLocal
-from .models import Investigation, AgentRun, AgentEvent, SecurityAssessment
+from . import approvals, jobqueue, obs, threatpack
 from . import security as sec_engine
-from . import threatpack
-from . import approvals
-from . import jobqueue
-from . import obs
+from .database import SessionLocal
+from .models import AgentEvent, AgentRun, Investigation, SecurityAssessment
 
 #: Job kind for security assessments. The queue is shared, so every enqueue
 #: names its kind and the worker can be pointed at a subset.
@@ -316,7 +311,8 @@ def _known_issues_pass(db, run, params, result) -> dict:
     by contract: a down CVE source never fails the assessment it enriches, and
     a run with no identifiable subject records a skip instead of a search.
     """
-    from . import assurance_ledger as _al, cve as _cve
+    from . import assurance_ledger as _al
+    from . import cve as _cve
     product = result.get("product_name") or params.get("product_name") or ""
     if not product:
         _event(db, run.id, "known_issues",
@@ -476,7 +472,7 @@ def run_security_assessment(run_id: int, params: dict):
                        "on this path (dimension weights / hypotheses instead). "
                        "Review the report instead.")
             else:
-                from .agents import new_envelope, dispatch
+                from .agents import dispatch, new_envelope
                 gate_env = new_envelope(
                     "security-orchestrator", "control-analyst", "analyse_controls",
                     {"product_name": params.get("product_name") or "Target product",
@@ -764,7 +760,7 @@ def run_security_assessment(run_id: int, params: dict):
                     _stands[_f.get("standing", "unknown")] = \
                         _stands.get(_f.get("standing", "unknown"), 0) + 1
                 _event(db, run.id, "map",
-                       f"Provider posture assessed: "
+                       "Provider posture assessed: "
                        + ", ".join(f"{v} {k}" for k, v in
                                    sorted(_stands.items()))
                        + f" across {len(_accepted)} accepted source(s) "
@@ -784,7 +780,8 @@ def run_security_assessment(run_id: int, params: dict):
         # is derived from stored rows and versioned catalogs, never a
         # re-score, so it must never fail the run.
         try:
-            from .agents import new_envelope as _new_env, dispatch as _dispatch
+            from .agents import dispatch as _dispatch
+            from .agents import new_envelope as _new_env
             _adv_res = _dispatch(_new_env(
                 "security-orchestrator", "mitigation-advisor",
                 "advise_portfolio_risks",
@@ -809,7 +806,7 @@ def run_security_assessment(run_id: int, params: dict):
         # expire everything so later reads see fresh state.
         db.expire_all()
         run = db.query(AgentRun).filter(AgentRun.id == run_id).first()
-        finished = datetime.now(timezone.utc)
+        finished = datetime.now(UTC)
         try:
             duration_ms = int((finished - run.started_at).total_seconds()
                               * 1000) if run.started_at else None
@@ -830,7 +827,7 @@ def run_security_assessment(run_id: int, params: dict):
             if run:
                 run.status = "error"
                 run.error = f"{e}\n{traceback.format_exc()[-2000:]}"
-                run.finished_at = datetime.now(timezone.utc)
+                run.finished_at = datetime.now(UTC)
                 # A failed assessment still leaves measurable stats: the pack
                 # it ran against and how long it lived are known even when the
                 # score is not, so the dossier can show cost and provenance
@@ -937,7 +934,7 @@ def resume_security_assessment(run_id: int, *, approved_by: str = "",
             params["approved_control_plan"] = plan
         params["require_approval"] = False
         params["approved_by"] = approvals.normalise_actor(approved_by)
-        params["approved_at"] = datetime.now(timezone.utc).isoformat()
+        params["approved_at"] = datetime.now(UTC).isoformat()
         params["approval_note"] = note[:500]
         # The approval has already happened, so this is a re-queue rather than a
         # new run: the same key keeps a double-click from starting a second one.
@@ -956,7 +953,7 @@ def security_run_busy(db: Session, investigation_id: int,
                       assessment_mode: str = "",
                       product_name: str = "",
                       use_case: str = "",
-                      focus: Optional[list] = None) -> bool:
+                      focus: list | None = None) -> bool:
     """Is a duplicate of THIS assessment already in flight?
 
     Scoped by mode on purpose. A model subject legitimately has three

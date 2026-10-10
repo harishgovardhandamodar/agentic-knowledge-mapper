@@ -8,11 +8,12 @@ import os
 import tempfile
 import unittest
 
-
 # Pin the database before app.database is imported: a module that omits
 # this can inherit data/akm.db and write test rows into the live store.
 os.environ["AKM_DATABASE_URL"] = os.environ.get("AKM_TEST_DB") or (
     "sqlite:///" + os.path.join(tempfile.mkdtemp(prefix="akm-investigations-"), "test.db"))
+
+from datetime import UTC
 
 from app import agent as agent_mod  # noqa: E402
 from app import database  # noqa: E402
@@ -107,10 +108,11 @@ class TestCollectionOverview(unittest.TestCase):
         cls.n = 0
 
     def _seed(self):
-        from datetime import datetime, timezone
-        from app.database import SessionLocal
-        from app.models import Investigation, Artifact, AgentRun
         import json as _json
+        from datetime import datetime
+
+        from app.database import SessionLocal
+        from app.models import AgentRun, Artifact, Investigation
         type(self).n += 1
         db = SessionLocal()
         try:
@@ -129,16 +131,16 @@ class TestCollectionOverview(unittest.TestCase):
                 Artifact(investigation_id=iid, run_id=r1id, title="Agent item",
                          relevance=0.9, relevance_reason="why-1", review="pending",
                          origin="agent",
-                         created_at=datetime(2026, 9, 20, tzinfo=timezone.utc)),
+                         created_at=datetime(2026, 9, 20, tzinfo=UTC)),
                 Artifact(investigation_id=iid, run_id=r2id, title="Sched item",
                          review="accepted", origin="agent",
-                         created_at=datetime(2026, 9, 21, tzinfo=timezone.utc)),
+                         created_at=datetime(2026, 9, 21, tzinfo=UTC)),
                 Artifact(investigation_id=iid, title="Hand item", review="pending",
                          origin="manual",
-                         created_at=datetime(2026, 9, 21, tzinfo=timezone.utc)),
+                         created_at=datetime(2026, 9, 21, tzinfo=UTC)),
                 Artifact(investigation_id=iid, title="Expl item", author="explainer",
                          review="pending", origin="agent",
-                         created_at=datetime(2026, 9, 22, tzinfo=timezone.utc)),
+                         created_at=datetime(2026, 9, 22, tzinfo=UTC)),
             ])
             db.commit()
             return iid

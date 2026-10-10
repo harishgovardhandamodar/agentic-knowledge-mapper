@@ -19,8 +19,12 @@ from app import model_eval as me  # noqa: E402
 from app import model_kb as kb  # noqa: E402
 from app import portfolio as pf  # noqa: E402
 from app.database import Base, SessionLocal, engine  # noqa: E402
-from app.models import (Investigation, Initiative, RiskEntry,  # noqa: E402
-                        SecurityAssessment)
+from app.models import (  # noqa: E402
+    Initiative,
+    Investigation,
+    RiskEntry,
+    SecurityAssessment,
+)
 
 _db.init_db()
 
@@ -412,6 +416,7 @@ class TestPortfolioEndpoints(PortfolioCase):
     def setUp(self):
         super().setUp()
         from fastapi.testclient import TestClient  # noqa: E402
+
         from app.main import app as fastapi_app  # noqa: E402
         self.client = TestClient(fastapi_app)
         self.client.__enter__()

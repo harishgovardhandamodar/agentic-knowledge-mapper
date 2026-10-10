@@ -10,15 +10,16 @@ import re
 import threading
 import traceback
 import urllib.parse
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session
 
-from .database import SessionLocal
-from .models import Investigation, Artifact, Relationship, AgentRun, AgentEvent
 from . import ledger as L
-from . import llm, search as providers
+from . import llm
+from . import search as providers
 from . import yield_ as yld
+from .database import SessionLocal
+from .models import AgentEvent, AgentRun, Artifact, Investigation, Relationship
 
 ANALYZE_BATCH = 5
 KEEP_THRESHOLD = 0.4
@@ -708,7 +709,7 @@ def run_investigation_agent(investigation_id: int, max_items: int = 25,
                      "query_shapes": len(shapes)}
             run.stats = json.dumps(stats)
             run.status = "done"
-            run.finished_at = datetime.now(timezone.utc)
+            run.finished_at = datetime.now(UTC)
             inv.status = "ready"
             db.commit()
             _event(db, run.id, "summary",
@@ -719,7 +720,7 @@ def run_investigation_agent(investigation_id: int, max_items: int = 25,
         try:
             run.status = "error"
             run.error = f"{e}\n{traceback.format_exc()[-2000:]}"
-            run.finished_at = datetime.now(timezone.utc)
+            run.finished_at = datetime.now(UTC)
             inv = db.query(Investigation).filter(
                 Investigation.id == investigation_id).first()
             if inv:
@@ -803,7 +804,7 @@ def requeue_interrupted_gaps(db, launcher=None) -> list[int]:
         fresh.append(new_id)
         r.status = "error"
         r.error = (f"interrupted by server restart; re-queued as run #{new_id}")
-        r.finished_at = datetime.now(timezone.utc)
+        r.finished_at = datetime.now(UTC)
         db.add(AgentEvent(run_id=r.id, stage="summary",
                           message=f"Run interrupted by server restart; "
                                   f"re-queued as run #{new_id}."))

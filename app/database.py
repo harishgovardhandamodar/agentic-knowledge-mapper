@@ -1,6 +1,7 @@
-from sqlalchemy import create_engine, event, text
-from sqlalchemy.orm import sessionmaker, DeclarativeBase
 import os
+
+from sqlalchemy import create_engine, event, text
+from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
 os.makedirs(DATA_DIR, exist_ok=True)

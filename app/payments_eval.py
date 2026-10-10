@@ -23,13 +23,18 @@ records each action on the audit ledger.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy.orm import Session
 
-from .models import (EvaluationAnswer, EvaluationCatalog, EvaluationQuestion,
-                     EvaluationRun, EvaluationSection)
+from .models import (
+    EvaluationAnswer,
+    EvaluationCatalog,
+    EvaluationQuestion,
+    EvaluationRun,
+    EvaluationSection,
+)
 
 CATALOG_VERSION = "v1"
 CATALOG_NAME = "Agentic Payments Security & Privacy Evaluation"
@@ -350,7 +355,7 @@ def upsert_answer(db: Session, run: EvaluationRun, question_id: int, *,
                                   evidence_url=(evidence_url or "")[:1000],
                                   notes=notes or None,
                                   answered_by=actor or None,
-                                  answered_at=datetime.now(timezone.utc))
+                                  answered_at=datetime.now(UTC))
         db.add(answer)
     else:
         answer.answer_value = av
@@ -358,7 +363,7 @@ def upsert_answer(db: Session, run: EvaluationRun, question_id: int, *,
         answer.evidence_url = (evidence_url or "")[:1000]
         answer.notes = notes or None
         answer.answered_by = actor or None
-        answer.answered_at = datetime.now(timezone.utc)
+        answer.answered_at = datetime.now(UTC)
     if run.status == "draft":
         run.status = "in_progress"
     db.commit()
@@ -434,7 +439,7 @@ def complete_run(db: Session, run: EvaluationRun, actor: str = "") -> dict[str, 
     run.overall_score = overall
     run.status = "completed"
     run.completed_by = actor or None
-    run.completed_at = datetime.now(timezone.utc)
+    run.completed_at = datetime.now(UTC)
     run.residual_risk_summary = _residual_summary(rows, gaps)
     db.commit()
     return {"run_id": run.id, "overall_score": overall, "counts": counts,
@@ -511,7 +516,7 @@ def report_markdown(db: Session, run: EvaluationRun) -> str:
     run_ = p["run"]
     L: list[str] = []
     A = L.append
-    A(f"# Agentic Payments Security & Privacy Evaluation")
+    A("# Agentic Payments Security & Privacy Evaluation")
     A("")
     A(f"_Run #{run_['id']} · {run_['title']} · target agent "
       f"`{run_['target_agent_id']}`_")

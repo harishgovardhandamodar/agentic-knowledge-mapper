@@ -19,12 +19,18 @@ os.environ["AKM_DATABASE_URL"] = os.environ.get("AKM_TEST_DB") or (
     "sqlite:///" + os.path.join(
         tempfile.mkdtemp(prefix="akm-assurance-api-"), "test.db"))
 
+from datetime import UTC
+
 from app import assurance as A  # noqa: E402
 from app import database as _db  # noqa: E402
 from app import leadership as LD  # noqa: E402
 from app.database import Base, SessionLocal  # noqa: E402
-from app.models import (AgentRun, Artifact, Investigation,  # noqa: E402
-                        SecurityAssessment)
+from app.models import (  # noqa: E402
+    AgentRun,
+    Artifact,
+    Investigation,
+    SecurityAssessment,
+)
 
 _db.init_db()
 
@@ -58,6 +64,7 @@ class AssuranceApiCase(unittest.TestCase):
         Base.metadata.create_all(_db.engine)
         self.db = SessionLocal()
         from fastapi.testclient import TestClient
+
         from app.main import app
         self.client = TestClient(app)
         self.client.__enter__()
@@ -321,13 +328,13 @@ class AssuranceApiCase(unittest.TestCase):
         self.assertIn("run_id", first)
 
     def test_re_score_trigger_endpoints(self):
-        from datetime import datetime, timedelta, timezone
+        from datetime import datetime
         rec = self._assessment()
         # accepted evidence after scoring -> a trigger fires
         art = Artifact(investigation_id=self.inv.id, title="new evidence",
                        artifact_type="research", source="vendor",
                        review="accepted",
-                       created_at=datetime.now(timezone.utc))
+                       created_at=datetime.now(UTC))
         self.db.add(art)
         self.db.commit()
         r = self.client.get(
@@ -337,14 +344,15 @@ class AssuranceApiCase(unittest.TestCase):
         self.assertTrue(any(t["assessment_id"] == rec.id for t in triggers))
 
     def test_re_score_endpoint_queues_a_new_run(self):
-        from datetime import datetime, timedelta, timezone
+        from datetime import datetime
         from unittest import mock
+
         from app import security_agent as _sa
         rec = self._assessment()
         art = Artifact(investigation_id=self.inv.id, title="new evidence",
                        artifact_type="research", source="vendor",
                        review="accepted",
-                       created_at=datetime.now(timezone.utc))
+                       created_at=datetime.now(UTC))
         self.db.add(art)
         self.db.commit()
         with mock.patch.object(_sa, "launch_security_assessment",
@@ -364,6 +372,7 @@ class AssuranceApiCase(unittest.TestCase):
 
     def test_known_issues_refresh_and_list_endpoints(self):
         from unittest import mock
+
         from app import cve as _cve
         with mock.patch.object(
                 _cve, "collect_known_issues",
@@ -384,6 +393,7 @@ class AssuranceApiCase(unittest.TestCase):
 
     def test_known_issues_refresh_without_a_subject_skips(self):
         from unittest import mock
+
         from app import cve as _cve
         with mock.patch.object(
                 _cve, "collect_known_issues",
@@ -577,8 +587,8 @@ class AssuranceApiCase(unittest.TestCase):
             ).json()["alerts"][0]
         self.client.post(f"/api/leadership/alerts/{target['id']}/ack",
                          json={"actor": "Dana"})
-        from app.ledger_models import LeadershipAlertState
         from app.database import SessionLocal
+        from app.ledger_models import LeadershipAlertState
         s = SessionLocal()
         row = s.query(LeadershipAlertState).filter(
             LeadershipAlertState.alert_id == target["id"]).one()

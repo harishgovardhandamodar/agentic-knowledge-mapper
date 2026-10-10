@@ -271,6 +271,7 @@ class TestScoreMatrixRoute(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         from fastapi.testclient import TestClient  # noqa: E402
+
         from app import main as main_mod  # noqa: E402
         cls.client = TestClient(main_mod.app)
 

@@ -12,8 +12,8 @@ import json
 import os
 import tempfile
 import unittest
+from datetime import UTC, datetime
 from unittest import mock
-from datetime import datetime, timezone
 
 os.environ["AKM_DATABASE_URL"] = os.environ.get("AKM_TEST_DB") or (
     "sqlite:///" + os.path.join(tempfile.mkdtemp(prefix="akm-modelkb-"), "test.db"))
@@ -23,8 +23,12 @@ from app import model_eval as me  # noqa: E402
 from app import model_kb as kb  # noqa: E402
 from app import models as _models  # noqa: E402,F401 -- registers tables
 from app.database import SessionLocal  # noqa: E402
-from app.models import (Artifact, Investigation, Relationship,  # noqa: E402
-                        SecurityAssessment)
+from app.models import (  # noqa: E402
+    Artifact,
+    Investigation,
+    Relationship,
+    SecurityAssessment,
+)
 
 _db.init_db()
 
@@ -98,11 +102,11 @@ class KBTestCase(unittest.TestCase):
         self.paper = Artifact(
             investigation_id=self.inv.id, title="Carlini extracting training data",
             artifact_type="adversarial_paper", review="accepted",
-            date_published=datetime(2021, 4, 1, tzinfo=timezone.utc))
+            date_published=datetime(2021, 4, 1, tzinfo=UTC))
         self.advisory = Artifact(
             investigation_id=self.inv.id, title="Vendor advisory CVE-2024-1",
             artifact_type="cve_advisory", review="pending",
-            date_published=datetime(2024, 3, 1, tzinfo=timezone.utc))
+            date_published=datetime(2024, 3, 1, tzinfo=UTC))
         self.db.add_all([self.paper, self.advisory])
         self.db.commit()
         self.db.refresh(self.paper)
@@ -748,6 +752,7 @@ class TestLandscapeEndpoints(KBTestCase):
     def setUp(self):
         super().setUp()
         from fastapi.testclient import TestClient
+
         from app.main import app as fastapi_app
         self.client = TestClient(fastapi_app)
         self.client.__enter__()
@@ -1116,7 +1121,7 @@ class TestPipelineSyncHook(KBTestCase):
     def _run(self, sync_side_effect=None, product="acme-tabpfn-v2",
              model=True):
         from app import security_agent as sa
-        from app.models import AgentRun, AgentEvent
+        from app.models import AgentEvent, AgentRun
         params = {"product_name": product,
                   "use_case": "churn scoring, fine-tuned adapter on our PII",
                   "focus": ["fine-tune"], "exposure": "restricted_data"}
@@ -1236,7 +1241,7 @@ class TestPipelineSyncHook(KBTestCase):
     def _run(self, sync_side_effect=None, product="acme-tabpfn-v2",
              model=True):
         from app import security_agent as sa
-        from app.models import AgentRun, AgentEvent
+        from app.models import AgentEvent, AgentRun
         params = {"product_name": product,
                   "use_case": "churn scoring, fine-tuned adapter on our PII",
                   "focus": ["fine-tune"], "exposure": "restricted_data"}

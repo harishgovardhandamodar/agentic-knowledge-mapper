@@ -17,9 +17,7 @@ No DB, no network: the load probe is stubbed.
 """
 import os
 import tempfile
-import os
 import unittest
-
 
 # Pin the database before app.database is imported: a module that omits
 # this can inherit data/akm.db and write test rows into the live store.
@@ -28,8 +26,14 @@ os.environ["AKM_DATABASE_URL"] = os.environ.get("AKM_TEST_DB") or (
 
 from app import explainer as ex  # noqa: E402
 from app.explainer import (  # noqa: E402
-    _assign_images, _content_tokens, _figure_named, _image_junk, _image_score,
-    _is_figure, _looks_like_image_url, _pick_cover,
+    _assign_images,
+    _content_tokens,
+    _figure_named,
+    _image_junk,
+    _image_score,
+    _is_figure,
+    _looks_like_image_url,
+    _pick_cover,
 )
 
 HEADING = "Core IP Exposure: What You Are Actually Sending"

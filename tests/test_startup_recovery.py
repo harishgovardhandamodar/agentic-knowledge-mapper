@@ -16,8 +16,8 @@ os.environ["AKM_DATABASE_URL"] = os.environ.get("AKM_TEST_DB") or (
 
 from fastapi.testclient import TestClient  # noqa: E402
 
-from app.main import app  # noqa: E402
 from app.database import SessionLocal, init_db  # noqa: E402
+from app.main import app  # noqa: E402
 from app.models import Explanation, Investigation  # noqa: E402
 
 

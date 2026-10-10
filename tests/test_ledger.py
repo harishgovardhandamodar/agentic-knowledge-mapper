@@ -9,7 +9,6 @@ import os
 import tempfile
 import unittest
 
-
 # Pin the database before app.database is imported: a module that omits
 # this can inherit data/akm.db and write test rows into the live store.
 os.environ["AKM_DATABASE_URL"] = os.environ.get("AKM_TEST_DB") or (
@@ -490,8 +489,8 @@ class TestContaminationTracing(unittest.TestCase):
 
     def test_claim_and_its_event_are_interchangeable_entry_points(self):
         """Auditors think in whichever identifier they have to hand."""
-        from app.ledger_models import LedgerClaim
         from app.database import SessionLocal
+        from app.ledger_models import LedgerClaim
         db = SessionLocal()
         try:
             row = (db.query(LedgerClaim)
@@ -1357,6 +1356,7 @@ class TestSessionApi(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         from fastapi.testclient import TestClient
+
         import app.main as main
         from app import agent
         # Keep the product path offline: this suite is about audit plumbing.
@@ -1491,6 +1491,7 @@ class TestControlFlow(unittest.TestCase):
 
     def _client(self):
         from fastapi.testclient import TestClient
+
         from app.main import app
         c = TestClient(app)
         c.__enter__()

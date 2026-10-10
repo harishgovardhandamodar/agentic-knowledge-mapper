@@ -7,18 +7,17 @@ import json
 import os
 import tempfile
 import unittest
-from unittest import mock
 
 os.environ["AKM_DATABASE_URL"] = os.environ.get("AKM_TEST_DB") or (
     "sqlite:///" + os.path.join(tempfile.mkdtemp(prefix="akm-mem-"), "test.db"))
 
 from app import database as _db  # noqa: E402
+from app import memorization as rm  # noqa: E402
 from app import model_eval as me  # noqa: E402
 from app import model_kb as kb  # noqa: E402
-from app import memorization as rm  # noqa: E402
 from app import provider_posture as pp  # noqa: E402
 from app.database import Base, SessionLocal  # noqa: E402
-from app.models import Investigation, SecurityAssessment, Artifact  # noqa: E402
+from app.models import Investigation, SecurityAssessment  # noqa: E402
 
 _db.init_db()
 

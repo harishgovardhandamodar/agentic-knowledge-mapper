@@ -8,8 +8,9 @@ from ..database import SessionLocal
 
 
 def get_assessment(assessment_id: int) -> dict[str, Any]:
-    from ..models import SecurityAssessment
     import json
+
+    from ..models import SecurityAssessment
 
     db = SessionLocal()
     try:

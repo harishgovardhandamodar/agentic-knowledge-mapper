@@ -13,9 +13,8 @@ All writes are recorded on the audit ledger with the actor.
 
 from __future__ import annotations
 
-import json
 import os
-from typing import Any, Optional
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
@@ -82,8 +81,9 @@ class AnswerPatchRequest(BaseModel):
 @router.get("/catalogs")
 def list_catalogs(db: Session = Depends(get_db)):
     pe.seed_catalog_v1(db)
-    from .models import EvaluationCatalog, EvaluationQuestion, EvaluationSection
     from sqlalchemy import func
+
+    from .models import EvaluationCatalog, EvaluationQuestion, EvaluationSection
     rows = (db.query(EvaluationCatalog,
                      func.count(func.distinct(EvaluationSection.id)),
                      func.count(func.distinct(EvaluationQuestion.id)))

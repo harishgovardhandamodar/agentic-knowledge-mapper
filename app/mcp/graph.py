@@ -19,8 +19,9 @@ def query_artifacts(investigation_id: int, limit: int = 50) -> list[dict[str, An
 
 
 def upsert_node(investigation_id: int, title: str, artifact_type: str = "research", stable_key: str | None = None, **meta) -> dict[str, Any]:
-    from ..models import Artifact
     import json
+
+    from ..models import Artifact
 
     db = SessionLocal()
     try:
@@ -39,8 +40,9 @@ def upsert_node(investigation_id: int, title: str, artifact_type: str = "researc
 
 
 def upsert_edge(investigation_id: int, source_id: int, target_id: int, relationship_type: str = "related_to", payload: dict | None = None) -> dict[str, Any]:
-    from ..models import Relationship
     import json
+
+    from ..models import Relationship
 
     db = SessionLocal()
     try:

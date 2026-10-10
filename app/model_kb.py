@@ -30,6 +30,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from datetime import UTC
 from typing import Any
 
 from . import model_eval as _me
@@ -1235,7 +1236,7 @@ def _supersedes_edges(latest: dict[str, dict]) -> list[dict[str, Any]]:
             except ValueError:
                 return ()
         ordered = sorted(rows, key=_v)
-        for older, newer in zip(ordered, ordered[1:]):
+        for older, newer in zip(ordered, ordered[1:], strict=False):
             if not _v(newer) or not _v(older) or _v(newer) <= _v(older):
                 continue
             out.append({"source": newer["model_key"],
@@ -1546,7 +1547,7 @@ def _decisions(db, inv_id: int) -> list[dict[str, Any]]:
     separate table: the decision *is* a relationship, so the graph and the
     landscape can never disagree about it.
     """
-    from .models import Investigation, Artifact, Relationship
+    from .models import Artifact, Investigation, Relationship
     ids = [a.id for a in db.query(Artifact).filter(
         Artifact.investigation_id == inv_id).all()]
     if not ids:
@@ -1842,10 +1843,10 @@ def record_decision(db, inv_id: int, model_key: str, initiative_key: str,
     init_id = _node("initiative", ik, initiative_key)
     rel = canon_relation("selected_for" if dec == "selected" else "rejected_for")
     key = f"{mk}|{rel}|{ik}"[:300]
-    from datetime import datetime, timezone
+    from datetime import datetime
     payload = {"actor": actor, "rationale": rationale[:2000],
                "weights": weights or {}, "decided_at":
-               datetime.now(timezone.utc).isoformat(),
+               datetime.now(UTC).isoformat(),
                "decision": dec,
                # the keys, not just the node ids: the landscape reads a
                # decision back without having to resolve artifact ids

@@ -24,12 +24,18 @@ collects only what is new.
 import json
 import re
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import httpx
 
 from .database import SessionLocal
-from .models import Artifact, CveFinding, Investigation, Relationship, SecurityAssessment
+from .models import (
+    Artifact,
+    CveFinding,
+    Investigation,
+    Relationship,
+    SecurityAssessment,
+)
 
 #: CVE-YYYY-NNNNN, case-insensitive on input, stored upper-case.
 CVE_RE = re.compile(r"\bCVE-(?:19|20)\d{2}-\d{4,7}\b", re.IGNORECASE)
@@ -48,7 +54,7 @@ SEVERITY_RELEVANCE = {"critical": 0.95, "high": 0.8, "medium": 0.6,
 
 
 def _now():
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def extract_cves(*texts) -> list:

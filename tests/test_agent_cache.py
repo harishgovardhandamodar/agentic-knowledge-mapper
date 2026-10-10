@@ -1,5 +1,4 @@
 """Shared research cache: same subject + same questions reuse evidence."""
-import json
 import os
 import tempfile
 import unittest

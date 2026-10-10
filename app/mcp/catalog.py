@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from .. import threatpack as tp
-from .. import model_eval as me
 from .. import leakage as lk
+from .. import model_eval as me
+from .. import threatpack as tp
 
 
 def threat_pack() -> dict[str, Any]:

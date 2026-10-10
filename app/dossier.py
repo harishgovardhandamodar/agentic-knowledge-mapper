@@ -28,7 +28,7 @@ from __future__ import annotations
 import json
 import re
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from . import model_eval as _model_eval
@@ -494,8 +494,7 @@ def _runs_section(db, inv_id: int) -> list[dict[str, Any]]:
 
 def _collection_section(db, inv_id: int) -> dict[str, Any]:
     from .explainer import _answer_excerpt, _supporting_for
-    from .models import (AgentRun, Artifact, CveFinding, Explanation,
-                         Relationship)
+    from .models import AgentRun, Artifact, CveFinding, Explanation, Relationship
     runs = {r.id: r for r in
             db.query(AgentRun).filter(AgentRun.investigation_id == inv_id).all()}
     arts = (db.query(Artifact).filter(Artifact.investigation_id == inv_id)
@@ -1219,7 +1218,7 @@ def investigation_dossier(db, inv_id: int) -> dict[str, Any]:
                 "max_rounds": inv.schedule_rounds,
             },
         },
-        "generated": datetime.now(timezone.utc).isoformat(),
+        "generated": datetime.now(UTC).isoformat(),
         "runs": runs,
         "query_shapes": shapes,
         "collection": collection,
@@ -1654,7 +1653,7 @@ def dossier_markdown(db, inv_id: int, dossier: dict | None = None) -> str:
             # it is why residual equals inherent on a fresh assessment.
             ctl = det.get("active_controls") or []
             _status = det.get("control_evidence") or {}
-            A(f"**Controls applied.** "
+            A("**Controls applied.** "
               + (", ".join(f"{c} ({_status.get(c, 'declared')})"
                            for c in ctl) + ". " if ctl
                  else "None declared. ")
@@ -2297,6 +2296,7 @@ def dossier_bundle(db, inv_id: int, dossier: dict | None = None) -> bytes:
     """
     import io as _io
     import zipfile as _zf
+
     from .mermaid_png import collect_sources, render_sources
     md = dossier_markdown(db, inv_id, dossier=dossier)
     try:

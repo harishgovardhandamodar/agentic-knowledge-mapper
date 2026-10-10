@@ -12,10 +12,14 @@ os.environ["AKM_DATABASE_URL"] = os.environ.get("AKM_TEST_DB") or (
                                 "test.db"))
 
 from app import database as _db  # noqa: E402
-from app.database import Base, SessionLocal  # noqa: E402
 from app import eval_drafting as ed  # noqa: E402
-from app.models import (EvaluationCatalog, EvaluationDraft,  # noqa: E402
-                        EvaluationQuestion, EvaluationRun, EvaluationSection)
+from app.database import Base, SessionLocal  # noqa: E402
+from app.models import (  # noqa: E402
+    EvaluationDraft,
+    EvaluationQuestion,
+    EvaluationRun,
+    EvaluationSection,
+)
 
 _db.init_db()
 
@@ -113,6 +117,7 @@ class TestSeedChain(unittest.TestCase):
 
     def _client(self):
         from fastapi.testclient import TestClient
+
         from app.main import app
         c = TestClient(app)
         c.__enter__()

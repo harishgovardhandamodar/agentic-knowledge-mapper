@@ -153,6 +153,7 @@ class TestIntentSuggestions(unittest.TestCase):
 
     def test_route_shape(self):
         from fastapi.testclient import TestClient
+
         from app import main as main_mod
         client = TestClient(main_mod.app)
         r = client.get(f"/api/explanations/{self.exp_id}/suggestions")

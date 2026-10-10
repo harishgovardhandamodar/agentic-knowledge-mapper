@@ -16,9 +16,8 @@ pre-scoring gate is.
 
 from __future__ import annotations
 
-from typing import Any, Iterable, Optional
-
-from . import agents as A
+from collections.abc import Iterable
+from typing import Any
 
 # Swarm definitions: long-lived agent types, many short-lived tasks
 SWARMS = {
@@ -239,7 +238,7 @@ def role_contract(role: str) -> dict[str, Any]:
     }
 
 
-def check_contract(role: str, payload: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+def check_contract(role: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
     """Validate a hand-off against a role's contract.
 
     Reports missing inputs by name. Never raises: a blocked hand-off is data
@@ -265,10 +264,10 @@ def check_contract(role: str, payload: Optional[dict[str, Any]] = None) -> dict[
 
 def policy_enforcement_point(*, exposure: str, architecture_gate: dict[str, Any],
                              evidence_gate: dict[str, Any],
-                             forensics: Optional[dict[str, Any]] = None,
-                             threat_pack_stale: Optional[bool] = None,
+                             forensics: dict[str, Any] | None = None,
+                             threat_pack_stale: bool | None = None,
                              min_evidence_confidence: float = 0.0,
-                             evidence_confidence: Optional[float] = None,
+                             evidence_confidence: float | None = None,
                              ) -> dict[str, Any]:
     """The single check the scorer must pass before a residual may be emitted.
 
@@ -351,14 +350,14 @@ def policy_enforcement_point(*, exposure: str, architecture_gate: dict[str, Any]
 
 def policy_engine(*, exposure: str, architecture_gate: dict[str, Any],
                   evidence_gate: dict[str, Any],
-                  forensics: Optional[dict[str, Any]] = None,
-                  threat_pack_stale: Optional[bool] = None,
+                  forensics: dict[str, Any] | None = None,
+                  threat_pack_stale: bool | None = None,
                   min_evidence_confidence: float = 0.0,
-                  evidence_confidence: Optional[float] = None,
-                  sources: Optional[Iterable[str]] = None,
-                  allowed_sources: Optional[Iterable[str]] = None,
-                  budget_used: Optional[dict[str, float]] = None,
-                  budget: Optional[dict[str, float]] = None) -> dict[str, Any]:
+                  evidence_confidence: float | None = None,
+                  sources: Iterable[str] | None = None,
+                  allowed_sources: Iterable[str] | None = None,
+                  budget_used: dict[str, float] | None = None,
+                  budget: dict[str, float] | None = None) -> dict[str, Any]:
     """Full policy-as-code at the orchestrator.
 
     One evaluation covers both decisions the swarm must make under policy --
@@ -422,7 +421,7 @@ ROLE_EVENT_KINDS = frozenset({
 })
 
 
-def _role_events(events: Optional[Iterable[dict[str, Any]]]):
+def _role_events(events: Iterable[dict[str, Any]] | None):
     """The subset of events that describe a role acting, in order."""
     return [e for e in (events or [])
             if str(e.get("kind") or "") in ROLE_EVENT_KINDS]
@@ -430,7 +429,7 @@ def _role_events(events: Optional[Iterable[dict[str, Any]]]):
 
 # -------------------------------------------------------------- topology ----
 
-def topology(events: Optional[Iterable[dict[str, Any]]] = None) -> dict[str, Any]:
+def topology(events: Iterable[dict[str, Any]] | None = None) -> dict[str, Any]:
     """Live swarm view: which roles ran, are running, failed, or never started."""
     state: dict[str, dict[str, Any]] = {}
     for r in ROLE_CONTRACTS:
@@ -470,7 +469,7 @@ def topology(events: Optional[Iterable[dict[str, Any]]] = None) -> dict[str, Any
     }
 
 
-def health(events: Optional[Iterable[dict[str, Any]]] = None) -> dict[str, Any]:
+def health(events: Iterable[dict[str, Any]] | None = None) -> dict[str, Any]:
     """Swarm success metrics by role, for the leadership System Health view."""
     per_role: dict[str, dict[str, int]] = {}
     hops = retries = failures = gate_failures = 0
@@ -528,7 +527,7 @@ def health(events: Optional[Iterable[dict[str, Any]]] = None) -> dict[str, Any]:
 
 # ------------------------------------------- durable resume from the ledger --
 
-def resume_state(events: Optional[Iterable[dict[str, Any]]] = None) -> dict[str, Any]:
+def resume_state(events: Iterable[dict[str, Any]] | None = None) -> dict[str, Any]:
     """Reconstruct a run's execution state from its ledger events alone.
 
     The ledger is the source of truth for a restart: nothing the swarm did is
@@ -540,7 +539,7 @@ def resume_state(events: Optional[Iterable[dict[str, Any]]] = None) -> dict[str,
     evs = list(events or [])
     per_role: dict[str, dict[str, Any]] = {}
     seen_lifecycle: set[str] = set()
-    last_seq: Optional[int] = None
+    last_seq: int | None = None
     for e in evs:
         seq = e.get("seq")
         if seq is not None:
@@ -625,7 +624,7 @@ def validate_handoff(message: dict[str, Any]) -> dict[str, Any]:
 
 def record_typed_handoff(run_id: str, message: dict[str, Any],
                          actor: str = "orchestrator",
-                         detail: Optional[dict[str, Any]] = None) -> Optional[str]:
+                         detail: dict[str, Any] | None = None) -> str | None:
     """Validate and, if valid, record one typed hand-off as a ledger event.
 
     An invalid hand-off returns ``None`` without writing: the missing fields
@@ -647,8 +646,8 @@ def record_typed_handoff(run_id: str, message: dict[str, Any],
 
 # --------------------------------------------------------- critic / critic --
 
-def critic_review(events: Optional[Iterable[dict[str, Any]]] = None,
-                  assurance: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+def critic_review(events: Iterable[dict[str, Any]] | None = None,
+                  assurance: dict[str, Any] | None = None) -> dict[str, Any]:
     """A lightweight self-consistency pass over a completed run.
 
     The §13.4 critic samples the ledger for the failures an opaque swarm hides:
@@ -704,7 +703,7 @@ DEFAULT_BUDGET = {"queries": 200, "tokens": 2_000_000, "minutes": 120}
 
 
 def check_scope(tool: str, source: str = "",
-                allowed_sources: Optional[Iterable[str]] = None) -> dict[str, Any]:
+                allowed_sources: Iterable[str] | None = None) -> dict[str, Any]:
     """Source allow-list check before any external call that could carry
     sensitive context. A source outside the investigation's allow-list is a
     deny, not a warning: purpose-binding means the swarm fetches only what the
@@ -723,7 +722,7 @@ def check_scope(tool: str, source: str = "",
     }
 
 
-def budget_allows(used: dict[str, float], budget: Optional[dict[str, float]] = None,
+def budget_allows(used: dict[str, float], budget: dict[str, float] | None = None,
                   ) -> dict[str, Any]:
     """Enforce the per-investigation research budget. Returns the limit hit
     first, or an allow verdict when no limit is exceeded."""

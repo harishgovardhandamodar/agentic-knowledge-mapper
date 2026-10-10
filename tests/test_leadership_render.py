@@ -19,7 +19,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 # Pinned before the app import, by assignment: app.database reads the URL at
 # import time and the repo forbids setdefault here, because setdefault would let
@@ -28,15 +28,20 @@ os.environ["AKM_DATABASE_URL"] = os.environ.get("AKM_TEST_DB") or (
     "sqlite:///" + os.path.join(tempfile.gettempdir(),
                                  "akm_test_leadership_render.db"))
 
-from app import assurance as A                    # noqa: E402
-from app.database import SessionLocal, init_db   # noqa: E402
+from app import assurance as A  # noqa: E402
+from app.database import SessionLocal, init_db  # noqa: E402
 from app.ledger_models import LeadershipAlertState, LedgerEvent, LedgerRun  # noqa: E402
-from app.models import (AgentRun, Artifact, Explanation, Investigation,  # noqa: E402
-                        SecurityAssessment)
+from app.models import (  # noqa: E402
+    AgentRun,
+    Artifact,
+    Explanation,
+    Investigation,
+    SecurityAssessment,
+)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SMOKE = os.path.join(HERE, "js", "leadership_render_smoke.js")
-NOW = datetime.now(timezone.utc)
+NOW = datetime.now(UTC)
 
 
 def _assurance(residual, confidence, **over) -> dict:
@@ -129,6 +134,7 @@ class LeadershipRenderCase(unittest.TestCase):
 
     def _board(self, **params):
         from fastapi.testclient import TestClient
+
         from app.main import app
         with TestClient(app) as c:
             q = "&".join(f"{k}={v}" for k, v in params.items() if v is not None)
@@ -231,9 +237,10 @@ class LeadershipRenderCase(unittest.TestCase):
         of the page and matching them against the real function source catches
         the typo at test time instead.
         """
-        import re
-        from app import leadership as LD
         import inspect
+        import re
+
+        from app import leadership as LD
         src = inspect.getsource(LD.acknowledge_alert)
         m = re.search(r'if status not in \(([^)]*)\)', src)
         self.assertIsNotNone(m, "acknowledge_alert no longer declares a vocabulary")

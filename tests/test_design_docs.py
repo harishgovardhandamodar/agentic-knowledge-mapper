@@ -164,6 +164,7 @@ class TestRoutes(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         from fastapi.testclient import TestClient
+
         from app import main as main_mod
         cls.client = TestClient(main_mod.app)
 

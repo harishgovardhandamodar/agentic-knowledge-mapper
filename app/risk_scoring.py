@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 RISK_SCORING_METHOD = "register-risk-scoring-v1"
@@ -230,8 +230,8 @@ def priority_for_row(row: dict[str, Any], residual: float | None, inherent: floa
             try:
                 rb = datetime.fromisoformat(str(review_by).replace("Z", "+00:00"))
                 if rb.tzinfo is None:
-                    rb = rb.replace(tzinfo=timezone.utc)
-                if datetime.now(timezone.utc) > rb:
+                    rb = rb.replace(tzinfo=UTC)
+                if datetime.now(UTC) > rb:
                     pass  # overdue, keep priority
                 else:
                     return 0.0, "accepted/closed not overdue"
@@ -293,7 +293,7 @@ def score_risk(row: dict[str, Any]) -> dict[str, Any]:
             ca = row["created_at"]
             if isinstance(ca, str):
                 ca = datetime.fromisoformat(ca.replace("Z", "+00:00"))
-            aging_days = (datetime.now(timezone.utc) - ca).days if ca.tzinfo else (datetime.now(timezone.utc) - ca).days
+            aging_days = (datetime.now(UTC) - ca).days if ca.tzinfo else (datetime.now(UTC) - ca).days
         except Exception:
             aging_days = 0
     row["aging_days"] = aging_days
@@ -326,7 +326,7 @@ def score_risk(row: dict[str, Any]) -> dict[str, Any]:
         "scoring_fingerprint": risk_scoring_fingerprint(),
         "score_rationale": f"{rationale} (source: {source})",
         "inputs_hash": inputs_hash,
-        "scored_at": datetime.now(timezone.utc).isoformat(),
+        "scored_at": datetime.now(UTC).isoformat(),
         "treatment_coverage": coverage,
     }
 

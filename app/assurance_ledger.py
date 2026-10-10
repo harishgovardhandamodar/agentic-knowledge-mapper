@@ -25,7 +25,9 @@ So this module does two things:
 from __future__ import annotations
 
 import json
-from typing import Any, Iterable, Optional
+from collections.abc import Iterable
+from datetime import UTC
+from typing import Any
 
 from . import ledger as lg
 
@@ -203,9 +205,9 @@ ASSURANCE_READ_ROLES = frozenset({
 # ------------------------------------------------------------- recording ---
 
 def _append(run_id: str, kind: str, actor: str, data: dict[str, Any], *,
-            verdict: Optional[str] = None, severity: Optional[str] = None,
+            verdict: str | None = None, severity: str | None = None,
             actor_type: str = "system",
-            intent: Optional[str] = None) -> Optional[str]:
+            intent: str | None = None) -> str | None:
     """Append one assurance event, tolerating a missing ledger.
 
     Returns the event hash, or ``None`` when the fabric is unavailable. The
@@ -223,7 +225,7 @@ def _append(run_id: str, kind: str, actor: str, data: dict[str, Any], *,
 
 def record_assurance(run_id: str, assurance: dict[str, Any], *,
                      actor: str = "assurance-engine",
-                     assessment_id: Optional[int] = None,
+                     assessment_id: int | None = None,
                      product: str = "", exposure: str = "") -> dict[str, Any]:
     """Write the whole assurance verdict as a set of ledger events.
 
@@ -328,14 +330,14 @@ def record_assurance(run_id: str, assurance: dict[str, Any], *,
 
 def record_swarm_event(run_id: str, *, role: str, phase: str,
                        actor: str = "orchestrator",
-                       parent_event: Optional[str] = None,
-                       output_ref: Optional[str] = None,
-                       confidence: Optional[float] = None,
-                       completeness: Optional[str] = None,
-                       policy: Optional[dict[str, Any]] = None,
-                       error: Optional[str] = None,
-                       model_version: Optional[str] = None,
-                       detail: Optional[dict[str, Any]] = None) -> Optional[str]:
+                       parent_event: str | None = None,
+                       output_ref: str | None = None,
+                       confidence: float | None = None,
+                       completeness: str | None = None,
+                       policy: dict[str, Any] | None = None,
+                       error: str | None = None,
+                       model_version: str | None = None,
+                       detail: dict[str, Any] | None = None) -> str | None:
     """One swarm lifecycle event: spawn, handoff, complete, failure.
 
     ``parent_event`` is the lineage edge. Without it a hop is an island, and
@@ -367,10 +369,10 @@ def record_swarm_event(run_id: str, *, role: str, phase: str,
 
 
 def record_human_decision(run_id: str, *, actor: str, decision: str,
-                          assessment_id: Optional[int] = None,
-                          rationale: str = "", expires_at: Optional[str] = None,
-                          evidence_confidence: Optional[float] = None,
-                          override: bool = False) -> Optional[str]:
+                          assessment_id: int | None = None,
+                          rationale: str = "", expires_at: str | None = None,
+                          evidence_confidence: float | None = None,
+                          override: bool = False) -> str | None:
     """A human acceptance, rejection or exception -- the closing loop event.
 
     Recorded with identity and rationale because that is the accountability
@@ -389,9 +391,9 @@ def record_human_decision(run_id: str, *, actor: str, decision: str,
 
 
 def record_prompt_fingerprint(run_id: str, *, actor: str, model: str,
-                              prompt: Optional[str] = None,
-                              context: Optional[str] = None,
-                              prompt_template: Optional[str] = None,
+                              prompt: str | None = None,
+                              context: str | None = None,
+                              prompt_template: str | None = None,
                               redaction: str = "hashed") -> dict[str, Any]:
     """Record what was sent without keeping it.
 
@@ -416,9 +418,9 @@ def record_prompt_fingerprint(run_id: str, *, actor: str, model: str,
 
 def record_lifecycle(run_id: str, *, phase: str,
                      actor: str = "orchestrator",
-                     assessment_id: Optional[int] = None,
-                     detail: Optional[dict[str, Any]] = None,
-                     error: Optional[str] = None) -> Optional[str]:
+                     assessment_id: int | None = None,
+                     detail: dict[str, Any] | None = None,
+                     error: str | None = None) -> str | None:
     """The outer boundary of accountability: how the investigation itself
     moved from creation to completion, pause, abort or supersession."""
     if phase not in LIFECYCLE_PHASES:
@@ -436,10 +438,10 @@ def record_lifecycle(run_id: str, *, phase: str,
 
 def record_artifact(run_id: str, *, artifact_id: str, action: str,
                     actor: str = "research-collector", title: str = "",
-                    source: str = "", relevance: Optional[float] = None,
-                    review: Optional[str] = None,
-                    drift: Optional[dict[str, Any]] = None,
-                    detail: Optional[dict[str, Any]] = None) -> Optional[str]:
+                    source: str = "", relevance: float | None = None,
+                    review: str | None = None,
+                    drift: dict[str, Any] | None = None,
+                    detail: dict[str, Any] | None = None) -> str | None:
     """One artifact lifecycle step: fetched, ingested, reviewed, accepted,
     rejected, or flagged as drifted. ``review`` is the state (accepted /
     pending / rejected); ``action`` is what happened to reach it."""
@@ -459,10 +461,10 @@ def record_artifact(run_id: str, *, artifact_id: str, action: str,
 
 def record_tool(run_id: str, *, tool: str, intent: str,
                 actor: str = "research-collector",
-                args: Optional[dict[str, Any]] = None,
-                status: str = "ok", latency_ms: Optional[int] = None,
-                error: Optional[str] = None,
-                redacted: bool = True) -> Optional[str]:
+                args: dict[str, Any] | None = None,
+                status: str = "ok", latency_ms: int | None = None,
+                error: str | None = None,
+                redacted: bool = True) -> str | None:
     """A tool / connector invocation. Arguments are redacted by default: the
     ledger is immutable, so anything written here is effectively permanent."""
     data: dict[str, Any] = {"tool": str(tool)[:120], "intent": str(intent)[:120],
@@ -479,11 +481,11 @@ def record_tool(run_id: str, *, tool: str, intent: str,
 
 def record_publication(run_id: str, *, doc_id: str, version: str,
                        actor: str = "report-writer",
-                       audience: Optional[list[str]] = None,
-                       supersedes: Optional[str] = None,
+                       audience: list[str] | None = None,
+                       supersedes: str | None = None,
                        status: str = "published",
-                       assessment_id: Optional[int] = None,
-                       detail: Optional[dict[str, Any]] = None) -> Optional[str]:
+                       assessment_id: int | None = None,
+                       detail: dict[str, Any] | None = None) -> str | None:
     """What was published, to whom, and what it superseded -- closing the
     loop on what decision-makers actually saw."""
     return _append(
@@ -497,7 +499,7 @@ def record_publication(run_id: str, *, doc_id: str, version: str,
 
 def record_integrity_check(run_id: str, *, check: str, passed: bool,
                            actor: str = "system",
-                           detail: Optional[dict[str, Any]] = None) -> Optional[str]:
+                           detail: dict[str, Any] | None = None) -> str | None:
     """A check the fabric ran on itself: chain continuity, clock, signatures.
 
     The system-integrity class records *checks performed*, so a healthy run
@@ -820,7 +822,7 @@ def authorize_read(role: str, actor: str = "") -> dict[str, Any]:
 
 # ------------------------------------------------- integrity monitoring -----
 
-def monitor_integrity(db=None, *, run_ids: Optional[Iterable[str]] = None,
+def monitor_integrity(db=None, *, run_ids: Iterable[str] | None = None,
                       limit: int = 40) -> dict[str, Any]:
     """Continuous chain verification across recent runs.
 
@@ -869,7 +871,7 @@ def monitor_integrity(db=None, *, run_ids: Optional[Iterable[str]] = None,
 
 # ------------------------------------------------------------- SIEM export --
 
-def export_siem_events(run_ids: Optional[Iterable[str]] = None, *,
+def export_siem_events(run_ids: Iterable[str] | None = None, *,
                        sink=None, db=None, limit: int = 40) -> dict[str, Any]:
     """Stream the ledger into a SIEM / SOAR in syslog-style JSON lines.
 
@@ -929,7 +931,7 @@ def export_siem_events(run_ids: Optional[Iterable[str]] = None, *,
 
 # -------------------------------------------------- automated re-scoring ----
 
-def re_score_triggers(db=None, *, investigation_id: Optional[int] = None) -> dict[str, Any]:
+def re_score_triggers(db=None, *, investigation_id: int | None = None) -> dict[str, Any]:
     """Which assessments changed their evidence or architecture basis after
     they were scored, so their residual is stale and should be re-scored.
 
@@ -942,7 +944,7 @@ def re_score_triggers(db=None, *, investigation_id: Optional[int] = None) -> dic
     - ``architecture_change``: an explainer/architecture run completed after
       the assessment, so the checklist it was blocked on has moved.
     """
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     from .models import AgentRun, Artifact, SecurityAssessment
 
@@ -960,7 +962,7 @@ def re_score_triggers(db=None, *, investigation_id: Optional[int] = None) -> dic
             if value is None:
                 return None
             if value.tzinfo is None:
-                return value.replace(tzinfo=timezone.utc)
+                return value.replace(tzinfo=UTC)
             return value
 
         def _latest(rows):
@@ -972,8 +974,8 @@ def re_score_triggers(db=None, *, investigation_id: Optional[int] = None) -> dic
                        (rec.product_name or rec.product_family or "").strip().lower(),
                        path)
                 prev = best.get(key)
-                prev_dt = _dt(prev.created_at) if prev else datetime.min.replace(tzinfo=timezone.utc)
-                cur_dt = _dt(rec.created_at) or datetime.min.replace(tzinfo=timezone.utc)
+                prev_dt = _dt(prev.created_at) if prev else datetime.min.replace(tzinfo=UTC)
+                cur_dt = _dt(rec.created_at) or datetime.min.replace(tzinfo=UTC)
                 if prev is None or cur_dt > prev_dt:
                     best[key] = rec
             return best.values()

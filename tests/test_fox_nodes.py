@@ -15,9 +15,9 @@ os.environ["AKM_DATABASE_URL"] = os.environ.get("AKM_TEST_DB") or (
     "sqlite:///" + os.path.join(tempfile.gettempdir(), "akm_test_fox_nodes.db"))
 
 from fastapi.testclient import TestClient
-from app.main import app as fastapi_app
 
 from app import fox_nodes as F
+from app.main import app as fastapi_app
 
 NODE_IDS = {"axiom", "axiom-dgx", "harishs-macbook-pro"}
 

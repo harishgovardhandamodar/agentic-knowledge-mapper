@@ -293,9 +293,8 @@ class TestTypedHandoff(unittest.TestCase):
         self.assertIn("lineage edge", check["reasons"]["parent_event"])
 
     def test_record_typed_handoff_writes_a_lineage_event(self):
-        import os
-        from app.database import init_db, SessionLocal
         from app import assurance_ledger as AL
+        from app.database import SessionLocal, init_db
         init_db()
         msg = {"run_id": "akm-run-typed", "parent_event": "p1",
                "from_role": "research-collector", "to_role": "threat-intel",

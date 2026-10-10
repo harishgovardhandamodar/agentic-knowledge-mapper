@@ -18,9 +18,14 @@ os.environ["AKM_DATABASE_URL"] = os.environ.get("AKM_TEST_DB") or (
 
 from app import database  # noqa: E402
 from app.database import SessionLocal  # noqa: E402
-from app.explainer import investigation_suggestions, _lex_hits  # noqa: E402
-from app.models import (Artifact, CveFinding, Explanation,  # noqa: E402
-                        Investigation, SecurityAssessment)
+from app.explainer import _lex_hits, investigation_suggestions  # noqa: E402
+from app.models import (  # noqa: E402
+    Artifact,
+    CveFinding,
+    Explanation,
+    Investigation,
+    SecurityAssessment,
+)
 
 database.init_db()
 

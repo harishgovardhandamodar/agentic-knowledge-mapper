@@ -26,8 +26,8 @@ confidence" being the anti-pattern:
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta, timezone
-from typing import Any, Optional
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from . import assurance as A
 from . import assurance_ledger as AL
@@ -85,7 +85,7 @@ ALL_STATES = (STATE_BLOCKED, STATE_GUARDRAILS, STATE_OPEN,
 QUEUE_SORTS = ("residual", "age", "confidence", "product")
 
 
-def canonical_decision(value: str) -> Optional[str]:
+def canonical_decision(value: str) -> str | None:
     """Map any accepted spelling of a decision onto its stored constant.
 
     Returns ``None`` for anything unrecognised so the caller can raise with the
@@ -101,7 +101,7 @@ def _layer_of(rec: Any) -> str:
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _load(raw: Any, default: Any = None) -> Any:
@@ -127,7 +127,7 @@ def _assessment_dict(rec: Any) -> dict[str, Any]:
     threats = _load(rec.threats_json, [])
     created = rec.created_at
     if created and created.tzinfo is None:
-        created = created.replace(tzinfo=timezone.utc)
+        created = created.replace(tzinfo=UTC)
     return {
         "assessment_id": rec.id,
         "run_id": rec.run_id,
@@ -169,7 +169,7 @@ def _assessment_dict(rec: Any) -> dict[str, Any]:
     }
 
 
-def _decision_state(a: dict[str, Any], now: Optional[datetime] = None) -> str:
+def _decision_state(a: dict[str, Any], now: datetime | None = None) -> str:
     """Effective decision state: a recorded human decision wins, else derived."""
     now = now or _now()
     expires = a.get("expires_at")
@@ -178,7 +178,7 @@ def _decision_state(a: dict[str, Any], now: Optional[datetime] = None) -> str:
         try:
             exp = datetime.fromisoformat(str(expires).replace("Z", "+00:00"))
             if exp.tzinfo is None:
-                exp = exp.replace(tzinfo=timezone.utc)
+                exp = exp.replace(tzinfo=UTC)
             expired = exp <= now
         except Exception:
             expired = False
@@ -233,10 +233,10 @@ def _latest_per_investigation(rows: list[Any]) -> list[dict[str, Any]]:
     return [_assessment_dict(rec) for rec in best.values()]
 
 
-def resolve_scope(investigation_id: Optional[int] = None, *,
-                  initiative_id: Optional[int] = None,
-                  layer: Optional[str] = None,
-                  exposure: Optional[str] = None,
+def resolve_scope(investigation_id: int | None = None, *,
+                  initiative_id: int | None = None,
+                  layer: str | None = None,
+                  exposure: str | None = None,
                   window_days: int = 90) -> dict[str, Any]:
     """Validate and normalise the board's read scope.
 
@@ -261,10 +261,10 @@ def resolve_scope(investigation_id: Optional[int] = None, *,
     }
 
 
-def _assessments(db, investigation_id: Optional[int] = None, *,
-                 initiative_id: Optional[int] = None,
-                 layer: Optional[str] = None,
-                 exposure: Optional[str] = None) -> list[Any]:
+def _assessments(db, investigation_id: int | None = None, *,
+                 initiative_id: int | None = None,
+                 layer: str | None = None,
+                 exposure: str | None = None) -> list[Any]:
     """Assessment rows in scope, newest first.
 
     ``initiative_id`` and ``exposure`` are stored columns and filter in SQL;
@@ -286,8 +286,8 @@ def _assessments(db, investigation_id: Optional[int] = None, *,
     return rows
 
 
-def _in_scope(rows: list[Any], *, initiative_id: Optional[int] = None,
-              layer: Optional[str] = None) -> list[Any]:
+def _in_scope(rows: list[Any], *, initiative_id: int | None = None,
+              layer: str | None = None) -> list[Any]:
     """Apply the derived filters to an already-investigation-narrowed list."""
     out = rows
     if initiative_id:
@@ -309,11 +309,11 @@ def _investigations(db, ids: set[int]) -> dict[int, str]:
 
 # ------------------------------------------- A. Executive risk position ----
 
-def risk_position(db, investigation_id: Optional[int] = None, *,
+def risk_position(db, investigation_id: int | None = None, *,
                   window_days: int = 90,
-                  initiative_id: Optional[int] = None,
-                  layer: Optional[str] = None,
-                  exposure: Optional[str] = None) -> dict[str, Any]:
+                  initiative_id: int | None = None,
+                  layer: str | None = None,
+                  exposure: str | None = None) -> dict[str, Any]:
     """Aggregate verified residual by data tier, with confidence beside it.
 
     Segmented by tier because "Public" and "Restricted" averaged into one
@@ -413,7 +413,7 @@ def risk_position(db, investigation_id: Optional[int] = None, *,
                     entry["products"] = 1 if prev is None else int(prev.get("products") or 1) + 1
                     bucket[key] = entry
 
-    def _mean(xs: list[float]) -> Optional[float]:
+    def _mean(xs: list[float]) -> float | None:
         return round(sum(xs) / len(xs), 1) if xs else None
 
     for rec in by_tier.values():
@@ -503,7 +503,7 @@ def _trend(rows: list[Any], cutoff: datetime) -> dict[str, Any]:
         a = _assessment_dict(rec)
         created = rec.created_at
         if created and created.tzinfo is None:
-            created = created.replace(tzinfo=timezone.utc)
+            created = created.replace(tzinfo=UTC)
         if not created:
             continue
         key = "window" if created >= cutoff else "prior"
@@ -539,11 +539,11 @@ def _trend(rows: list[Any], cutoff: datetime) -> dict[str, Any]:
 TREND_WINDOWS = (30, 90, 365)
 
 
-def _row_point(rec: Any) -> tuple[Optional[datetime], Optional[float], Optional[float]]:
+def _row_point(rec: Any) -> tuple[datetime | None, float | None, float | None]:
     """(created_at, residual_pct, confidence) for one row, normalised once."""
     created = rec.created_at
     if created and created.tzinfo is None:
-        created = created.replace(tzinfo=timezone.utc)
+        created = created.replace(tzinfo=UTC)
     a = _assessment_dict(rec)
     v = a.get("verified_residual_pct")
     if v is None:
@@ -674,7 +674,7 @@ def _portfolio_series(rows: list[Any], window_days: int,
     return out
 
 
-def _sparkline(values: list[float], buckets: int = 12) -> list[Optional[int]]:
+def _sparkline(values: list[float], buckets: int = 12) -> list[int | None]:
     """Residual values folded into a fixed-width series for a sparkline.
 
     Values are counts, not risk: a bucket with no rows is ``None`` so the
@@ -684,7 +684,7 @@ def _sparkline(values: list[float], buckets: int = 12) -> list[Optional[int]]:
         return []
     if len(values) <= buckets:
         return [int(round(v)) for v in values]
-    out: list[Optional[int]] = []
+    out: list[int | None] = []
     size = len(values) / float(buckets)
     for i in range(buckets):
         chunk = values[int(i * size):max(int((i + 1) * size), int(i * size) + 1)]
@@ -695,15 +695,15 @@ def _sparkline(values: list[float], buckets: int = 12) -> list[Optional[int]]:
 
 # ------------------------------------------------- B. Decision queue -------
 
-def decision_queue(db, investigation_id: Optional[int] = None, *,
-                   states: Optional[list[str]] = None,
+def decision_queue(db, investigation_id: int | None = None, *,
+                   states: list[str] | None = None,
                    limit: int = 25, offset: int = 0,
-                   tier: Optional[str] = None,
+                   tier: str | None = None,
                    sort: str = "residual",
                    sla_days: int = DECISION_SLA_DAYS,
-                   initiative_id: Optional[int] = None,
-                   layer: Optional[str] = None,
-                   exposure: Optional[str] = None) -> dict[str, Any]:
+                   initiative_id: int | None = None,
+                   layer: str | None = None,
+                   exposure: str | None = None) -> dict[str, Any]:
     """Everything waiting on a leadership decision, with what would change it.
 
     Each row carries the verified residual *and* its evidence confidence,
@@ -826,7 +826,7 @@ def decision_queue(db, investigation_id: Optional[int] = None, *,
     }
 
 
-def _days_between(anchor: Optional[str], now: datetime) -> Optional[float]:
+def _days_between(anchor: str | None, now: datetime) -> float | None:
     """Whole-ish days from an ISO timestamp to now, or None when unknown."""
     if not anchor:
         return None
@@ -835,7 +835,7 @@ def _days_between(anchor: Optional[str], now: datetime) -> Optional[float]:
     except Exception:
         return None
     if ts.tzinfo is None:
-        ts = ts.replace(tzinfo=timezone.utc)
+        ts = ts.replace(tzinfo=UTC)
     return max(0, int((now - ts).total_seconds() // 86400))
 
 
@@ -867,10 +867,10 @@ def _queue_sort_key(sort: str):
 
 # ------------------------------------- C. Control & assurance health -------
 
-def assurance_health(db, investigation_id: Optional[int] = None, *,
-                     initiative_id: Optional[int] = None,
-                     layer: Optional[str] = None,
-                     exposure: Optional[str] = None) -> dict[str, Any]:
+def assurance_health(db, investigation_id: int | None = None, *,
+                     initiative_id: int | None = None,
+                     layer: str | None = None,
+                     exposure: str | None = None) -> dict[str, Any]:
     """Controls verified vs declared, forensics across the portfolio, ledger
     integrity, interrupted runs, overdue evidence reviews."""
     rows = _assessments(db, investigation_id, initiative_id=initiative_id,
@@ -940,7 +940,7 @@ def assurance_health(db, investigation_id: Optional[int] = None, *,
     }
 
 
-def _ledger_health(db, investigation_id: Optional[int] = None) -> dict[str, Any]:
+def _ledger_health(db, investigation_id: int | None = None) -> dict[str, Any]:
     """Chain integrity and event-class completeness across recent runs."""
     from .models import AgentRun
 
@@ -983,7 +983,7 @@ def _ledger_health(db, investigation_id: Optional[int] = None) -> dict[str, Any]
     }
 
 
-def _stalled_runs(db, investigation_id: Optional[int] = None,
+def _stalled_runs(db, investigation_id: int | None = None,
                   ) -> dict[str, Any]:
     """Interrupted and orphaned runs — the gap an explainer_gap leaves."""
     from .models import AgentRun
@@ -1024,7 +1024,7 @@ def _architecture_gap_intervals(rows: list[Any]) -> list[tuple[str, float | None
                a["scoring_path"])
         created = rec.created_at
         if created and created.tzinfo is None:
-            created = created.replace(tzinfo=timezone.utc)
+            created = created.replace(tzinfo=UTC)
         by_key.setdefault(key, []).append((created or _now(),
                                            bool(gate.get("gate_blocked_applied"))))
     out: list[tuple[str, float | None, float]] = []
@@ -1044,7 +1044,7 @@ def _architecture_gap_intervals(rows: list[Any]) -> list[tuple[str, float | None
     return out
 
 
-def _overdue_evidence(db, investigation_id: Optional[int] = None,
+def _overdue_evidence(db, investigation_id: int | None = None,
                       timeout_days: int = 14) -> dict[str, Any]:
     """Pending artifacts past the ageing threshold, awaiting a human decision."""
     from .models import Artifact
@@ -1058,7 +1058,7 @@ def _overdue_evidence(db, investigation_id: Optional[int] = None,
     for a in rows:
         created = a.created_at
         if created and created.tzinfo is None:
-            created = created.replace(tzinfo=timezone.utc)
+            created = created.replace(tzinfo=UTC)
         age = (now - created).days if created else 0
         if age >= timeout_days:
             overdue.append({"artifact_id": a.id, "age_days": age,
@@ -1077,10 +1077,10 @@ def _overdue_evidence(db, investigation_id: Optional[int] = None,
 
 # ------------------------------------------ D. Exposure & blast radius -----
 
-def exposure_lens(db, investigation_id: Optional[int] = None, *,
-                  initiative_id: Optional[int] = None,
-                  layer: Optional[str] = None,
-                  exposure: Optional[str] = None) -> dict[str, Any]:
+def exposure_lens(db, investigation_id: int | None = None, *,
+                  initiative_id: int | None = None,
+                  layer: str | None = None,
+                  exposure: str | None = None) -> dict[str, Any]:
     """Restricted/Confidential assets, privileged users, materiality flags."""
     rows = _assessments(db, investigation_id, initiative_id=initiative_id,
                         layer=layer, exposure=exposure)
@@ -1130,11 +1130,11 @@ def exposure_lens(db, investigation_id: Optional[int] = None, *,
 
 # ------------------------------------------ E. System & process integrity ---
 
-def system_integrity(db, investigation_id: Optional[int] = None,
+def system_integrity(db, investigation_id: int | None = None,
                      limit: int = 20, *,
-                     initiative_id: Optional[int] = None,
-                     layer: Optional[str] = None,
-                     exposure: Optional[str] = None) -> dict[str, Any]:
+                     initiative_id: int | None = None,
+                     layer: str | None = None,
+                     exposure: str | None = None) -> dict[str, Any]:
     """Swarm health, pack currency, ledger completeness, time-to-close."""
     rows = _assessments(db, investigation_id, initiative_id=initiative_id,
                         layer=layer, exposure=exposure)
@@ -1227,7 +1227,7 @@ def system_integrity(db, investigation_id: Optional[int] = None,
     }
 
 
-def _time_to_close(db, investigation_id: Optional[int] = None) -> dict[str, Any]:
+def _time_to_close(db, investigation_id: int | None = None) -> dict[str, Any]:
     """How long architecture gaps and evidence reviews actually take."""
     from .models import Artifact, Explanation
 
@@ -1268,7 +1268,7 @@ def _time_to_close(db, investigation_id: Optional[int] = None) -> dict[str, Any]
     for a in pq.all():
         created = a.created_at or a.updated_at or now
         if created.tzinfo is None:
-            created = created.replace(tzinfo=timezone.utc)
+            created = created.replace(tzinfo=UTC)
         pending_ages.append(max(0.0, (now - created).total_seconds() / 86400.0))
 
     return {
@@ -1296,13 +1296,13 @@ def _time_to_close(db, investigation_id: Optional[int] = None) -> dict[str, Any]
 
 # ------------------------------------------------------- alerting --------
 
-def alerts(db, investigation_id: Optional[int] = None, *,
-           initiative_id: Optional[int] = None,
-           layer: Optional[str] = None,
-           exposure: Optional[str] = None,
+def alerts(db, investigation_id: int | None = None, *,
+           initiative_id: int | None = None,
+           layer: str | None = None,
+           exposure: str | None = None,
            sla_days: int = DECISION_SLA_DAYS,
            include_acknowledged: bool = False,
-           queue_states: Optional[list[str]] = None) -> dict[str, Any]:
+           queue_states: list[str] | None = None) -> dict[str, Any]:
     """Notifications, not just tiles: what needs a person now."""
     out: list[dict[str, Any]] = []
     q = decision_queue(db, investigation_id, sla_days=sla_days,
@@ -1363,7 +1363,7 @@ def alerts(db, investigation_id: Optional[int] = None, *,
                 "assessment_id": item["assessment_id"],
                 "age_days": item["age_days"],
                 "link": item["dossier_link"],
-                "action": f"record accept, guardrails, reject or exception",
+                "action": "record accept, guardrails, reject or exception",
             })
     h = assurance_health(db, investigation_id, initiative_id=initiative_id,
                          layer=layer)
@@ -1441,7 +1441,7 @@ def _alert_finding_hash(alert: dict[str, Any]) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:32]
 
 
-def _aware(ts: Optional[datetime]) -> Optional[datetime]:
+def _aware(ts: datetime | None) -> datetime | None:
     """Coerce a stored timestamp to UTC-aware.
 
     SQLite hands back naive datetimes and Postgres hands back aware ones, so a
@@ -1451,7 +1451,7 @@ def _aware(ts: Optional[datetime]) -> Optional[datetime]:
     """
     if ts is None:
         return None
-    return ts if ts.tzinfo is not None else ts.replace(tzinfo=timezone.utc)
+    return ts if ts.tzinfo is not None else ts.replace(tzinfo=UTC)
 
 
 def _apply_alert_state(db, alerts_in: list[dict[str, Any]], *,
@@ -1511,8 +1511,8 @@ def _apply_alert_state(db, alerts_in: list[dict[str, Any]], *,
 
 def acknowledge_alert(db, alert_id: str, *, actor: str,
                       status: str = "acknowledged", note: str = "",
-                      snooze_days: Optional[int] = None,
-                      finding_hash: Optional[str] = None) -> dict[str, Any]:
+                      snooze_days: int | None = None,
+                      finding_hash: str | None = None) -> dict[str, Any]:
     """Record that a named person has seen an alert, and optionally snoozed it.
 
     Only the response is stored. A snooze has an end date because an alert
@@ -1655,10 +1655,10 @@ def _row_experiment_coverage(rec: Any) -> dict[str, Any]:
     }
 
 
-def coverage(db, investigation_id: Optional[int] = None, *,
-             initiative_id: Optional[int] = None,
-             layer: Optional[str] = None,
-             exposure: Optional[str] = None) -> dict[str, Any]:
+def coverage(db, investigation_id: int | None = None, *,
+             initiative_id: int | None = None,
+             layer: str | None = None,
+             exposure: str | None = None) -> dict[str, Any]:
     """Coverage of the scope: which investigations have been assessed, and
     which model assessments carry an experiment plan over the open questions.
 
@@ -1729,7 +1729,7 @@ def coverage(db, investigation_id: Optional[int] = None, *,
          "investigation": titles.get(rec.investigation_id, "Untitled"),
          "product": (rec.product_name or rec.product_family or ""),
          **er}
-        for rec, er in zip(model_recs, exp_rows)
+        for rec, er in zip(model_recs, exp_rows, strict=False)
     ]
     exp_detail.sort(key=lambda e: (str(e["investigation"]).lower(),
                                    str(e["product"]).lower()))
@@ -1757,7 +1757,7 @@ def coverage(db, investigation_id: Optional[int] = None, *,
     uc_of: dict[int, str] = {}
     focus_of: dict[int, str] = {}
     class_of: dict[int, str] = {}
-    for a, rec in zip(latest, recs):
+    for a, rec in zip(latest, recs, strict=False):
         inv = a["investigation_id"]
         tier_of.setdefault(inv, a["exposure"])
         uc_of.setdefault(inv, (rec.use_case or "").strip())
@@ -1837,13 +1837,13 @@ def coverage(db, investigation_id: Optional[int] = None, *,
     }
 
 
-def board(db, investigation_id: Optional[int] = None, *,
+def board(db, investigation_id: int | None = None, *,
           window_days: int = 90, persona: str = "executive",
-          initiative_id: Optional[int] = None,
-          layer: Optional[str] = None,
-          exposure: Optional[str] = None,
-          tier: Optional[str] = None,
-          queue_states: Optional[list[str]] = None,
+          initiative_id: int | None = None,
+          layer: str | None = None,
+          exposure: str | None = None,
+          tier: str | None = None,
+          queue_states: list[str] | None = None,
           sort: str = "residual",
           limit: int = 25,
           offset: int = 0,
@@ -1954,9 +1954,9 @@ def board(db, investigation_id: Optional[int] = None, *,
 # --------------------------------------- acceptance / exception register ---
 
 def record_decision(db, assessment_id: int, decision: str, *, actor: str,
-                    rationale: str = "", expires_days: Optional[int] = None,
+                    rationale: str = "", expires_days: int | None = None,
                     override: bool = False,
-                    investigation_id: Optional[int] = None) -> dict[str, Any]:
+                    investigation_id: int | None = None) -> dict[str, Any]:
     """Record a leadership decision: accept, guardrails, reject, or exception.
 
     Written to the assessment and to the ledger with identity and rationale,
@@ -2023,10 +2023,10 @@ def record_decision(db, assessment_id: int, decision: str, *, actor: str,
     }
 
 
-def exception_register(db, investigation_id: Optional[int] = None, *,
-                       initiative_id: Optional[int] = None,
-                       layer: Optional[str] = None,
-                       exposure: Optional[str] = None) -> dict[str, Any]:
+def exception_register(db, investigation_id: int | None = None, *,
+                       initiative_id: int | None = None,
+                       layer: str | None = None,
+                       exposure: str | None = None) -> dict[str, Any]:
     """Time-bounded exceptions, with expiry status."""
     rows = _assessments(db, investigation_id, initiative_id=initiative_id,
                         layer=layer, exposure=exposure)
@@ -2037,7 +2037,7 @@ def exception_register(db, investigation_id: Optional[int] = None, *,
             continue
         exp = rec.assurance_decision_expires_at
         if exp and exp.tzinfo is None:
-            exp = exp.replace(tzinfo=timezone.utc)
+            exp = exp.replace(tzinfo=UTC)
         out.append({
             "assessment_id": rec.id,
             "product": rec.product_name or "",
@@ -2074,10 +2074,10 @@ def exception_register(db, investigation_id: Optional[int] = None, *,
     }
 
 
-def change_log(db, investigation_id: Optional[int] = None, *,
-               initiative_id: Optional[int] = None,
-               layer: Optional[str] = None,
-               exposure: Optional[str] = None) -> dict[str, Any]:
+def change_log(db, investigation_id: int | None = None, *,
+               initiative_id: int | None = None,
+               layer: str | None = None,
+               exposure: str | None = None) -> dict[str, Any]:
     """Superseded assessments as a short change-log.
 
     §6's redundancy complaint: multiple overlapping assessments with slight
@@ -2168,11 +2168,11 @@ def change_log(db, investigation_id: Optional[int] = None, *,
 
 # -------------------------------------------------- board export -----------
 
-def export_markdown(db, investigation_id: Optional[int] = None, *,
+def export_markdown(db, investigation_id: int | None = None, *,
                     window_days: int = 90, persona: str = "executive",
-                    initiative_id: Optional[int] = None,
-                    layer: Optional[str] = None,
-                    exposure: Optional[str] = None) -> str:
+                    initiative_id: int | None = None,
+                    layer: str | None = None,
+                    exposure: str | None = None) -> str:
     """The whole board as one Markdown snapshot.
 
     A regulator asks for a document, not a live endpoint. This is that

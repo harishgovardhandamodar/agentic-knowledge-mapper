@@ -11,7 +11,7 @@ import json
 import os
 import tempfile
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 # Pinned before the app import: app.database reads the URL at import time, and
 # a test run must never touch the developer's working database.
@@ -23,10 +23,15 @@ from app import assurance_ledger as AL
 from app import leadership as LD
 from app.database import SessionLocal, init_db
 from app.ledger_models import LeadershipAlertState, LedgerEvent, LedgerRun
-from app.models import (AgentRun, Artifact, Explanation, Investigation,
-                        SecurityAssessment)
+from app.models import (
+    AgentRun,
+    Artifact,
+    Explanation,
+    Investigation,
+    SecurityAssessment,
+)
 
-NOW = datetime.now(timezone.utc)
+NOW = datetime.now(UTC)
 
 
 def _assurance(**over) -> dict:
@@ -787,7 +792,7 @@ class TestAlertAcknowledgement(LeadershipTestBase):
         alert = LD.alerts(self.db)["alerts"][0]
         LD.acknowledge_alert(self.db, alert["id"], actor="Dana", status="snoozed",
                              snooze_days=1)
-        from app.ledger_models import LeadershipAlertState, LedgerEvent, LedgerRun
+        from app.ledger_models import LeadershipAlertState
         row = self.db.query(LeadershipAlertState).filter(
             LeadershipAlertState.alert_id == alert["id"]).one()
         row.snoozed_until = NOW - timedelta(days=1)
@@ -805,7 +810,7 @@ class TestAlertAcknowledgement(LeadershipTestBase):
         self._blocked()
         alert = LD.alerts(self.db, include_acknowledged=True)["alerts"][0]
         LD.acknowledge_alert(self.db, alert["id"], actor="Dana")
-        from app.ledger_models import LeadershipAlertState, LedgerEvent, LedgerRun
+        from app.ledger_models import LeadershipAlertState
         row = self.db.query(LeadershipAlertState).filter(
             LeadershipAlertState.alert_id == alert["id"]).one()
         row.finding_hash = "a-different-finding"

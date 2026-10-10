@@ -5,16 +5,16 @@ models routinely emit literal newlines inside strings, trailing commas, and
 prose around the payload. Strict parsing turned all of that into a total
 explainer failure. These tests pin the repairs. No DB, no network.
 """
-import unittest
 import os
 import tempfile
+import unittest
 
 # Pin the database before app.database is imported: a module that omits
 # this can inherit data/akm.db and write test rows into the live store.
 os.environ["AKM_DATABASE_URL"] = os.environ.get("AKM_TEST_DB") or (
     "sqlite:///" + os.path.join(tempfile.mkdtemp(prefix="akm-llm-json-"), "test.db"))
 
-from app.llm import _parse_json_lenient, LLMError
+from app.llm import LLMError, _parse_json_lenient
 
 
 class TestLenientJson(unittest.TestCase):
@@ -74,6 +74,7 @@ class PostErrorCase(unittest.TestCase):
         # model name, or the gateway routing. The gateway body carries the
         # reason, so the raised error must include it.
         from unittest import mock
+
         import app.llm as llm
 
         resp = mock.Mock(

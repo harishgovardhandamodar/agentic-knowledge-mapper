@@ -13,8 +13,8 @@ from unittest import mock
 os.environ["AKM_DATABASE_URL"] = os.environ.get("AKM_TEST_DB") or (
     "sqlite:///" + os.path.join(tempfile.mkdtemp(prefix="akm-modeleval-"), "test.db"))
 
-from app import model_eval as me  # noqa: E402
 from app import database  # noqa: E402
+from app import model_eval as me  # noqa: E402
 from app import models as _models  # noqa: E402,F401 -- registers tables
 
 database.init_db()
@@ -231,9 +231,9 @@ class TestOrchestratorOffline(unittest.TestCase):
         self.assertIn("insufficient evidence", out["report_markdown"].lower())
 
     def test_ledger_keeps_the_task_chain(self):
+        from app import ledger_models as _lm
         from app.agents import run_model_engineering_a2a_workflow
         from app.database import SessionLocal
-        from app import ledger_models as _lm
         db = SessionLocal()
         try:
             out = run_model_engineering_a2a_workflow(dict(TABULAR), db=db)
@@ -280,6 +280,7 @@ class TestOrchestratorOffline(unittest.TestCase):
 class TestModelApi(unittest.TestCase):
     def setUp(self):
         from fastapi.testclient import TestClient
+
         from app import main as main_mod
         self.client = TestClient(main_mod.app)
         inv = self.client.post("/api/investigations", json={

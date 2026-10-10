@@ -12,11 +12,8 @@ model calls twice, which is worse than losing one.
 """
 import os
 import tempfile
-import os
 import unittest
-from datetime import datetime, timedelta, timezone
-from unittest import mock
-
+from datetime import timedelta
 
 from sqlalchemy.exc import IntegrityError  # noqa: E402
 
@@ -25,8 +22,10 @@ from sqlalchemy.exc import IntegrityError  # noqa: E402
 os.environ["AKM_DATABASE_URL"] = os.environ.get("AKM_TEST_DB") or (
     "sqlite:///" + os.path.join(tempfile.mkdtemp(prefix="akm-jobqueue-"), "test.db"))
 
-from app import database  # noqa: E402
-from app import jobqueue  # noqa: E402
+from app import (
+    database,  # noqa: E402
+    jobqueue,  # noqa: E402
+)
 from app.database import SessionLocal  # noqa: E402
 from app.models import Job  # noqa: E402
 

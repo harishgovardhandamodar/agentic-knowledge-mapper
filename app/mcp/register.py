@@ -6,9 +6,9 @@ from typing import Any
 
 
 def upsert_risk(investigation_id: int, risk: dict[str, Any]) -> dict[str, Any]:
+    from .. import model_kb as kb
     from ..database import SessionLocal
     from ..portfolio import _derived_rows, _persist_register
-    from .. import model_kb as kb
 
     db = SessionLocal()
     try:
@@ -35,9 +35,10 @@ def list_risks(investigation_id: int, limit: int = 100) -> list[dict[str, Any]]:
 
 
 def link_treatment(risk_id: int, control_ids: list[str]) -> dict[str, Any]:
+    import json
+
     from ..database import SessionLocal
     from ..models import RiskEntry
-    import json
 
     db = SessionLocal()
     try:
@@ -52,9 +53,10 @@ def link_treatment(risk_id: int, control_ids: list[str]) -> dict[str, Any]:
 
 
 def get_risk(risk_id: int) -> dict[str, Any]:
+    import json
+
     from ..database import SessionLocal
     from ..models import RiskEntry
-    import json
 
     db = SessionLocal()
     try:

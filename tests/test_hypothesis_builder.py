@@ -111,6 +111,7 @@ class TestRegisterMerge(unittest.TestCase):
 class TestBuilderApi(unittest.TestCase):
     def setUp(self):
         from fastapi.testclient import TestClient
+
         from app import main as main_mod
         self.client = TestClient(main_mod.app)
         db = SessionLocal()
@@ -190,6 +191,7 @@ class TestBuilderApi(unittest.TestCase):
 class TestPartialGate(unittest.TestCase):
     def setUp(self):
         from fastapi.testclient import TestClient
+
         from app import main as main_mod
         self.client = TestClient(main_mod.app)
 

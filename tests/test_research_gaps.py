@@ -19,8 +19,13 @@ os.environ["AKM_DATABASE_URL"] = os.environ.get("AKM_TEST_DB") or (
 from app import database  # noqa: E402
 from app import explainer as ex  # noqa: E402
 from app.database import SessionLocal  # noqa: E402
-from app.models import (Artifact, CveFinding, Explanation, Investigation,  # noqa: E402
-                        SecurityAssessment)
+from app.models import (  # noqa: E402
+    Artifact,
+    CveFinding,
+    Explanation,
+    Investigation,
+    SecurityAssessment,
+)
 
 database.init_db()
 
@@ -209,6 +214,7 @@ class TestIntelRoutes(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         from fastapi.testclient import TestClient
+
         from app import main as main_mod
         cls.client = TestClient(main_mod.app)
 
@@ -325,6 +331,7 @@ class TestSummarySubTab(unittest.TestCase):
 
     def test_regenerate_route_recomputes(self):
         from fastapi.testclient import TestClient
+
         from app import main as main_mod
         client = TestClient(main_mod.app)
         inv_id = self._flagged()

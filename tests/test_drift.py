@@ -4,9 +4,9 @@ Drift = off-brief topic, kept but flagged. The prefilter is deterministic
 (shared vocabulary); the verdict is one LLM batch call per few candidates.
 Fail-open everywhere: failures mark nothing.
 """
-import unittest
 import os
 import tempfile
+import unittest
 
 # Pin the database before app.database is imported: a module that omits
 # this can inherit data/akm.db and write test rows into the live store.

@@ -8,9 +8,9 @@ hallucinated citation that reads exactly like real support.
 These tests pin the behaviour: a draft that invents an id is rejected in favour
 of the deterministic paragraph, and the verdict is reported either way.
 """
-import unittest
 import os
 import tempfile
+import unittest
 from unittest import mock
 
 # Pin the database before app.database is imported: a module that omits
@@ -19,7 +19,6 @@ os.environ["AKM_DATABASE_URL"] = os.environ.get("AKM_TEST_DB") or (
     "sqlite:///" + os.path.join(tempfile.mkdtemp(prefix="akm-report-grounding-"), "test.db"))
 
 from app import agents
-
 
 PAYLOAD = {
     "product_name": "WidgetGPT",

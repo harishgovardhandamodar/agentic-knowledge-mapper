@@ -16,13 +16,12 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from . import llm
 from .agent import launch_run
-from .models import (AgentEvent, AgentRun, Artifact, Investigation,
-                     SecurityAssessment)
+from .models import AgentEvent, AgentRun, Artifact, Investigation, SecurityAssessment
 from .security import EXPOSURE_META, profile_model_subject
 from .security_agent import launch_security_assessment
 
@@ -129,7 +128,7 @@ def _focus_terms(title: str) -> list[str]:
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def split_command(command: str) -> dict[str, Any]:
@@ -357,7 +356,14 @@ def _run_row(db, run) -> dict[str, Any]:
             "summary_investigation_id": summary_id,
             "synthesis_artifact_id": synthesis_artifact_id,
             "topics": topics, "children": children,
-            "all_done": all_done, "compiled": compiled}
+            "all_done": all_done, "compiled": compiled,
+            # Echoed so a run can be edited-and-relaunched or retriggered
+            # as a new run: the stored plan (minus investigation_id links,
+            # which validate_plan drops) re-validates cleanly into run_plan.
+            "domain": plan.get("domain") or "",
+            "exposure": plan.get("exposure") or "confidential_data",
+            "summary": plan.get("summary") or {},
+            "options": plan.get("options") or {}}
 
 
 def run_plan(db, plan: dict[str, Any], options: dict[str, Any] | None = None,
@@ -656,7 +662,7 @@ def _provider_section(db, plan: dict[str, Any],
     per_provider: list[tuple[str, list[dict[str, Any]]]] = []
     per_safety: dict[str, list[dict[str, Any]]] = {}
     per_rlhf: dict[str, list[dict[str, Any]]] = {}
-    for t, c in zip(topics, children):
+    for t, c in zip(topics, children, strict=False):
         if not isinstance(t, dict) or not isinstance(c, dict):
             continue
         inv_id = (c.get("investigation_id")
@@ -948,7 +954,7 @@ def _iso(ts: Any) -> str | None:
         if ts is None:
             return None
         if getattr(ts, "tzinfo", None) is not None:
-            ts = ts.astimezone(timezone.utc).replace(tzinfo=None)
+            ts = ts.astimezone(UTC).replace(tzinfo=None)
         return ts.isoformat()
     except Exception:
         return None

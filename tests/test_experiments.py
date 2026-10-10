@@ -3,13 +3,12 @@ import json
 import os
 import tempfile
 import unittest
-from unittest import mock
 
 os.environ["AKM_DATABASE_URL"] = os.environ.get("AKM_TEST_DB") or (
     "sqlite:///" + os.path.join(tempfile.mkdtemp(prefix="akm-exp-"), "test.db"))
 
-from app import model_eval as me  # noqa: E402
 from app import database  # noqa: E402
+from app import model_eval as me  # noqa: E402
 from app import models as _models  # noqa: E402,F401 -- registers tables
 from app.database import SessionLocal  # noqa: E402
 
@@ -109,6 +108,7 @@ class TestExperimentAgent(unittest.TestCase):
 class TestExperimentEndpoint(unittest.TestCase):
     def setUp(self):
         from fastapi.testclient import TestClient
+
         from app import main as main_mod
         self.client = TestClient(main_mod.app)
         db = SessionLocal()

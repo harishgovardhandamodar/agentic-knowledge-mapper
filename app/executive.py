@@ -584,10 +584,9 @@ def robustness(db, inv_id: int, scope: dict[str, Any] | None = None,
                landscape: dict[str, Any] | None = None,
                rows: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     """How well identified risks are owned, mitigated, validated, current."""
-    from . import model_eval as _me
     from . import portfolio as _pf
     from . import threatpack as _tp
-    from .models import AgentRun, CveFinding, Job
+    from .models import AgentRun, Job
     scope = scope or resolve_scope(db, inv_id)
     land = landscape if landscape is not None else _land(db, inv_id)
     rows = rows if rows is not None else scoped_register(db, inv_id, scope, land)
@@ -757,8 +756,8 @@ def _reassess_followup(db, inv_id: int, scope: dict[str, Any]
     followed = 0
     pending_items = []
     accepted_ts = sorted(
-        ((a.created_at or a.date_published) for a in _artifacts(db, inv_id)
-         if a.review == "accepted" and (a.created_at or a.date_published)))
+        (a.created_at or a.date_published) for a in _artifacts(db, inv_id)
+         if a.review == "accepted" and (a.created_at or a.date_published))
     for subj, series in by_subject.items():
         for i, r in enumerate(series):
             if not r.created_at:
@@ -903,7 +902,6 @@ def attention(db, inv_id: int, scope: dict[str, Any] | None = None,
 def summary(db, inv_id: int, scope: dict[str, Any] | None = None
             ) -> dict[str, Any]:
     """The header strip: lights, open High/Critical, approvals, stale."""
-    from . import model_kb as _kb
     scope = scope or resolve_scope(db, inv_id)
     land = _land(db, inv_id)
     rows = scoped_register(db, inv_id, scope, land)

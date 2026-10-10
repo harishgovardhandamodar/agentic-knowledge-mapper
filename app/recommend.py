@@ -24,7 +24,7 @@ None of them schedule anything or mutate state. Recommending is cheap and
 reversible; acting is the caller's decision.
 """
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime
 
 from .drift import brief_terms, ngrams
 
@@ -118,10 +118,10 @@ def stale_brief(db, inv_id, now=None) -> list:
     arts = [a for a in _artifacts(db, inv_id) if a.created_at]
     if not arts:
         return []
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
 
     def aware(dt):
-        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+        return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
 
     latest = max(aware(a.created_at) for a in arts)
     brief_at = aware(inv.created_at) if inv.created_at else None
@@ -185,8 +185,13 @@ def control_leverage(db, inv_id, assessment_id=None) -> list:
     # recoverable: residual_likelihood = L*(1-coverage), floored. Rebuild the
     # baseline the same way rescore_security_assessment does, so the numbers
     # here are comparable to what that endpoint would return.
-    from .security import (_THREAT_CATALOG, EXPOSURE_META, _scale_likelihood,
-                           control_catalog, score_assessment)
+    from .security import (
+        _THREAT_CATALOG,
+        EXPOSURE_META,
+        _scale_likelihood,
+        control_catalog,
+        score_assessment,
+    )
     exposure = rec.exposure if rec.exposure in EXPOSURE_META else "confidential_data"
     weight = float(EXPOSURE_META[exposure]["weight"])
     inherent = [{"id": t[0], "title": t[1], "stride": t[2], "owasp": t[3],

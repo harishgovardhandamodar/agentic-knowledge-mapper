@@ -7,13 +7,13 @@ run is already in progress. Missed windows are skipped, never backfilled.
 import atexit
 import logging
 import threading
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from croniter import croniter
 
 from .database import SessionLocal
-from .models import Investigation, AgentRun, Explanation
+from .models import AgentRun, Explanation, Investigation
 
 log = logging.getLogger("akm.scheduler")
 _lock = threading.Lock()
@@ -27,12 +27,12 @@ def valid_cron(expr: str) -> bool:
 
 
 def next_time(expr: str, now: datetime | None = None) -> datetime:
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
     if now.tzinfo is None:
-        now = now.replace(tzinfo=timezone.utc)
+        now = now.replace(tzinfo=UTC)
     nxt = croniter((expr or "").strip(), now).get_next(datetime)
     if nxt.tzinfo is None:
-        nxt = nxt.replace(tzinfo=timezone.utc)
+        nxt = nxt.replace(tzinfo=UTC)
     return nxt
 
 
@@ -47,7 +47,7 @@ def _tick():
         return
     db = SessionLocal()
     try:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         due = (db.query(Investigation)
                .filter(Investigation.schedule_enabled == 1,
                        Investigation.next_run_at.isnot(None),
@@ -82,7 +82,7 @@ def _tick_watched():
         return
     db = SessionLocal()
     try:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         cutoff = now.replace(hour=0, minute=0, second=0, microsecond=0)
         for exp in (db.query(Explanation)
                     .filter(Explanation.watched == 1,
@@ -132,8 +132,8 @@ def _tick_dashboard():
         return
     db = SessionLocal()
     try:
-        from .models import Investigation, SecurityAssessment
         from . import executive as _ex
+        from .models import Investigation, SecurityAssessment
         for inv in db.query(Investigation).all():
             try:
                 has_work = (db.query(SecurityAssessment)

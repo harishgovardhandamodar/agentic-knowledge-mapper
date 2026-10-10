@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from . import leakage as _lk
@@ -969,7 +969,7 @@ def _persist_register(db, inv_id: int, rows: list[dict[str, Any]]) -> None:
                     "scoring_fingerprint": scored.get("scoring_fingerprint"),
                     "score_rationale": scored.get("score_rationale"),
                     "inputs_hash": scored.get("inputs_hash"),
-                    "scored_at": datetime.now(timezone.utc) if scored else None,
+                    "scored_at": datetime.now(UTC) if scored else None,
                 }
             )
         vals["plain_summary"] = r.get("plain_summary") or f"{r.get('title','')} — {r.get('layer')} {r.get('scope')} risk"
@@ -1529,7 +1529,7 @@ def intel_feed(db, inv_id: int, since_days: int = 30,
     older than the staleness threshold, and catalog drift between a stored row
     and today's catalog.
     """
-    from .models import Artifact, SecurityAssessment
+    from .models import SecurityAssessment
     since = datetime.utcnow() - timedelta(days=since_days)
     stale_cut = datetime.utcnow() - timedelta(days=stale_days)
     new_cves = (db.query(Artifact)

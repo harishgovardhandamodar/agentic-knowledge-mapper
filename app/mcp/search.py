@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from .. import search as search_providers
 from .. import openshell as osh
+from .. import search as search_providers
 
 
 def web_search(query: str, max_results: int = 8) -> list[dict[str, Any]]:

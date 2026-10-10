@@ -29,9 +29,8 @@ architecture for a problem it does not have.
 """
 import json
 import threading
-import time
 import traceback
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import or_
 
@@ -60,7 +59,7 @@ class JobExists(Exception):
 
 
 def _now():
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 #: Statuses in which a job is still owed work. A key is unique across exactly

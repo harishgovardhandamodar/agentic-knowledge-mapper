@@ -19,7 +19,6 @@ Single-node FTS is the default; true Elastic behind SearchIndex interface later.
 
 from __future__ import annotations
 
-import json
 import re
 from typing import Any
 
@@ -109,7 +108,7 @@ def search(
     db = SessionLocal()
     hits: list[dict[str, Any]] = []
     try:
-        from .models import Artifact, Investigation, RiskEntry, SecurityAssessment
+        from .models import Artifact, Investigation, RiskEntry
 
         type_filter = set(t.lower() for t in (types or []))
         want_risk = not type_filter or "risks" in type_filter or "risk" in type_filter

@@ -16,12 +16,18 @@ from unittest import mock
 os.environ["AKM_DATABASE_URL"] = os.environ.get("AKM_TEST_DB") or (
     "sqlite:///" + os.path.join(tempfile.mkdtemp(prefix="akm-manager-"), "test.db"))
 
+from app import agent as agent_mod  # noqa: E402
 from app import database  # noqa: E402
 from app import manager as mgr  # noqa: E402
-from app import agent as agent_mod  # noqa: E402
 from app.database import SessionLocal  # noqa: E402
-from app.models import (AgentEvent, AgentRun, Artifact, Investigation,  # noqa: E402
-                        ManagerRun, SecurityAssessment)
+from app.models import (  # noqa: E402
+    AgentEvent,
+    AgentRun,
+    Artifact,
+    Investigation,
+    ManagerRun,
+    SecurityAssessment,
+)
 
 database.init_db()
 
@@ -245,6 +251,7 @@ class TestCompile(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         from fastapi.testclient import TestClient
+
         from app import main as main_mod
         cls.client = TestClient(main_mod.app)
 
@@ -562,6 +569,7 @@ class TestManagerLinks(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         from fastapi.testclient import TestClient
+
         from app import main as main_mod
         cls.client = TestClient(main_mod.app)
 
@@ -630,6 +638,7 @@ class TestManagerRoutes(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         from fastapi.testclient import TestClient
+
         from app import main as main_mod
         cls.client = TestClient(main_mod.app)
 
@@ -975,6 +984,64 @@ class TestVendorDocQuery(unittest.TestCase):
             {"text": "diffusion models capability", "sources": ["arxiv"]}])
         texts = [q["text"] for q in got]
         self.assertTrue(any("memorization" in t for t in texts), texts)
+
+
+class TestRetrigger(unittest.TestCase):
+    """Edit & run / Re-run: a stored run relaunches as a NEW run.
+
+    The run row echoes the plan (domain, exposure, summary, options) so
+    the frontend can rebuild the composer state or refire the same
+    command + plan + options. Stored investigation_id links must not
+    leak into the new run: validate_plan drops them.
+    """
+
+    def test_run_row_exposes_relaunch_fields(self):
+        db = _db()
+        try:
+            with mock.patch.object(mgr, "launch_run"), \
+                 mock.patch.object(mgr, "launch_security_assessment"):
+                row = mgr.run_plan(db, _plan(2),
+                                   {"research": True, "assessment": False},
+                                   "Do it again")
+            self.assertEqual(row["domain"], "finance")
+            self.assertEqual(row["exposure"], "confidential_data")
+            self.assertEqual(row["summary"],
+                             {"title": "Summary",
+                              "description": "All together"})
+            self.assertEqual(row["options"],
+                             {"research": True, "assessment": False})
+            self.assertTrue(all(t.get("investigation_id")
+                                for t in row["topics"]))
+        finally:
+            db.close()
+
+    def test_stored_plan_relaunches_as_new_run(self):
+        db = _db()
+        try:
+            with mock.patch.object(mgr, "launch_run"), \
+                 mock.patch.object(mgr, "launch_security_assessment"):
+                first = mgr.run_plan(db, _plan(2), None, "Do it again")
+            stored = json.loads(db.query(ManagerRun).filter(
+                ManagerRun.id == first["id"]).first().plan_json)
+            # What the frontend sends: stored plan minus stale links.
+            redacted = dict(stored)
+            redacted["topics"] = [
+                {k: v for k, v in t.items() if k != "investigation_id"}
+                for t in stored["topics"]]
+            with mock.patch.object(mgr, "launch_run") as lr, \
+                 mock.patch.object(mgr, "launch_security_assessment") as la:
+                second = mgr.run_plan(db, redacted, stored.get("options"),
+                                      first["command"])
+            self.assertNotEqual(second["id"], first["id"])
+            self.assertEqual(second["command"], "Do it again")
+            old_ids = {t["investigation_id"] for t in first["topics"]}
+            new_ids = {t["investigation_id"] for t in second["topics"]}
+            self.assertTrue(new_ids)
+            self.assertTrue(new_ids.isdisjoint(old_ids))
+            self.assertEqual(lr.call_count, 2)
+            self.assertEqual(la.call_count, 2)
+        finally:
+            db.close()
 
 
 if __name__ == "__main__":

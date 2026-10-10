@@ -17,9 +17,11 @@ from unittest import mock
 os.environ["AKM_DATABASE_URL"] = os.environ.get("AKM_TEST_DB") or (
     "sqlite:///" + os.path.join(tempfile.mkdtemp(prefix="akm-model-path-"), "test.db"))
 
-from app import agents  # noqa: E402
+from app import (
+    agents,  # noqa: E402
+    database,  # noqa: E402
+)
 from app import security as sec  # noqa: E402
-from app import database  # noqa: E402
 from app.database import SessionLocal  # noqa: E402
 from app.models import Investigation, SecurityAssessment  # noqa: E402
 
@@ -243,6 +245,7 @@ class TestModelRescoreGate(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         from fastapi.testclient import TestClient  # noqa: E402
+
         from app import main as main_mod  # noqa: E402
         cls.client = TestClient(main_mod.app)
 
