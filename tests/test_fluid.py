@@ -33,8 +33,44 @@ class TestFluidRoutes(unittest.TestCase):
         # Route handler resolves the same file it would serve.
         with open(index, encoding="utf-8") as fh:
             html = fh.read()
-        self.assertIn('id="root"', html)
-        self.assertIn("/fluid/", html)
+        # The export is a Next.js static build: assets live under /fluid/_next/
+        # because basePath and assetPrefix are both /fluid. A bare /_next/
+        # reference would 404 behind the FastAPI mount, so this is the check
+        # that the build actually happened with the right prefix.
+        self.assertIn("/fluid/_next/", html)
+        self.assertNotIn('"/_next/', html)
+
+    def test_every_route_has_its_own_exported_entry(self):
+        # trailingSlash export: each route is a directory with an index.html,
+        # which is what lets serve_fluid_assets answer a deep link directly
+        # instead of bouncing it through the root shell.
+        static_dir = os.path.join(os.path.dirname(
+            os.path.dirname(main_mod.__file__)), "static")
+        fluid_dir = os.path.join(static_dir, "fluid")
+        if not os.path.isfile(os.path.join(fluid_dir, "index.html")):
+            self.skipTest("fluid bundle not built (npm run build in fluid/)")
+        for route in ("security", "claims", "privacy", "design"):
+            with self.subTest(route=route):
+                self.assertTrue(
+                    os.path.isfile(
+                        os.path.join(fluid_dir, route, "index.html")),
+                    f"missing static/fluid/{route}/index.html")
+
+    def test_assets_are_present_under_the_prefix(self):
+        static_dir = os.path.join(os.path.dirname(
+            os.path.dirname(main_mod.__file__)), "static")
+        fluid_dir = os.path.join(static_dir, "fluid")
+        if not os.path.isdir(os.path.join(fluid_dir, "_next")):
+            self.skipTest("fluid bundle not built (npm run build in fluid/)")
+        # serve_fluid_assets only serves a path when it is a real file; a
+        # missing _next/ tree is the most common way a half-finished export
+        # reaches an image.
+        found = False
+        for _root, _dirs, files in os.walk(os.path.join(fluid_dir, "_next")):
+            if any(f.endswith((".js", ".css")) for f in files):
+                found = True
+                break
+        self.assertTrue(found, "no JS/CSS under static/fluid/_next/")
 
 
 class TestClassicToggle(unittest.TestCase):
