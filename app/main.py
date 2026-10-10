@@ -1,42 +1,58 @@
 import json
 import os
-import re
 from collections import defaultdict
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import UTC, datetime
 
-from fastapi import FastAPI, Depends, HTTPException, Query, Request, Response
-from fastapi.staticfiles import StaticFiles
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from .database import init_db, get_db
-from .models import (Investigation, Artifact, Relationship, AgentRun, AgentEvent,
-                     Explanation, SecurityAssessment, CveFinding,
-                     Initiative, RiskEntry)
-from . import llm, scheduler
-from . import ledger_api
+from . import (
+    approvals,
+    cve,
+    design_docs,
+    dossier,
+    evalkit,
+    ledger_api,
+    llm,
+    scheduler,
+    security_agent,
+    standards_matrix,
+    threatpack,
+)
+from . import console as console_mod
 from . import drift as drift_mod
 from . import kb_search as search_mod
-from . import console as console_mod
-from . import yield_ as yld
-from . import recommend as rec
-from . import threatpack, evalkit
-from . import approvals
-from . import cve
-from .agent import launch_run, launch_run_with_goal
-from . import security_agent
-from . import security as sec_engine
-from . import standards_matrix
-from . import design_docs
 from . import manager as manager_mod
-from . import dossier
-from .explainer import (launch_explanation, _extract_concepts, MODES,
-                        DEPTH_PLAN, AUDIENCE_HINTS, _question_suggestions,
-                        _quiz_from_answer, _save_explanation_to_graph,
-                        _investigation_roadmap)
+from . import recommend as rec
+from . import security as sec_engine
+from . import yield_ as yld
+from .agent import launch_run, launch_run_with_goal
+from .database import get_db, init_db
+from .explainer import (
+    AUDIENCE_HINTS,
+    DEPTH_PLAN,
+    MODES,
+    _investigation_roadmap,
+    _question_suggestions,
+    _quiz_from_answer,
+    _save_explanation_to_graph,
+    launch_explanation,
+)
 from .explainer import investigation_suggestions as investigation_suggestions_fn
+from .models import (
+    AgentEvent,
+    AgentRun,
+    Artifact,
+    CveFinding,
+    Explanation,
+    Investigation,
+    Relationship,
+    RiskEntry,
+    SecurityAssessment,
+)
 
 os.makedirs("data", exist_ok=True)
 
@@ -51,10 +67,11 @@ app = FastAPI(title="Agentic Knowledge Mapper",
 # (and locked down) separately from the product API.
 app.include_router(ledger_api.router)
 app.include_router(console_mod.router)
-from . import payments_eval as payments_eval_mod
 from . import payments_eval_api as payments_eval_api_mod
+
 app.include_router(payments_eval_api_mod.router)
 from . import eval_draft_api as eval_draft_api_mod
+
 app.include_router(eval_draft_api_mod.router)
 RISK_CONSOLE_ENABLED = os.getenv("RISK_CONSOLE_ENABLED", "1") != "0"
 
@@ -104,6 +121,35 @@ if os.path.isdir(static_dir):
             return FileResponse(console_index, headers={"Cache-Control": "no-cache"})
         raise HTTPException(404, "Not found")
 
+    # Fluid UI: the parallel Next.js GUI (fluid/ in the repo, built into
+    # static/fluid/ by `npm run build`; see fluid/scripts/export-to-static.mjs).
+    # The export is trailing-slash, so each route is a real directory with its
+    # own index.html — serve that directly for an exact deep link, and fall
+    # back to the root shell for client-side routes only.
+    @app.get("/fluid")
+    @app.get("/fluid/")
+    def serve_fluid():
+        fluid_index = os.path.join(static_dir, "fluid", "index.html")
+        if os.path.isfile(fluid_index):
+            return FileResponse(fluid_index, headers={"Cache-Control": "no-cache"})
+        raise HTTPException(404, "Fluid UI not built")
+
+    @app.get("/fluid/{path:path}")
+    def serve_fluid_assets(path: str):
+        fluid_file = os.path.join(static_dir, "fluid", path)
+        if os.path.isfile(fluid_file):
+            return FileResponse(fluid_file)
+        # A directory path (e.g. "security/") maps to its own exported
+        # index.html, so a hard load of a deep link is served correctly rather
+        # than being bounced through the root shell.
+        fluid_dir_index = os.path.join(fluid_file, "index.html")
+        if os.path.isfile(fluid_dir_index):
+            return FileResponse(fluid_dir_index, headers={"Cache-Control": "no-cache"})
+        fluid_index = os.path.join(static_dir, "fluid", "index.html")
+        if os.path.isfile(fluid_index):
+            return FileResponse(fluid_index, headers={"Cache-Control": "no-cache"})
+        raise HTTPException(404, "Not found")
+
 
 @app.on_event("startup")
 def on_start():
@@ -111,8 +157,8 @@ def on_start():
     # Payments evaluation catalog: seeded idempotently so the questionnaire is
     # always present without a migration step.
     try:
-        from .database import SessionLocal as _SL
         from . import payments_eval as _pe
+        from .database import SessionLocal as _SL
         _pe.seed_catalog_v1(_SL())
     except Exception as exc:
         import logging
@@ -156,7 +202,7 @@ def on_start():
                 continue
             r.status = "error"
             r.error = "interrupted by server restart"
-            r.finished_at = datetime.now(timezone.utc)
+            r.finished_at = datetime.now(UTC)
             db.add(AgentEvent(run_id=r.id, stage="summary",
                               message="Run interrupted by server restart."))
             inv = db.query(Investigation).filter(
@@ -170,7 +216,7 @@ def on_start():
         for e in db.query(Explanation).filter(Explanation.status == "running").all():
             e.status = "error"
             e.error = "interrupted by server restart"
-            e.finished_at = datetime.now(timezone.utc)
+            e.finished_at = datetime.now(UTC)
             db.add(e)
         db.commit()
     finally:
@@ -187,10 +233,10 @@ class InvestigationCreate(BaseModel):
 
 
 class InvestigationUpdate(BaseModel):
-    title: Optional[str] = None
-    keywords: Optional[str] = None
-    description: Optional[str] = None
-    sources: Optional[str] = None
+    title: str | None = None
+    keywords: str | None = None
+    description: str | None = None
+    sources: str | None = None
 
 
 class HiddenUpdate(BaseModel):
@@ -205,10 +251,10 @@ class RunRequest(BaseModel):
 class ArtifactCreate(BaseModel):
     title: str
     artifact_type: str = "news"
-    url: Optional[str] = None
-    description: Optional[str] = None
-    author: Optional[str] = None
-    tags: Optional[str] = None
+    url: str | None = None
+    description: str | None = None
+    author: str | None = None
+    tags: str | None = None
 
 
 class ReviewUpdate(BaseModel):
@@ -220,14 +266,14 @@ class DriftUpdate(BaseModel):
 
 
 class DetectDriftRequest(BaseModel):
-    ids: Optional[list[int]] = None
+    ids: list[int] | None = None
 
 
 class RelationshipCreate(BaseModel):
     source_id: int
     target_id: int
     relationship_type: str = "similar_to"
-    description: Optional[str] = None
+    description: str | None = None
 
 
 class ScheduleUpdate(BaseModel):
@@ -247,14 +293,14 @@ class ExplainRequest(BaseModel):
 
 
 class SecurityAssessRequest(BaseModel):
-    product_name: Optional[str] = ""
-    product_url: Optional[str] = ""
-    exposure: Optional[str] = "confidential_data"
-    use_case: Optional[str] = ""
-    workflow_text: Optional[str] = ""
-    doc_urls: Optional[list[str]] = []
-    focus: Optional[list[str]] = ["accidental_copy", "misclassification"]
-    declared_controls: Optional[list[str]] = []
+    product_name: str | None = ""
+    product_url: str | None = ""
+    exposure: str | None = "confidential_data"
+    use_case: str | None = ""
+    workflow_text: str | None = ""
+    doc_urls: list[str] | None = []
+    focus: list[str] | None = ["accidental_copy", "misclassification"]
+    declared_controls: list[str] | None = []
     require_approval: bool = False
     # Which question to ask about a model subject: "target" (is it sound?),
     # "adversarial" (what can someone build with it?), or "hypothesis" (which
@@ -271,18 +317,18 @@ class SecurityAssessRequest(BaseModel):
     # a customer-facing chat, so this is the input the portfolio layer reads.
     # Every field is optional; absent ones stay unknown and are reported as
     # unknown rather than filled in with a default.
-    situation: Optional[dict] = None
-    initiative_id: Optional[int] = None
+    situation: dict | None = None
+    initiative_id: int | None = None
     # Model-engineering assessments target a model, not a product workflow.
     # Ignored unless assessment_mode == "model_engineering".
-    model_name: Optional[str] = ""
-    model_family: Optional[str] = ""
-    modality: Optional[str] = ""
-    weights_source: Optional[str] = ""
-    training_data_posture: Optional[str] = ""
-    deployment_pattern: Optional[str] = ""
-    model_focus_terms: Optional[list[str]] = []
-    workflows: Optional[list[str]] = []
+    model_name: str | None = ""
+    model_family: str | None = ""
+    modality: str | None = ""
+    weights_source: str | None = ""
+    training_data_posture: str | None = ""
+    deployment_pattern: str | None = ""
+    model_focus_terms: list[str] | None = []
+    workflows: list[str] | None = []
     # Assurance layer (app/assurance.py). architecture_checklist is what the
     # vendor attests to (log retention, tenant isolation, ...); leaving it
     # empty is the honest answer and is scored as unknown, which forces the
@@ -291,14 +337,14 @@ class SecurityAssessRequest(BaseModel):
     # restricted or confidential tier. full_metadata_context controls how much
     # verbatim provider text is scored -- full is expensive, truncated is the
     # default, and the recorded choice travels with the result.
-    architecture_checklist: Optional[dict] = None
-    exposure_inventory: Optional[dict] = None
+    architecture_checklist: dict | None = None
+    exposure_inventory: dict | None = None
     full_metadata_context: bool = False
 
 
 class SecurityRescoreRequest(BaseModel):
-    active_controls: Optional[list[str]] = None
-    applicability: Optional[dict] = None
+    active_controls: list[str] | None = None
+    applicability: dict | None = None
     persist: bool = False
 
 
@@ -307,21 +353,21 @@ class SecuritySubjectRequest(BaseModel):
     calls it while the user is still typing."""
     product_name: str = ""
     use_case: str = ""
-    focus: Optional[list[str]] = []
+    focus: list[str] | None = []
 
 
 class SecurityApprovalRequest(BaseModel):
     decision: str = "approve"  # approve | reject
-    active_controls: Optional[list[str]] = None
-    applicability: Optional[dict] = None
+    active_controls: list[str] | None = None
+    applicability: dict | None = None
     note: str = ""
 
 
 class AgentInvokeRequest(BaseModel):
     to: str = "research-collector"
     intent: str = "collect_research"
-    payload: Optional[dict] = None
-    task_id: Optional[str] = None
+    payload: dict | None = None
+    task_id: str | None = None
 
 
 # ---------- helpers ----------
@@ -434,7 +480,7 @@ def update_investigation(inv_id: int, data: InvestigationUpdate,
         inv.description = data.description
     if data.sources is not None:
         inv.sources = data.sources[:200]
-    inv.updated_at = datetime.now(timezone.utc)
+    inv.updated_at = datetime.now(UTC)
     db.commit()
     db.refresh(inv)
     return _inv_json(inv, db)
@@ -465,7 +511,7 @@ def set_investigation_hidden(inv_id: int, data: HiddenUpdate, request: Request,
     if not inv:
         raise HTTPException(404, "Investigation not found")
     inv.hidden = 1 if data.hidden else 0
-    inv.updated_at = datetime.now(timezone.utc)
+    inv.updated_at = datetime.now(UTC)
     db.commit()
     db.refresh(inv)
     ledger_api.human_action(request,
@@ -564,7 +610,7 @@ def update_schedule(inv_id: int, data: ScheduleUpdate,
     else:
         inv.schedule_enabled = 0
         inv.next_run_at = None
-    inv.updated_at = datetime.now(timezone.utc)
+    inv.updated_at = datetime.now(UTC)
     db.commit()
     db.refresh(inv)
     return _inv_json(inv, db)["schedule"]
@@ -626,18 +672,18 @@ def compare_runs(inv_id: int, from_run: int = Query(...),
     if not base or not target:
         raise HTTPException(404, "Run not found in this investigation")
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     from_anchor = base.finished_at or base.started_at or now
     to_anchor = target.finished_at or now
     if from_anchor.tzinfo is None:
-        from_anchor = from_anchor.replace(tzinfo=timezone.utc)
+        from_anchor = from_anchor.replace(tzinfo=UTC)
     if to_anchor.tzinfo is None:
-        to_anchor = to_anchor.replace(tzinfo=timezone.utc)
+        to_anchor = to_anchor.replace(tzinfo=UTC)
 
     def _aware(dt):
         if not dt:
             return None
-        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+        return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
 
     new_nodes = []
     for a in db.query(Artifact).filter(Artifact.investigation_id == inv_id).all():
@@ -682,7 +728,7 @@ _artifact_purpose = dossier.artifact_purpose
 
 
 @app.get("/api/investigations/{inv_id}/recommendations")
-def recommendations(inv_id: int, assessment_id: Optional[int] = None,
+def recommendations(inv_id: int, assessment_id: int | None = None,
                     limit: int = Query(8, ge=1, le=50),
                     db: Session = Depends(get_db)):
     """What to do next, computed from what is already on disk.
@@ -767,9 +813,9 @@ def artifacts_overview(inv_id: int, db: Session = Depends(get_db)):
 
 
 @app.get("/api/investigations/{inv_id}/artifacts")
-def list_artifacts(inv_id: int, review: Optional[str] = Query(None),
-                   search: Optional[str] = Query(None),
-                   drift: Optional[int] = Query(None),
+def list_artifacts(inv_id: int, review: str | None = Query(None),
+                   search: str | None = Query(None),
+                   drift: int | None = Query(None),
                    limit: int = Query(200, le=500), offset: int = Query(0),
                    db: Session = Depends(get_db)):
     q = db.query(Artifact).filter(Artifact.investigation_id == inv_id)
@@ -1158,7 +1204,7 @@ def delete_explanation(exp_id: int, db: Session = Depends(get_db)):
 class FollowupRequest(BaseModel):
     question: str
     scope: str = "whole"  # whole|section|claim
-    target_index: Optional[int] = None
+    target_index: int | None = None
     max_pages: int = 4
 
 
@@ -1330,7 +1376,7 @@ def explanation_feedback(exp_id: int, req: FeedbackRequest, db: Session = Depend
     meta = json.loads(e.meta or "{}")
     fb = meta.get("feedback") or []
     fb.append({"claim": req.claim[:300], "up": bool(req.up), "url": req.url[:500],
-               "at": datetime.now(timezone.utc).isoformat()})
+               "at": datetime.now(UTC).isoformat()})
     meta["feedback"] = fb[-200:]
     e.meta = json.dumps(meta)
     db.commit()
@@ -1450,8 +1496,8 @@ def get_dossier_bundle(inv_id: int, db: Session = Depends(get_db)):
 @app.get("/api/investigations/{inv_id}/dossier/pdf")
 def get_dossier_pdf(inv_id: int, engine: str = Query("pandoc"),
                     db: Session = Depends(get_db)):
-    from .dossier import dossier_markdown, investigation_dossier
     from . import dossier_pdf
+    from .dossier import dossier_markdown, investigation_dossier
     try:
         # One read, one payload: the cover's numbers and the body are the same
         # snapshot, so the verdict block cannot disagree with the sections.
@@ -1516,8 +1562,8 @@ def get_dossier_pdf(inv_id: int, engine: str = Query("pandoc"),
 
 
 class PrefsRequest(BaseModel):
-    preferred_domains: Optional[str] = None
-    auto_save_explanations: Optional[int] = None
+    preferred_domains: str | None = None
+    auto_save_explanations: int | None = None
 
 
 @app.get("/api/investigations/{inv_id}/prefs")
@@ -1547,7 +1593,73 @@ def put_investigation_prefs(inv_id: int, req: PrefsRequest,
 
 # ---------- AI security agent ----------
 
-def _security_json(rec: SecurityAssessment) -> dict:
+def _assessment_analysis(rec, scoring: dict, ev: dict, ctl: dict,
+                         pack: dict) -> dict:
+    """The three measured properties bolted onto a stored assessment.
+
+    Each is computed from what the row already holds, so it describes *this*
+    result rather than re-deriving anything: a credible band around the residual,
+    the external-reach budget the research spent, and a reproducibility manifest
+    pinning the inputs and component versions. Every piece is wrapped so a
+    legacy or unusual row degrades to ``None`` instead of failing the read --
+    an analysis extra must never be the reason an assessment cannot be fetched.
+    """
+    out = {"uncertainty": None, "privacy": None, "repro": None}
+
+    # A credible band only means something for the catalog path, where the
+    # stored rows carry likelihood/impact/controls. A model-path assessment has
+    # dimension weights instead, so it honestly gets None rather than a band
+    # computed from the wrong shape.
+    try:
+        from . import uncertainty as U
+        if isinstance(scoring, dict) and scoring.get("threats") \
+                and scoring.get("residual_pct") is not None:
+            out["uncertainty"] = U.assessment_interval(scoring)
+    except Exception:
+        out["uncertainty"] = None
+
+    # How far the research reached: external queries issued plus the novelty of
+    # the pages it read. Evidence snippets are hashed, never stored, so the
+    # budget can be reported without keeping the content.
+    try:
+        from . import privacy as P
+        # A row with no recorded research has *unknown* reach, not zero: a
+        # legacy assessment that predates evidence storage did not necessarily
+        # touch nothing, so reporting a spend of 0 would be a claim the data
+        # cannot support. Only report a budget when there is something to count.
+        if ev.get("evidence") or ev.get("queries_run"):
+            pages = [{"url": e.get("url", ""), "text": e.get("snippet", "")}
+                     for e in (ev.get("evidence") or []) if isinstance(e, dict)]
+            queries = len(ev.get("queries_run") or [])
+            out["privacy"] = P.privacy_budget(pages, queries=queries)
+    except Exception:
+        out["privacy"] = None
+
+    # Pin the exact inputs and versions behind the number, so a re-run can be
+    # proven identical (or the drifting part named) without storing the inputs.
+    try:
+        from . import benchmarks as B
+        from . import repro as R
+        inputs = {
+            "threats": rec.threats_json or "",
+            "scoring": json.dumps(scoring, sort_keys=True, default=str),
+            "active_controls": json.dumps(ctl.get("active_controls", []),
+                                          sort_keys=True, default=str),
+        }
+        versions = {
+            "threat_pack": f"{pack.get('version')}:{pack.get('fingerprint')}",
+            "benchmarks": B.benchmark_version(),
+            "manifest": R.MANIFEST_VERSION,
+        }
+        out["repro"] = R.manifest(inputs=inputs, versions=versions,
+                                  label=f"assessment-{rec.id}")
+    except Exception:
+        out["repro"] = None
+
+    return out
+
+
+def _security_json(rec: SecurityAssessment, *, analysis: bool = False) -> dict:
     def _load(raw, default):
         try:
             return json.loads(raw) if raw else default
@@ -1634,6 +1746,14 @@ def _security_json(rec: SecurityAssessment) -> dict:
         "control_plan": ctl.get("control_plan", {}),
         "openshell": ctl.get("openshell", {}),
         "scoring": scoring,
+        # Saturation flag and efficacy provenance, lifted to the top level so a
+        # consumer reading only the headline fields still sees that the score
+        # has stopped responding to controls and how much of it rests on
+        # unmeasured priors. Both are `None`-safe for legacy rows that predate
+        # the floor/provenance blocks rather than defaulting to a false claim.
+        "floor_capped": scoring.get("floor_capped"),
+        "floor": scoring.get("floor"),
+        "efficacy_evidence": scoring.get("efficacy_evidence"),
         "perspectives": perspectives,
         "artifact_count": next(
             ((p.get("investigation") or {}).get("total_artifacts", 0)
@@ -1673,6 +1793,13 @@ def _security_json(rec: SecurityAssessment) -> dict:
         "product_family": getattr(rec, "product_family", None),
         "created_at": rec.created_at.isoformat() if rec.created_at else None,
         **_assessment_path_fields(rec, scoring),
+        # --- measured properties (WS3-WS7) ---
+        # A credible band, the external-reach budget, and a reproducibility
+        # manifest, each derived from the stored row so the read stays a read.
+        # Opt-in: the list view serialises up to 50 rows and does not need them,
+        # so only the single-assessment read (and /analysis) pay for them.
+        **(_assessment_analysis(rec, scoring, ev, ctl, pack) if analysis
+           else {"uncertainty": None, "privacy": None, "repro": None}),
     }
 
 
@@ -1743,7 +1870,7 @@ def list_security_controls():
 
 
 @app.get("/api/standards/score-matrix")
-def standards_score_matrix(assessment_id: Optional[int] = None,
+def standards_score_matrix(assessment_id: int | None = None,
                            db: Session = Depends(get_db),
                            response: Response = None):
     """AI Standards & Regulations score matrix for the Security agent sub-tab.
@@ -1832,7 +1959,7 @@ def rescore_security_assessment(assessment_id: int, data: SecurityRescoreRequest
     # Rebuild the exposure-scaled inherent rows from the stored residual rows:
     # inherent likelihood is recoverable (residual likelihood = L*(1-cov) or the
     # floor), so we recompute the baseline exactly as build_assessment would.
-    from .security import _THREAT_CATALOG, _scale_likelihood, EXPOSURE_META
+    from .security import _THREAT_CATALOG, EXPOSURE_META, _scale_likelihood
     exposure = rec.exposure if rec.exposure in EXPOSURE_META else "confidential_data"
     weight = float(EXPOSURE_META[exposure]["weight"])
     inherent = [{"id": t[0], "title": t[1], "stride": t[2], "owasp": t[3],
@@ -2078,7 +2205,7 @@ def approve_security_run(run_id: int, data: SecurityApprovalRequest,
     if decision == "reject":
         run.status = "error"
         run.error = "Control plan rejected by operator"
-        run.finished_at = datetime.now(timezone.utc)
+        run.finished_at = datetime.now(UTC)
         db.commit()
         security_agent._event(
             db, run.id, "gate", "Control plan rejected by operator — assessment aborted.",
@@ -2243,7 +2370,40 @@ def get_security_assessment(assessment_id: int, db: Session = Depends(get_db)):
         SecurityAssessment.id == assessment_id).first()
     if not rec:
         raise HTTPException(404, "Assessment not found")
-    return _security_json(rec)
+    return _security_json(rec, analysis=True)
+
+
+@app.get("/api/security/assessments/{assessment_id}/analysis")
+def get_security_assessment_analysis(assessment_id: int,
+                                     db: Session = Depends(get_db)):
+    """Just the measured properties: credible band, privacy budget, manifest.
+
+    Split out from the full assessment read so a caller (a dashboard, a CI gate)
+    can pull the three analysis artifacts without the markdown, diagrams and
+    evidence payload that ride along with ``/assessments/{id}``.
+    """
+    rec = _assessment_or_404(assessment_id, db)
+    def _load(raw, default):
+        try:
+            return json.loads(raw) if raw else default
+        except Exception:
+            return default
+
+    scoring = _load(getattr(rec, "scoring_json", None), {})
+    ev = _load(getattr(rec, "evidence_json", None), {})
+    ctl = _load(getattr(rec, "controls_json", None), {})
+    scoring = scoring if isinstance(scoring, dict) else {}
+    ev = ev if isinstance(ev, dict) else {}
+    ctl = ctl if isinstance(ctl, dict) else {}
+    pack = {
+        "version": getattr(rec, "threat_pack_version", None),
+        "fingerprint": getattr(rec, "threat_pack_fingerprint", None),
+    }
+    return {
+        "assessment_id": rec.id,
+        "residual_pct": getattr(rec, "residual_pct", None),
+        **_assessment_analysis(rec, scoring, ev, ctl, pack),
+    }
 
 
 # ---------------------------------------------- assurance endpoints -------
@@ -2260,7 +2420,7 @@ class AssuranceDecisionRequest(BaseModel):
     decision: str
     actor: str = ""
     rationale: str = ""
-    expires_days: Optional[int] = None
+    expires_days: int | None = None
     override: bool = False
 
 
@@ -2285,7 +2445,6 @@ def _assessment_or_404(assessment_id: int, db: Session) -> SecurityAssessment:
 
 
 def _assurance_or_422(rec: SecurityAssessment) -> dict:
-    from . import assurance as _a
     try:
         ens = json.loads(rec.assurance_json or "{}") or {}
     except Exception:
@@ -2426,8 +2585,6 @@ def review_assurance_evidence(assessment_id: int, artifact_id: int,
     next one. Saying so is what stops a reviewer believing the score on screen
     already reflects their click.
     """
-    from . import assurance as _a
-    from . import leadership as _ld
     rec = _assessment_or_404(assessment_id, db)
     art = db.query(Artifact).filter(Artifact.id == artifact_id).first()
     if not art:
@@ -2536,6 +2693,7 @@ def assurance_siem_export(limit: int = 40, db: Session = Depends(get_db)):
     piped into a SIEM / SOAR ingestion point.
     """
     from fastapi.responses import PlainTextResponse
+
     from . import assurance_ledger as _al
 
     lines: list[str] = []
@@ -2544,7 +2702,7 @@ def assurance_siem_export(limit: int = 40, db: Session = Depends(get_db)):
 
 
 @app.get("/api/assurance/ledger/re-score-triggers")
-def assurance_re_score_triggers(investigation_id: Optional[int] = None,
+def assurance_re_score_triggers(investigation_id: int | None = None,
                                 db: Session = Depends(get_db)):
     """Assessments whose evidence or architecture basis changed after scoring.
 
@@ -2568,7 +2726,8 @@ def assurance_re_score(assessment_id: int,
     """
     import json as _json
 
-    from . import assurance_ledger as _al, security_agent as _sa
+    from . import assurance_ledger as _al
+    from . import security_agent as _sa
     rec = _assessment_or_404(assessment_id, db)
     triggers = _al.re_score_triggers(db=db)["triggers"]
     reason = next((t["reason"] for t in triggers
@@ -2601,7 +2760,7 @@ def assurance_re_score(assessment_id: int,
 
 # ------------------------------------- leadership dashboard endpoints -----
 
-def _csv_states(raw: Optional[str]) -> Optional[list[str]]:
+def _csv_states(raw: str | None) -> list[str] | None:
     """Parse a comma-separated query list, keeping ``None`` meaning 'default'.
 
     An empty string is a caller asking for an empty set rather than the
@@ -2613,13 +2772,13 @@ def _csv_states(raw: Optional[str]) -> Optional[list[str]]:
 
 
 @app.get("/api/leadership/board")
-def leadership_board(investigation_id: Optional[int] = None,
+def leadership_board(investigation_id: int | None = None,
                      window_days: int = 90, persona: str = "executive",
-                     initiative_id: Optional[int] = None,
-                     layer: Optional[str] = None,
-                     exposure: Optional[str] = None,
-                     tier: Optional[str] = None,
-                     states: Optional[str] = None,
+                     initiative_id: int | None = None,
+                     layer: str | None = None,
+                     exposure: str | None = None,
+                     tier: str | None = None,
+                     states: str | None = None,
                      sort: str = "residual",
                      limit: int = 25, offset: int = 0,
                      sla_days: int = 14,
@@ -2645,14 +2804,15 @@ def leadership_board(investigation_id: Optional[int] = None,
 
 
 @app.get("/api/leadership/board.md")
-def leadership_board_markdown(investigation_id: Optional[int] = None,
+def leadership_board_markdown(investigation_id: int | None = None,
                               window_days: int = 90, persona: str = "executive",
-                              initiative_id: Optional[int] = None,
-                              layer: Optional[str] = None,
-                              exposure: Optional[str] = None,
+                              initiative_id: int | None = None,
+                              layer: str | None = None,
+                              exposure: str | None = None,
                               db: Session = Depends(get_db)):
     """The board as one Markdown snapshot, for a regulator or an archive."""
     from fastapi.responses import PlainTextResponse
+
     from . import leadership as _ld
     try:
         md = _ld.export_markdown(db, investigation_id, window_days=window_days,
@@ -2679,11 +2839,11 @@ def _board_posture(rp: dict) -> str:
 
 
 @app.get("/api/leadership/board.pdf")
-def leadership_board_pdf(investigation_id: Optional[int] = None,
+def leadership_board_pdf(investigation_id: int | None = None,
                          window_days: int = 90, persona: str = "executive",
-                         initiative_id: Optional[int] = None,
-                         layer: Optional[str] = None,
-                         exposure: Optional[str] = None,
+                         initiative_id: int | None = None,
+                         layer: str | None = None,
+                         exposure: str | None = None,
                          db: Session = Depends(get_db)):
     """The same snapshot as a PDF, built from the same Markdown.
 
@@ -2751,8 +2911,9 @@ def leadership_knowledge_graph(db: Session = Depends(get_db)):
     large on purpose: the reader asked for everything collected and
     investigated, so nothing is capped here.
     """
-    from datetime import datetime, timezone
-    from .models import Investigation, Artifact, Relationship
+    from datetime import datetime
+
+    from .models import Artifact, Investigation, Relationship
 
     arts = db.query(Artifact).order_by(Artifact.id).all()
     rels = db.query(Relationship).all()
@@ -2783,7 +2944,7 @@ def leadership_knowledge_graph(db: Session = Depends(get_db)):
     } for a in arts]
     return {
         "nodes": nodes, "edges": edges,
-        "generated": datetime.now(timezone.utc).isoformat(),
+        "generated": datetime.now(UTC).isoformat(),
         "counts": {"artifacts": len(arts), "investigations": len(titles),
                    "relationships": len(rels)},
     }
@@ -2797,6 +2958,7 @@ def leadership_knowledge_graph_clusters(
     """Cluster the *global* artifact graph, the same two modes the
     per-investigation graph offers but across every investigation at once."""
     from collections import defaultdict
+
     from .models import Artifact
 
     artifacts = db.query(Artifact).all()
@@ -2866,11 +3028,11 @@ def leadership_knowledge_graph_clusters(
 
 
 @app.get("/api/leadership/risk-position")
-def leadership_risk_position(investigation_id: Optional[int] = None,
+def leadership_risk_position(investigation_id: int | None = None,
                              window_days: int = 90,
-                             initiative_id: Optional[int] = None,
-                             layer: Optional[str] = None,
-                             exposure: Optional[str] = None,
+                             initiative_id: int | None = None,
+                             layer: str | None = None,
+                             exposure: str | None = None,
                              db: Session = Depends(get_db)):
     """Verified residual by data tier, each with its evidence confidence."""
     from . import leadership as _ld
@@ -2883,15 +3045,15 @@ def leadership_risk_position(investigation_id: Optional[int] = None,
 
 
 @app.get("/api/leadership/decision-queue")
-def leadership_decision_queue(investigation_id: Optional[int] = None,
-                              states: Optional[str] = None,
-                              tier: Optional[str] = None,
-                              exposure: Optional[str] = None,
+def leadership_decision_queue(investigation_id: int | None = None,
+                              states: str | None = None,
+                              tier: str | None = None,
+                              exposure: str | None = None,
                               sort: str = "residual",
                               limit: int = 25, offset: int = 0,
                               sla_days: int = 14,
-                              initiative_id: Optional[int] = None,
-                              layer: Optional[str] = None,
+                              initiative_id: int | None = None,
+                              layer: str | None = None,
                               db: Session = Depends(get_db)):
     """Everything waiting on a decision, and what would change the answer."""
     from . import leadership as _ld
@@ -2906,10 +3068,10 @@ def leadership_decision_queue(investigation_id: Optional[int] = None,
 
 
 @app.get("/api/leadership/assurance-health")
-def leadership_assurance_health(investigation_id: Optional[int] = None,
-                                initiative_id: Optional[int] = None,
-                                layer: Optional[str] = None,
-                                exposure: Optional[str] = None,
+def leadership_assurance_health(investigation_id: int | None = None,
+                                initiative_id: int | None = None,
+                                layer: str | None = None,
+                                exposure: str | None = None,
                                 db: Session = Depends(get_db)):
     """Controls verified vs declared, forensics, ledger integrity, stalled runs."""
     from . import leadership as _ld
@@ -2922,10 +3084,10 @@ def leadership_assurance_health(investigation_id: Optional[int] = None,
 
 
 @app.get("/api/leadership/exposure")
-def leadership_exposure(investigation_id: Optional[int] = None,
-                        initiative_id: Optional[int] = None,
-                        layer: Optional[str] = None,
-                        exposure: Optional[str] = None,
+def leadership_exposure(investigation_id: int | None = None,
+                        initiative_id: int | None = None,
+                        layer: str | None = None,
+                        exposure: str | None = None,
                         db: Session = Depends(get_db)):
     """Restricted/confidential assets, privileged users and material items."""
     from . import leadership as _ld
@@ -2938,10 +3100,10 @@ def leadership_exposure(investigation_id: Optional[int] = None,
 
 
 @app.get("/api/leadership/system-integrity")
-def leadership_system_integrity(investigation_id: Optional[int] = None,
-                                initiative_id: Optional[int] = None,
-                                layer: Optional[str] = None,
-                                exposure: Optional[str] = None,
+def leadership_system_integrity(investigation_id: int | None = None,
+                                initiative_id: int | None = None,
+                                layer: str | None = None,
+                                exposure: str | None = None,
                                 db: Session = Depends(get_db)):
     """Swarm health, threat-pack currency, ledger completeness, time-to-close."""
     from . import leadership as _ld
@@ -2954,10 +3116,10 @@ def leadership_system_integrity(investigation_id: Optional[int] = None,
 
 
 @app.get("/api/leadership/alerts")
-def leadership_alerts(investigation_id: Optional[int] = None,
-                      initiative_id: Optional[int] = None,
-                      layer: Optional[str] = None,
-                      exposure: Optional[str] = None,
+def leadership_alerts(investigation_id: int | None = None,
+                      initiative_id: int | None = None,
+                      layer: str | None = None,
+                      exposure: str | None = None,
                       sla_days: int = 14,
                       include_acknowledged: bool = False,
                       db: Session = Depends(get_db)):
@@ -2978,8 +3140,8 @@ class AlertAckRequest(BaseModel):
     actor: str = ""
     status: str = "acknowledged"
     note: str = ""
-    snooze_days: Optional[int] = None
-    finding_hash: Optional[str] = None
+    snooze_days: int | None = None
+    finding_hash: str | None = None
 
 
 @app.post("/api/leadership/alerts/ack")
@@ -3020,10 +3182,10 @@ def leadership_acknowledge_alert_by_id(alert_id: str, data: AlertAckRequest,
 
 
 @app.get("/api/leadership/exceptions")
-def leadership_exceptions(investigation_id: Optional[int] = None,
-                          initiative_id: Optional[int] = None,
-                          layer: Optional[str] = None,
-                          exposure: Optional[str] = None,
+def leadership_exceptions(investigation_id: int | None = None,
+                          initiative_id: int | None = None,
+                          layer: str | None = None,
+                          exposure: str | None = None,
                           db: Session = Depends(get_db)):
     """Time-bounded exceptions and their expiry status."""
     from . import leadership as _ld
@@ -3036,10 +3198,10 @@ def leadership_exceptions(investigation_id: Optional[int] = None,
 
 
 @app.get("/api/leadership/change-log")
-def leadership_change_log(investigation_id: Optional[int] = None,
-                          initiative_id: Optional[int] = None,
-                          layer: Optional[str] = None,
-                          exposure: Optional[str] = None,
+def leadership_change_log(investigation_id: int | None = None,
+                          initiative_id: int | None = None,
+                          layer: str | None = None,
+                          exposure: str | None = None,
                           db: Session = Depends(get_db)):
     """Current vs superseded assessments, portfolio-wide when unscoped."""
     from . import leadership as _ld
@@ -3062,7 +3224,6 @@ def leadership_change_log_for_investigation(investigation_id: int,
 
 
 def _hypothesis_rec(assessment_id: int, db: Session):
-    from . import dossier as _dossier
     rec = db.query(SecurityAssessment).filter(
         SecurityAssessment.id == assessment_id).first()
     if not rec:
@@ -3094,7 +3255,7 @@ class HypothesisPatchRequest(BaseModel):
 
 
 class ExperimentBuildRequest(BaseModel):
-    hypothesis_ids: Optional[list[str]] = []
+    hypothesis_ids: list[str] | None = []
 
 
 @app.post("/api/security/assessments/{assessment_id}/experiments/build")
@@ -3239,7 +3400,7 @@ def patch_hypothesis_register(assessment_id: int, data: HypothesisPatchRequest,
         if data.note:
             entry["note"] = data.note[:300]
     stored["claims"] = list(by_id.values())
-    stored["updated_at"] = datetime.now(timezone.utc).isoformat()
+    stored["updated_at"] = datetime.now(UTC).isoformat()
     rec.hypothesis_json = json.dumps(stored)
     db.commit()
     ledger_api.human_action(request, "edited_hypothesis_register", {
@@ -3469,7 +3630,7 @@ def get_security_pdf(assessment_id: int, db: Session = Depends(get_db)):
     if not rec:
         raise HTTPException(404, "Assessment not found")
     try:
-        from datetime import datetime as _dt, timezone as _tz
+        from datetime import datetime as _dt
         try:
             _persp = json.loads(getattr(rec, "perspectives_json", None) or "[]")
             if not isinstance(_persp, list):
@@ -3488,7 +3649,7 @@ def get_security_pdf(assessment_id: int, db: Session = Depends(get_db)):
                 "perspectives": _persp,
                 "task_id": (json.loads(rec.a2a_trace_json or "{}") or {}).get("task_id", ""),
                 "date": (rec.created_at.isoformat()[:10] if rec.created_at else
-                         _dt.now(_tz.utc).date().isoformat()),
+                         _dt.now(UTC).date().isoformat()),
             })
     except RuntimeError as exc:
         raise HTTPException(501, str(exc))
@@ -3557,7 +3718,7 @@ def get_landscape_graph(investigation_id: int,
 
 class LandscapeCompareRequest(BaseModel):
     investigation_id: int
-    model_keys: Optional[list[str]] = []
+    model_keys: list[str] | None = []
     filters: dict = {}
     weights: dict = {}
 
@@ -3650,14 +3811,14 @@ def post_landscape_sync(investigation_id: int, db: Session = Depends(get_db)):
 
 @app.get("/.well-known/agents")
 def well_known_agents():
-    from .agents import get_agent_cards, PROTOCOL
+    from .agents import PROTOCOL, get_agent_cards
 
     return {"protocol": PROTOCOL, "agents": get_agent_cards()}
 
 
 @app.get("/api/agents/cards")
 def agent_cards():
-    from .agents import get_agent_cards, PROTOCOL
+    from .agents import PROTOCOL, get_agent_cards
 
     return {"protocol": PROTOCOL, "agents": get_agent_cards()}
 
@@ -3665,7 +3826,7 @@ def agent_cards():
 @app.post("/api/agents/invoke")
 def agent_invoke(data: AgentInvokeRequest, db: Session = Depends(get_db)):
     """Invoke one A2A protocol hop directly (debugging / agent-to-agent calls)."""
-    from .agents import new_envelope, dispatch
+    from .agents import dispatch, new_envelope
 
     env = new_envelope("api-caller", data.to, data.intent,
                        data.payload or {}, task_id=data.task_id,
@@ -3800,7 +3961,7 @@ def list_known_issues(inv_id: int, db: Session = Depends(get_db)):
             "total": len(cves) + len(issues)}
 
 
-def _tag_set(tags: Optional[str]) -> set:
+def _tag_set(tags: str | None) -> set:
     if not tags:
         return set()
     return set(t.strip().lower() for t in tags.split(",") if t.strip())
@@ -3889,7 +4050,7 @@ class InitiativeRequest(BaseModel):
     control_inventory: list[dict] = []
     status: str = "active"
     review_cadence_days: int = 90
-    go_live_at: Optional[str] = None
+    go_live_at: str | None = None
 
 
 class SituationRequest(BaseModel):
@@ -3902,22 +4063,22 @@ class SituationRequest(BaseModel):
 
 class RiskStateRequest(BaseModel):
     entry_id: int
-    status: Optional[str] = None
-    owner: Optional[str] = None
-    review_by: Optional[str] = None
-    residual_note: Optional[str] = None
-    mitigation_ids: Optional[list[str]] = None
+    status: str | None = None
+    owner: str | None = None
+    review_by: str | None = None
+    residual_note: str | None = None
+    mitigation_ids: list[str] | None = None
     accept: bool = False
-    accepted_by: Optional[str] = None
-    acceptance_note: Optional[str] = None
+    accepted_by: str | None = None
+    acceptance_note: str | None = None
     rationale: str = ""
 
 
 class AdvisorRequest(BaseModel):
     investigation_id: int
-    initiative_id: Optional[int] = None
-    controls_present: Optional[list[str]] = None
-    max_burden: Optional[str] = None
+    initiative_id: int | None = None
+    controls_present: list[str] | None = None
+    max_burden: str | None = None
     narrative: bool = False
 
 
@@ -3973,7 +4134,7 @@ class PdpStateRequest(BaseModel):
     dimension_id: str
     standing: str
     summary: str = ""
-    evidence_ids: Optional[list[int]] = None
+    evidence_ids: list[int] | None = None
     actor: str = ""
     rationale: str = ""
 
@@ -4382,9 +4543,9 @@ def get_metrics(investigation_id: int, db: Session = Depends(get_db)):
 class DashboardScope(BaseModel):
     investigation_id: int
     window_days: int = 90
-    initiative_id: Optional[int] = None
-    layer: Optional[str] = None
-    exposure: Optional[str] = None
+    initiative_id: int | None = None
+    layer: str | None = None
+    exposure: str | None = None
     accepted_only: bool = True
 
 
@@ -4404,9 +4565,9 @@ def _dashboard_scope(data: DashboardScope, db: Session) -> dict:
 
 @app.get("/api/dashboard/summary")
 def get_dashboard_summary(investigation_id: int, window_days: int = 90,
-                          initiative_id: Optional[int] = None,
-                          layer: Optional[str] = None,
-                          exposure: Optional[str] = None,
+                          initiative_id: int | None = None,
+                          layer: str | None = None,
+                          exposure: str | None = None,
                           accepted_only: bool = True,
                           db: Session = Depends(get_db)):
     """Header strip: lights, open High/Critical, approvals, stale.
@@ -4424,9 +4585,9 @@ def get_dashboard_summary(investigation_id: int, window_days: int = 90,
 
 @app.get("/api/dashboard/availability")
 def get_dashboard_availability(investigation_id: int, window_days: int = 90,
-                               initiative_id: Optional[int] = None,
-                               layer: Optional[str] = None,
-                               exposure: Optional[str] = None,
+                               initiative_id: int | None = None,
+                               layer: str | None = None,
+                               exposure: str | None = None,
                                accepted_only: bool = True,
                                db: Session = Depends(get_db)):
     """Coverage, freshness, unknowns, sync health. Lights plus tables."""
@@ -4440,9 +4601,9 @@ def get_dashboard_availability(investigation_id: int, window_days: int = 90,
 
 @app.get("/api/dashboard/distribution")
 def get_dashboard_distribution(investigation_id: int, window_days: int = 90,
-                               initiative_id: Optional[int] = None,
-                               layer: Optional[str] = None,
-                               exposure: Optional[str] = None,
+                               initiative_id: int | None = None,
+                               layer: str | None = None,
+                               exposure: str | None = None,
                                accepted_only: bool = True,
                                db: Session = Depends(get_db)):
     """Where risk concentrates. Counts by layer, scope, family, pattern,
@@ -4458,9 +4619,9 @@ def get_dashboard_distribution(investigation_id: int, window_days: int = 90,
 
 @app.get("/api/dashboard/robustness")
 def get_dashboard_robustness(investigation_id: int, window_days: int = 90,
-                             initiative_id: Optional[int] = None,
-                             layer: Optional[str] = None,
-                             exposure: Optional[str] = None,
+                             initiative_id: int | None = None,
+                             layer: str | None = None,
+                             exposure: str | None = None,
                              accepted_only: bool = True,
                              db: Session = Depends(get_db)):
     """Process depth: mapping, validation, acceptance, approvals, hygiene.
@@ -4477,9 +4638,9 @@ def get_dashboard_robustness(investigation_id: int, window_days: int = 90,
 
 @app.get("/api/dashboard/attention")
 def get_dashboard_attention(investigation_id: int, window_days: int = 90,
-                            initiative_id: Optional[int] = None,
-                            layer: Optional[str] = None,
-                            exposure: Optional[str] = None,
+                            initiative_id: int | None = None,
+                            layer: str | None = None,
+                            exposure: str | None = None,
                             accepted_only: bool = True,
                             db: Session = Depends(get_db)):
     """Ranked action list with deep links into Landscape and the register."""
@@ -4524,8 +4685,9 @@ def get_dashboard_brief_md(investigation_id: int, window_days: int = 90,
                            accepted_only: bool = True,
                            db: Session = Depends(get_db)):
     """Board-safe leadership brief as Markdown, from the same payloads."""
-    from . import executive as _ex
     from fastapi.responses import PlainTextResponse
+
+    from . import executive as _ex
     scope = _dashboard_scope(DashboardScope(
         investigation_id=investigation_id, window_days=window_days,
         accepted_only=accepted_only), db)
@@ -4623,7 +4785,7 @@ class RiskSyncRequest(BaseModel):
 @app.post("/api/risks/sync")
 def post_risks_sync(data: RiskSyncRequest, request: Request, db: Session = Depends(get_db)):
     _landscape_inv(data.investigation_id, db)
-    from .agents import risk_intake_handle, new_envelope
+    from .agents import new_envelope, risk_intake_handle
 
     env = new_envelope("api-caller", "risk-intake", "ingest_findings", {"investigation_id": data.investigation_id})
     try:
@@ -4637,7 +4799,7 @@ def post_risks_sync(data: RiskSyncRequest, request: Request, db: Session = Depen
 @app.post("/api/risks/review")
 def post_risks_review(data: RiskSyncRequest, request: Request, db: Session = Depends(get_db)):
     _landscape_inv(data.investigation_id, db)
-    from .agents import risk_orchestrator_handle, new_envelope
+    from .agents import new_envelope, risk_orchestrator_handle
 
     env = new_envelope("api-caller", "risk-orchestrator", "plan_risk_cycle", {"investigation_id": data.investigation_id, "kind": "risk_review"})
     try:
@@ -4656,7 +4818,7 @@ class RiskDecideRequest(BaseModel):
 
 @app.post("/api/risks/decide")
 def post_risks_decide(data: RiskDecideRequest, request: Request, db: Session = Depends(get_db)):
-    from .agents import risk_governance_handle, new_envelope
+    from .agents import new_envelope, risk_governance_handle
 
     env = new_envelope("api-caller", "risk-governance", "draft_acceptance", {"risk_ids": data.risk_ids, "strategy": data.strategy, "rationale": data.rationale})
     try:
@@ -4670,7 +4832,7 @@ def post_risks_decide(data: RiskDecideRequest, request: Request, db: Session = D
 @app.post("/api/risks/enrich")
 def post_risks_enrich(data: RiskSyncRequest, request: Request, db: Session = Depends(get_db)):
     _landscape_inv(data.investigation_id, db)
-    from .agents import risk_intake_handle, new_envelope
+    from .agents import new_envelope, risk_intake_handle
 
     env = new_envelope("api-caller", "risk-intake", "ingest_findings", {"investigation_id": data.investigation_id})
     try:

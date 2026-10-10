@@ -19,8 +19,9 @@ from __future__ import annotations
 import html
 import json
 import re
-from datetime import datetime, timezone
-from typing import Any, Iterable, Optional
+from collections.abc import Iterable
+from datetime import UTC, datetime
+from typing import Any
 
 from . import openshell as _osh
 
@@ -437,6 +438,153 @@ _CONTROL_CATALOG: list[dict[str, Any]] = [
 ]
 
 _CONTROL_BY_ID: dict[str, dict[str, Any]] = {c["id"]: c for c in _CONTROL_CATALOG}
+
+# ------------------------------------------------ efficacy provenance ---
+#
+# Every efficacy above is an *estimate*, and the catalogue used to present it
+# with the same authority as the arithmetic that consumes it. That is the
+# difference between "we chose 0.70" and "0.70 is what this control is worth" --
+# a distinction a security review is entitled to demand, because the whole
+# residual score is a function of these numbers.
+#
+# The honest starting position, recorded here rather than left implicit: all
+# fifteen efficacies are single-analyst judgements with no external validation.
+# The cited ``standard`` column names the control's *existence*, never its
+# measured effectiveness -- ISO 27001 A.5.12 tells you to classify, it does not
+# tell you a gate catches 70% of misclassifications. Recording that explicitly
+# is what lets ``uncertainty`` widen the band for an unvalidated prior instead of
+# quietly treating it as a measurement, and it gives
+# :func:`record_efficacy_observation` a place to put real evidence when the
+# assessment pipeline starts producing it.
+
+EFFICACY_BASIS: dict[str, str] = {
+    "measured": "Observed in a system under audit; observations are recorded.",
+    "expert_elicited": "Single-analyst judgement; no external validation.",
+    "literature": "Published control-effectiveness data, cited in `source`.",
+}
+
+#: Beta concentration for an efficacy with no recorded observations. Low on
+#: purpose: 4 pseudo-observations puts a 90% interval on a 0.70 efficacy around
+#: [0.46, 0.88] -- wide enough that a reader cannot mistake it for a
+#: measurement, narrow enough that the interval is still defined.
+UNVALIDATED_EFFICACY_CONCENTRATION = 4.0
+
+CONTROL_EFFICACY_EVIDENCE: dict[str, dict[str, Any]] = {
+    cid: {
+        "basis": "expert_elicited",
+        "source": "catalogue author judgement (single analyst)",
+        "n_observations": 0,
+        "concentration": UNVALIDATED_EFFICACY_CONCENTRATION,
+        "note": ("Standard cited in the catalogue establishes the control, "
+                 "not its effectiveness."),
+    }
+    for cid in _CONTROL_BY_ID
+}
+
+#: Efficacy observations, appended by :func:`record_efficacy_observation`.
+#: id -> list of {efficacy, source, note}. The posterior mean of a control is
+#: re-derived from these when any exist, so the catalogue's point value becomes
+#: a prior rather than a frozen constant the moment real evidence arrives.
+EFFICACY_OBSERVATIONS: dict[str, list[dict[str, Any]]] = {}
+
+
+def control_evidence(cid: str) -> dict[str, Any]:
+    """Provenance for one control's efficacy: basis, source, n, concentration.
+
+    Never raises and never returns None: an unknown control degrades to the
+    unvalidated-prior record rather than to a missing field, so a caller cannot
+    mistake "we don't know" for "there is nothing to check".
+    """
+    cid = str(cid or "").strip().upper()
+    base = CONTROL_EFFICACY_EVIDENCE.get(cid) or {
+        "basis": "expert_elicited",
+        "source": "control not in catalogue",
+        "n_observations": 0,
+        "concentration": UNVALIDATED_EFFICACY_CONCENTRATION,
+        "note": "Unknown control id; treated as an unvalidated prior.",
+    }
+    control = _CONTROL_BY_ID.get(cid)
+    observations = EFFICACY_OBSERVATIONS.get(cid) or []
+    declared = float(control["efficacy"]) if control else None
+
+    # With observations, the posterior mean is the observation mean pulled
+    # toward the declared prior with strength UNVALIDATED_EFFICACY_CONCENTRATION.
+    # Both numbers stay visible so the reader sees the prior was not discarded.
+    posterior_mean = declared
+    n = len(observations)
+    if declared is not None and n:
+        obs_mean = sum(float(o["efficacy"]) for o in observations) / n
+        posterior_mean = round(
+            (obs_mean * n + declared * UNVALIDATED_EFFICACY_CONCENTRATION)
+            / (n + UNVALIDATED_EFFICACY_CONCENTRATION), 4)
+
+    return {
+        "control_id": cid,
+        "declared": declared,
+        "posterior_mean": posterior_mean,
+        "basis": ("measured" if n else base["basis"]),
+        "source": (observations[-1].get("source") if observations
+                   else base["source"]),
+        "n_observations": n,
+        # Beta concentration: the prior keeps its weight and each observation
+        # adds one. At n=0 this is the declared unvalidated prior; at n>=1 it
+        # widens with the evidence, which is what :mod:`uncertainty` turns into
+        # a credible interval.
+        "concentration": n + UNVALIDATED_EFFICACY_CONCENTRATION,
+        "note": base["note"],
+        "validated": bool(n),
+    }
+
+
+def record_efficacy_observation(cid: str, efficacy: float, *,
+                                source: str, note: str = "") -> dict[str, Any]:
+    """Record one observed efficacy for a control and return its new provenance.
+
+    This is the entry point that makes the band tighten as evidence arrives: a
+    control attested against a real post-deployment probe moves from
+    ``expert_elicited`` to ``measured``, and :mod:`uncertainty` narrows its
+    interval accordingly. In-memory by design -- observations belong to the
+    assessment run that produced them, and are persisted with it rather than
+    mutating a global registry across unrelated assessments.
+    """
+    cid = str(cid or "").strip().upper()
+    try:
+        eff = float(efficacy)
+    except (TypeError, ValueError):
+        raise ValueError(f"efficacy must be a number, got {efficacy!r}") from None
+    if not 0.0 <= eff <= 1.0:
+        raise ValueError(f"efficacy must be in 0..1, got {eff}")
+    EFFICACY_OBSERVATIONS.setdefault(cid, []).append(
+        {"efficacy": round(eff, 4), "source": source, "note": note})
+    return control_evidence(cid)
+
+
+def efficacy_evidence_summary(active: Iterable[str]) -> dict[str, Any]:
+    """Provenance rollup for a control set, for the report and the API.
+
+    ``validated_controls`` / ``unvalidated_controls`` are the headline: how much
+    of the residual rests on numbers nobody has measured. ``widest_concentration``
+    is the weakest link -- the control whose interval dominates.
+    """
+    cids = [str(c).strip().upper() for c in (active or [])
+            if str(c).strip().upper() in _KNOWN_CIDS]
+    records = [control_evidence(c) for c in cids]
+    validated = [r["control_id"] for r in records if r["validated"]]
+    unvalidated = [r["control_id"] for r in records if not r["validated"]]
+    weakest = min(records, key=lambda r: (r["concentration"], r["control_id"]),
+                  default=None)
+    return {
+        "n_controls": len(records),
+        "validated_controls": validated,
+        "unvalidated_controls": unvalidated,
+        "all_validated": bool(records) and not unvalidated,
+        "widest_concentration": weakest["concentration"] if weakest else None,
+        "widest_control": weakest["control_id"] if weakest else None,
+        "basis_note": ("Efficacy values are analyst priors until observations "
+                       "are recorded; a validated control is one with at least "
+                       "one recorded measurement."),
+        "records": {r["control_id"]: r for r in records},
+    }
 _THREAT_IDS: list[str] = [t[0] for t in _THREAT_CATALOG]
 _THREAT_BY_ID: dict[str, dict[str, Any]] = {
     t[0]: {"title": t[1], "stride": t[2], "owasp": t[3], "base_likelihood": t[4],
@@ -453,6 +601,11 @@ _BREADTH_WEIGHT = 0.45
 _TOP_N = 5
 _MIN_RESIDUAL_LIKELIHOOD = 0.35  # controls never take a threat below 35% of inherent
 _MIN_APPLICABILITY = 0.3          # below this a threat is reported but not scored
+# residual_pct is reported to one decimal, so a control whose removal moves the
+# headline by less than this cannot be distinguished from no change at all.
+# Such a control is reported in `controls_beyond_floor_ids` rather than being
+# silently credited in the headline it does not move.
+FLOOR_NOISE_EPS = 0.1
 
 
 # Model assessment dimensions: the weighting of a model security assessment.
@@ -1053,13 +1206,20 @@ def profile_model_subject(product: str, use_case: str = "",
 
 
 def control_catalog() -> list[dict[str, Any]]:
-    """Control catalogue plus how many threats each control covers (for the GUI)."""
+    """Control catalogue plus how many threats each control covers (for the GUI).
+
+    Each row carries its efficacy *provenance* alongside the value, so no
+    consumer can display 0.70 without the fact that it is an unvalidated
+    analyst prior being one attribute lookup away.
+    """
     out = []
     for c in _CONTROL_CATALOG:
         item = {k: v for k, v in c.items()}
         item["threat_count"] = len(c["threats"])
         item["max_coverage"] = round(_combine_efficacy(
             [c["efficacy"] * w for w in c["threats"].values()]) * 100, 1)
+        item["evidence"] = control_evidence(c["id"])
+        item["efficacy_is_prior"] = not control_evidence(c["id"])["validated"]
         out.append(item)
     return out
 
@@ -1088,90 +1248,16 @@ def _coverage_for(threat_id: str, active_controls: Iterable[str]) -> tuple[float
     return _combine_efficacy(parts), used
 
 
-def _aggregate(values: list[float]) -> float:
-    """Weighted worst/breadth aggregate normalized from the 1..25 L×I range."""
-    if not values:
-        return 0.0
-    top = sorted(values, reverse=True)[:_TOP_N]
-    worst = sum(top) / len(top)
-    breadth = sum(values) / len(values)
-    return _WORST_WEIGHT * worst + _BREADTH_WEIGHT * breadth
+def _score_rows(inherent_threats: list[dict[str, Any]],
+                active: list[str], app: dict[str, float]) -> list[dict[str, Any]]:
+    """One scored row per threat: inherent + residual + coverage + floor flag.
 
-
-def _aggregate_pct(rows: list[dict[str, Any]],
-                   applicability: Optional[dict[str, float]] = None,
-                   ) -> tuple[float, float, list[dict[str, Any]]]:
-    """(inherent_pct, residual_pct, applicable_rows) from already-scored rows.
-
-    Split out of :func:`score_assessment` so exactly one implementation of the
-    aggregate exists. The assurance layer re-scores rows whose residual has been
-    forced back to inherent by an evidence or architecture gate; it must land on
-    the same arithmetic the headline uses, or the two layers would disagree
-    about the same inputs.
+    Split out of :func:`score_assessment` so the floor ablation
+    (:func:`_floor_diagnostics`) re-scores under the identical arithmetic — a
+    second implementation here would let the ablation disagree with the
+    headline it is explaining, which is exactly the bug the diagnostics exist
+    to surface.
     """
-    if not rows:
-        return 0.0, 0.0, []
-    applicable = [r for r in rows if r.get("applicable", True)]
-    if not applicable:  # never produce a meaningless 0 for an empty scope
-        applicable = rows
-    weights = []
-    for r in applicable:
-        try:
-            weights.append(max(0.0, min(1.0, float((applicability or {}).get(r["id"], 1.0)))))
-        except (TypeError, ValueError):
-            weights.append(1.0)
-    norm = (sum(weights) / len(weights)) if weights else 0.0
-    if norm <= 0:
-        # nothing claims relevance: fall back to the unweighted aggregate
-        # rather than manufacturing a zero
-        weights = [1.0] * len(applicable)
-        norm = 1.0
-    inh = _aggregate([s * w for s, w in zip(
-        [r["inherent_score"] for r in applicable], weights)]) / (25.0 * norm)
-    res = _aggregate([s * w for s, w in zip(
-        [r["residual_score"] for r in applicable], weights)]) / (25.0 * norm)
-    return round(min(100.0, inh * 100.0), 1), round(min(100.0, res * 100.0), 1), applicable
-
-
-def _posture(pct: float) -> str:
-    if pct >= 75:
-        return "HIGH RISK — do not enable for this data tier without the mitigations below"
-    elif pct >= 50:
-        return "ELEVATED RISK — enable only with guardrails and steward review"
-    elif pct >= 30:
-        return "MODERATE RISK — standard hardening sufficient"
-    return "LOW RISK — routine controls sufficient"
-
-
-def score_assessment(
-    exposure: str,
-    inherent_threats: list[dict[str, Any]],
-    active_controls: Optional[Iterable[str]] = None,
-    applicability: Optional[dict[str, float]] = None,
-) -> dict[str, Any]:
-    """Pure function: inherent + residual scoring for a threat set.
-
-    Deterministic and side-effect free, so the same inputs always produce the
-    same numbers — used by the assessment run, the what-if re-scorer and the
-    control-analyst agent alike.
-
-    - ``inherent_threats``: entries with ``id``, ``likelihood`` (already exposure-
-      scaled), ``impact``.
-    - ``active_controls``: control ids the organisation has in place.
-    - ``applicability``: per-threat 0..1 relevance; threats below
-      ``_MIN_APPLICABILITY`` are reported but excluded from the aggregate,
-      and the rest weight the aggregate by relevance (renormalized, so a
-      uniform map scores exactly as unweighted).
-
-    Returns threats (inherent + residual per threat), the aggregates, the
-    posture, and a full breakdown so the UI can explain every number.
-    """
-    active = sorted({str(c).strip().upper() for c in (active_controls or [])
-                     if str(c).strip().upper() in _KNOWN_CIDS
-                     and str(c).strip().upper() not in DEPRECATED_CONTROLS})
-    app = dict(applicability or {})
-    control_analyst = (applicability is not None)
-
     rows: list[dict[str, Any]] = []
     for t in inherent_threats:
         tid = t["id"]
@@ -1204,9 +1290,179 @@ def score_assessment(
             "controls": contributors,
             "applicability": round(a, 2),
             "applicable": a >= _MIN_APPLICABILITY,
+            "floor_capped": _is_floor_bound(cov),
         })
+    return rows
+
+
+def _is_floor_bound(coverage: float) -> bool:
+    """True when ``_MIN_RESIDUAL_LIKELIHOOD`` — not coverage — sets the row.
+
+    ``lik_r = max(lik_i * floor, lik_i * (1 - cov))``. The floor wins exactly
+    when ``1 - cov < floor``, i.e. ``cov < 1 - floor``. The epsilon keeps the
+    tie (cov exactly at the threshold) on the "covered" side, because there the
+    two branches agree and coverage is a fair description of the value.
+    """
+    return coverage < (1.0 - _MIN_RESIDUAL_LIKELIHOOD) - 1e-9
+
+
+def _floor_diagnostics(inherent_threats: list[dict[str, Any]],
+                       active: list[str], app: dict[str, float],
+                       rows: list[dict[str, Any]],
+                       ) -> dict[str, Any]:
+    """How much of the residual score the 35% floor is responsible for.
+
+    Answers the question a reviewer actually asks — "I attested more controls
+    and the headline did not move" — by counting, for each active control, its
+    marginal effect on the headline when removed. A control whose removal moves
+    the score by less than :data:`FLOOR_NOISE_EPS` is *beyond the floor*: it is
+    real mitigation whose effect the model can no longer represent, and saying
+    so is more useful than reporting a headline that appears not to move.
+
+    This is a leave-one-out ablation over the same arithmetic the headline uses,
+    so the counts cannot disagree with ``residual_pct``.
+    """
+    base_rows = _score_rows(inherent_threats, active, app)
+    _, base_pct, applicable = _aggregate_pct(base_rows, app)
+    applicable_ids = {r["id"] for r in applicable}
+
+    beyond: list[dict[str, Any]] = []
+    moving: list[dict[str, Any]] = []
+    for cid in active:
+        trial = [c for c in active if c != cid]
+        _, alt_pct, _ = _aggregate_pct(_score_rows(inherent_threats, trial, app), app)
+        delta = round(base_pct - alt_pct, 2)
+        record = {
+            "control_id": cid,
+            "headline_delta_if_removed": delta,
+            "affects_included_threats": any(
+                cid in r["controls"] for r in base_rows
+                if r["id"] in applicable_ids
+            ),
+        }
+        (beyond if abs(delta) < FLOOR_NOISE_EPS else moving).append(record)
+
+    capped = [r["id"] for r in rows if r.get("floor_capped")]
+    return {
+        "floor": _MIN_RESIDUAL_LIKELIHOOD,
+        # True when at least one included threat's residual is set by the floor.
+        "floor_capped": bool(capped),
+        "floor_capped_threats": sorted(capped),
+        "floor_capped_count": len(capped),
+        "floor_capped_pct": round(
+            100.0 * len(capped) / len(rows), 1) if rows else 0.0,
+        # Controls whose marginal effect on the headline is below the model's
+        # own noise threshold. Attesting more of them will not move the score.
+        "controls_beyond_floor": len(beyond),
+        "controls_beyond_floor_ids": [r["control_id"] for r in beyond],
+        "controls_effective": len(moving),
+        "controls_effective_ids": [r["control_id"] for r in moving],
+        # Every active control that touches no included threat also lands in
+        # `beyond` (removing it changes nothing); name them separately so the
+        # "your control does nothing" reading is disambiguated from the
+        # "your control is floored" reading.
+        "controls_orphaned": sorted(r["control_id"] for r in beyond
+                                    if not r["affects_included_threats"]),
+        "noise_epsilon": FLOOR_NOISE_EPS,
+        "note": (
+            "residual_pct is an ordinal risk score, not a measured quantity. "
+            f"Likelihood never falls below {int(_MIN_RESIDUAL_LIKELIHOOD * 100)}% "
+            "of inherent, so residual saturates once coverage exceeds "
+            f"{int((1 - _MIN_RESIDUAL_LIKELIHOOD) * 100)}%. Controls listed in "
+            "controls_beyond_floor_ids are real mitigation the model cannot "
+            "represent further."
+        ),
+    }
+
+
+def _aggregate(values: list[float]) -> float:
+    """Weighted worst/breadth aggregate normalized from the 1..25 L×I range."""
+    if not values:
+        return 0.0
+    top = sorted(values, reverse=True)[:_TOP_N]
+    worst = sum(top) / len(top)
+    breadth = sum(values) / len(values)
+    return _WORST_WEIGHT * worst + _BREADTH_WEIGHT * breadth
+
+
+def _aggregate_pct(rows: list[dict[str, Any]],
+                   applicability: dict[str, float] | None = None,
+                   ) -> tuple[float, float, list[dict[str, Any]]]:
+    """(inherent_pct, residual_pct, applicable_rows) from already-scored rows.
+
+    Split out of :func:`score_assessment` so exactly one implementation of the
+    aggregate exists. The assurance layer re-scores rows whose residual has been
+    forced back to inherent by an evidence or architecture gate; it must land on
+    the same arithmetic the headline uses, or the two layers would disagree
+    about the same inputs.
+    """
+    if not rows:
+        return 0.0, 0.0, []
+    applicable = [r for r in rows if r.get("applicable", True)]
+    if not applicable:  # never produce a meaningless 0 for an empty scope
+        applicable = rows
+    weights = []
+    for r in applicable:
+        try:
+            weights.append(max(0.0, min(1.0, float((applicability or {}).get(r["id"], 1.0)))))
+        except (TypeError, ValueError):
+            weights.append(1.0)
+    norm = (sum(weights) / len(weights)) if weights else 0.0
+    if norm <= 0:
+        # nothing claims relevance: fall back to the unweighted aggregate
+        # rather than manufacturing a zero
+        weights = [1.0] * len(applicable)
+        norm = 1.0
+    inh = _aggregate([s * w for s, w in zip(
+        [r["inherent_score"] for r in applicable], weights, strict=False)]) / (25.0 * norm)
+    res = _aggregate([s * w for s, w in zip(
+        [r["residual_score"] for r in applicable], weights, strict=False)]) / (25.0 * norm)
+    return round(min(100.0, inh * 100.0), 1), round(min(100.0, res * 100.0), 1), applicable
+
+
+def _posture(pct: float) -> str:
+    if pct >= 75:
+        return "HIGH RISK — do not enable for this data tier without the mitigations below"
+    elif pct >= 50:
+        return "ELEVATED RISK — enable only with guardrails and steward review"
+    elif pct >= 30:
+        return "MODERATE RISK — standard hardening sufficient"
+    return "LOW RISK — routine controls sufficient"
+
+
+def score_assessment(
+    exposure: str,
+    inherent_threats: list[dict[str, Any]],
+    active_controls: Iterable[str] | None = None,
+    applicability: dict[str, float] | None = None,
+) -> dict[str, Any]:
+    """Pure function: inherent + residual scoring for a threat set.
+
+    Deterministic and side-effect free, so the same inputs always produce the
+    same numbers — used by the assessment run, the what-if re-scorer and the
+    control-analyst agent alike.
+
+    - ``inherent_threats``: entries with ``id``, ``likelihood`` (already exposure-
+      scaled), ``impact``.
+    - ``active_controls``: control ids the organisation has in place.
+    - ``applicability``: per-threat 0..1 relevance; threats below
+      ``_MIN_APPLICABILITY`` are reported but excluded from the aggregate,
+      and the rest weight the aggregate by relevance (renormalized, so a
+      uniform map scores exactly as unweighted).
+
+    Returns threats (inherent + residual per threat), the aggregates, the
+    posture, and a full breakdown so the UI can explain every number.
+    """
+    active = sorted({str(c).strip().upper() for c in (active_controls or [])
+                     if str(c).strip().upper() in _KNOWN_CIDS
+                     and str(c).strip().upper() not in DEPRECATED_CONTROLS})
+    app = dict(applicability or {})
+    control_analyst = (applicability is not None)
+
+    rows = _score_rows(inherent_threats, active, app)
 
     inherent_pct, residual_pct, applicable = _aggregate_pct(rows, app)
+    floor = _floor_diagnostics(inherent_threats, active, app, rows)
 
     def _dist(key: str) -> dict[str, int]:
         out: dict[str, int] = {}
@@ -1224,6 +1480,13 @@ def score_assessment(
         "inherent_pct": inherent_pct,
         "residual_pct": residual_pct,
         "delta": round(residual_pct - inherent_pct, 1),
+        # Floor diagnostics live at the top level, not only inside breakdown:
+        # every consumer (markdown, PDF, GUI, API) reads the top level, and the
+        # point of the change is that no reader can miss it.
+        "floor_capped": floor["floor_capped"],
+        "floor": floor,
+        # How much of this residual rests on numbers nobody has measured.
+        "efficacy_evidence": efficacy_evidence_summary(active),
         "posture": _posture(residual_pct),
         "inherent_posture": _posture(inherent_pct),
         "active_controls": active,
@@ -1235,7 +1498,9 @@ def score_assessment(
             "method": "weighted worst-case (55%) + breadth (45%), normalized to the 1-25 LxI range; "
                       "threat contributions scale by applicability and renormalize (uniform maps score as unweighted); "
                       "residual applies control efficacy with diminishing returns; "
-                      "controls never reduce likelihood below 35% of inherent",
+                      "controls never reduce likelihood below 35% of inherent "
+                      "(so the residual saturates once coverage exceeds 65% -- see the `floor` block for how much of "
+                      "this score the floor accounts for; treat it as an ordinal ranking, not a measurement)",
             "worst_weight": _WORST_WEIGHT,
             "breadth_weight": _BREADTH_WEIGHT,
             "top_n": _TOP_N,
@@ -1681,17 +1946,17 @@ def build_assessment(
     exposure: str,
     use_case: str = "",
     workflow_text: str = "",
-    doc_urls: Optional[list[str]] = None,
-    focus: Optional[list[str]] = None,
+    doc_urls: list[str] | None = None,
+    focus: list[str] | None = None,
     db: Any = None,
     investigation_id: Any = None,
-                    declared_controls: Optional[list[str]] = None,
-                    control_plan_override: Optional[dict[str, Any]] = None,
+                    declared_controls: list[str] | None = None,
+                    control_plan_override: dict[str, Any] | None = None,
                     assessment_mode: str = "",
-                    model_meta: Optional[dict[str, Any]] = None,
-                    architecture_checklist: Optional[dict[str, Any]] = None,
-                    exposure_inventory: Optional[dict[str, Any]] = None,
-                    full_metadata_context: Optional[bool] = None) -> dict[str, Any]:
+                    model_meta: dict[str, Any] | None = None,
+                    architecture_checklist: dict[str, Any] | None = None,
+                    exposure_inventory: dict[str, Any] | None = None,
+                    full_metadata_context: bool | None = None) -> dict[str, Any]:
     exposure = (exposure or "confidential_data").strip()
     if exposure not in EXPOSURE_META:
         exposure = "confidential_data"
@@ -1910,7 +2175,7 @@ def build_assessment(
         "a2a_task_id": a2a.get("task_id", ""),
         "openshell": osh_block,
         "assurance": assurance_block,
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": datetime.now(UTC).isoformat(),
     }
 
 
@@ -1972,7 +2237,7 @@ def _build_model_assessment(product_name: str, product_url: str,
             _metric("Ruled out", len(a2a.get("model_excluded", []))),
         ],
         "bullets": [
-            _bullet(f"Sharpest paths: " + "; ".join(
+            _bullet("Sharpest paths: " + "; ".join(
                 f"{f['id']} {f['title']}" for f in top[:3]) + "."
                 if top else "No findings recorded."),
             _bullet("Residual equals inherent: v1 maps no declared controls "
@@ -2030,7 +2295,7 @@ def _build_model_assessment(product_name: str, product_url: str,
         "a2a_task_id": a2a.get("task_id", ""),
         "openshell": [],
         "assurance": _assurance_not_assessed("model"),
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": datetime.now(UTC).isoformat(),
     }
 
 
@@ -2272,7 +2537,7 @@ def _build_model_engineering_assessment(
         "a2a_task_id": a2a.get("task_id", ""),
         "openshell": [],
         "assurance": _assurance_not_assessed("model_engineering"),
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": datetime.now(UTC).isoformat(),
         "model_meta": model_meta,
         "model_attacks": findings,
         "adoption_dimensions": dimensions,
@@ -2351,7 +2616,7 @@ def _build_adversarial_assessment(product_name: str, product_url: str,
             _metric("Not exploitable", len(a2a.get("adversarial_unexploitable", []))),
         ],
         "bullets": [
-            _bullet(f"Sharpest chains: " + "; ".join(
+            _bullet("Sharpest chains: " + "; ".join(
                 f"{s['id']} {s['title'].split(' (from ')[0]}" for s in top[:3]) + "."
                 if top else "No scenarios derived from the brief."),
             _bullet("No residual: a capability is unavailable only to the "
@@ -2409,7 +2674,7 @@ def _build_adversarial_assessment(product_name: str, product_url: str,
         "a2a_task_id": a2a.get("task_id", ""),
         "openshell": [],
         "assurance": _assurance_not_assessed("model_adversarial"),
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": datetime.now(UTC).isoformat(),
     }
 
 
@@ -2658,7 +2923,7 @@ def _build_hypothesis_assessment(product_name: str, product_url: str,
         "a2a_task_id": a2a.get("task_id", ""),
         "openshell": [],
         "assurance": _assurance_not_assessed("model_hypothesis"),
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": datetime.now(UTC).isoformat(),
     }
 
 
@@ -2859,6 +3124,38 @@ def render_markdown(**ctx: Any) -> str:
       f"threats — so one threat can no longer saturate the scale.")
     A("- Severity bands (5×5 calibration): ≥20 Critical, ≥12 High, ≥6 Medium, else Low.")
     A("")
+    fl = scoring.get("floor") or {}
+    eev = scoring.get("efficacy_evidence") or {}
+    if fl:
+        # The two facts a reader most needs and that the headline number hides:
+        # that the score has stopped moving, and that its inputs are unmeasured.
+        A("### What this score can and cannot tell you")
+        A("")
+        A(f"- **The score is ordinal, not a measurement.** It ranks risk; it does not "
+          f"quantify it. Likelihood never falls below "
+          f"{int((fl.get('floor') or 0.35) * 100)}% of inherent, so the residual "
+          f"saturates once coverage exceeds "
+          f"{int((1 - (fl.get('floor') or 0.35)) * 100)}%.")
+        if fl.get("floor_capped"):
+            A(f"- **{fl.get('floor_capped_count', 0)} of "
+              f"{fl.get('floor_capped_count', 0) + (bd.get('total_threats', 0) - fl.get('floor_capped_count', 0))} "
+              f"threats are floor-capped** — their residual is set by the floor, not "
+              f"by the controls you declared.")
+        if fl.get("controls_beyond_floor"):
+            A(f"- **{fl.get('controls_beyond_floor')} of {len(active)} declared controls "
+              f"no longer move the score** ({', '.join(fl.get('controls_beyond_floor_ids') or [])}). "
+              f"They remain real mitigation; the model simply cannot represent them "
+              f"further.")
+        if eev:
+            unval = eev.get("unvalidated_controls") or []
+            if unval:
+                A(f"- **{len(unval)} of {eev.get('n_controls', 0)} control efficacies are "
+                  f"unvalidated analyst priors.** The cited standard establishes that "
+                  f"the control exists, not how effective it is; no measurement has been "
+                  f"recorded for {', '.join(unval[:8])}"
+                  f"{' …' if len(unval) > 8 else ''}. Treat the score as conditional on "
+                  f"those priors being roughly right.")
+        A("")
     A("---")
     A("")
     persp = ctx.get("perspectives") or []
@@ -3272,9 +3569,10 @@ _FIGURE_SPECS = {
 
 def _flow_drawing(spec: dict) -> object:
     """Render a figure spec to a reportlab Drawing (vector, PDF-native)."""
-    from reportlab.graphics.shapes import Drawing, Rect, String, Line, Polygon
-    from reportlab.lib.colors import HexColor, white, black
     import math
+
+    from reportlab.graphics.shapes import Drawing, Line, Polygon, Rect, String
+    from reportlab.lib.colors import HexColor, black, white
 
     pad_left = spec.get("pad_left", 0)
     pad_top = spec.get("pad_top", 6)
@@ -3430,21 +3728,28 @@ def build_pdf(markdown_text: str, title: str = "AI Security Assessment",
     task_id/date for the cover. Requires reportlab.
     """
     try:
-        from reportlab.lib.pagesizes import A4
-        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-        from reportlab.lib.units import cm
-        from reportlab.platypus import (SimpleDocTemplate, Paragraph, Spacer,
-                                         Table, TableStyle, PageBreak,
-                                         KeepTogether, Image as RLImage)
-        from reportlab.platypus.tableofcontents import TableOfContents
         from reportlab.lib import colors
         from reportlab.lib.enums import TA_LEFT
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+        from reportlab.lib.units import cm
         from reportlab.pdfbase.pdfmetrics import stringWidth
+        from reportlab.platypus import Image as RLImage
+        from reportlab.platypus import (
+            KeepTogether,
+            PageBreak,
+            Paragraph,
+            SimpleDocTemplate,
+            Spacer,
+            Table,
+            TableStyle,
+        )
+        from reportlab.platypus.tableofcontents import TableOfContents
     except ImportError as exc:
         raise RuntimeError("PDF export needs the 'reportlab' package (pip install reportlab).") from exc
 
     import io
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     # Built-in PDF fonts are WinAnsi-encoded: map anything outside it to
     # ASCII/Latin-1 equivalents so glyphs never render as missing-symbol boxes.
@@ -3530,7 +3835,7 @@ def build_pdf(markdown_text: str, title: str = "AI Security Assessment",
     meta = meta or {}
     product = str(meta.get("product") or title)
     datestr = str(meta.get("date") or
-                  datetime.now(timezone.utc).date().isoformat())
+                  datetime.now(UTC).date().isoformat())
 
     # ---- cover ----
     story.append(Paragraph(_inline(title), sec_title))
@@ -3703,7 +4008,7 @@ def build_pdf(markdown_text: str, title: str = "AI Security Assessment",
         every column is 20000pt wide and squeezes the real table down to its
         minimums."""
         widths = []
-        for col in zip(*cells):
+        for col in zip(*cells, strict=False):
             w = 0.0
             for cell in col:
                 try:
@@ -3727,7 +4032,7 @@ def build_pdf(markdown_text: str, title: str = "AI Security Assessment",
         A single unbreakable token wider than the frame (a long path, a base64
         blob) is clamped: it must wrap somewhere or nothing can be shown."""
         widths = []
-        for col in zip(*cells):
+        for col in zip(*cells, strict=False):
             w = 0.0
             for cell in col:
                 try:
@@ -3762,12 +4067,12 @@ def build_pdf(markdown_text: str, title: str = "AI Security Assessment",
                 allc = [header] + rows
                 nat = [max(w, 1.0) for w in _natural_widths(allc, FRAME_W)]
                 lo = [max(w, 12.0) for w in _min_widths(allc, FRAME_W)]
-                lo = [min(l, n) for l, n in zip(lo, nat)]
+                lo = [min(l, n) for l, n in zip(lo, nat, strict=False)]
                 # One prose column may wrap as much as it likes, but it may not
                 # take so much that its neighbours fall below their word floor
                 # and print one letter per line. Cap the share before fitting.
                 want = [min(n, FRAME_W * 0.40) for n in nat]
-                want = [max(w, l) for w, l in zip(want, lo)]
+                want = [max(w, l) for w, l in zip(want, lo, strict=False)]
                 total = sum(want)
                 if total <= FRAME_W:
                     # Spare room: share it out so the table fills the frame.
@@ -3811,7 +4116,7 @@ def build_pdf(markdown_text: str, title: str = "AI Security Assessment",
                 for r in table_rows_raw:
                     head_text = table_head_raw[0] if table_head_raw else "row"
                     parts = []
-                    for label, val in zip(table_head_raw, r):
+                    for label, val in zip(table_head_raw, r, strict=False):
                         val = str(val).strip()
                         if val:
                             parts.append(
