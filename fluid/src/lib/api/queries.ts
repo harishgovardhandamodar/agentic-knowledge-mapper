@@ -10,17 +10,25 @@ import {
   zAssessment,
   zAssessmentAnalysis,
   zAssessmentList,
+  zControlCatalog,
+  zEvalReport,
   zHealth,
   zInvestigation,
   zInvestigationList,
+  zResearchGaps,
   zThreatPack,
   type Assessment,
   type AssessmentAnalysis,
+  type EvalReport,
+  type Experiment,
   type Investigation,
   type PrivacyBudget,
+  type ResearchGaps,
   type ThreatPack,
   type UncertaintyBand,
+  type VarianceBudget,
 } from './schemas';
+import type { ControlCatalogRow } from './calibration';
 
 export const qk = {
   all: ['akm'] as const,
@@ -31,6 +39,11 @@ export const qk = {
   assessment: (id: number) => [...qk.all, 'assessment', id] as const,
   analysis: (id: number) => [...qk.all, 'assessment-analysis', id] as const,
   threatPack: () => [...qk.all, 'threat-pack'] as const,
+  controls: () => [...qk.all, 'controls'] as const,
+  eval: () => [...qk.all, 'eval'] as const,
+  gaps: (invId: number) => [...qk.all, 'research-gaps', invId] as const,
+  experiments: (assessmentId: number) =>
+    [...qk.all, 'experiments', assessmentId] as const,
 };
 
 export function useHealth() {
@@ -122,11 +135,83 @@ export function useRescore(assessmentId: number) {
   });
 }
 
-/** Narrow helper for panels that only want the band / budget out of a bundle. */
+/**
+ * The control catalogue with each efficacy's provenance.
+ *
+ * This is what the calibration chart reads: the values are the ones the score
+ * is computed from, so showing them without their basis would reproduce the
+ * problem the calibration layer exists to fix.
+ */
+export function useControlCatalog() {
+  return useQuery({
+    queryKey: qk.controls(),
+    queryFn: async (): Promise<ControlCatalogRow[]> => {
+      const d = await getParsed(zControlCatalog, '/security/controls', {
+        lenient: true,
+      });
+      return (d.controls ?? d.items ?? []) as ControlCatalogRow[];
+    },
+    staleTime: 10 * 60_000,
+  });
+}
+
+/**
+ * The scoring regression suite. Read-only and fast (no model call), so it can
+ * be polled on the calibration page to show the engine's own gate is green.
+ */
+export function useEval() {
+  return useQuery({
+    queryKey: qk.eval(),
+    queryFn: (): Promise<EvalReport> =>
+      getParsed(zEvalReport, '/security/eval', { lenient: true }),
+    staleTime: 5 * 60_000,
+  });
+}
+
+/** Open research questions ranked by coverage, plus unasked areas. */
+export function useResearchGaps(invId: number | null | undefined) {
+  return useQuery({
+    queryKey: qk.gaps(invId ?? -1),
+    enabled: typeof invId === 'number' && invId > 0,
+    queryFn: (): Promise<ResearchGaps> =>
+      getParsed(zResearchGaps, `/investigations/${invId}/research-gaps`),
+  });
+}
+
+/**
+ * Planned experiments for what is still open on an assessment.
+ *
+ * Plan only — the engine never executes these. Surfacing the plan is the point:
+ * a proposed test with stated success criteria is the difference between a
+ * recommendation and a measurement.
+ */
+export function useExperiments(assessmentId: number | null | undefined) {
+  return useQuery({
+    queryKey: qk.experiments(assessmentId ?? -1),
+    enabled: false, // requires an explicit POST to build; see buildExperiments
+    queryFn: async (): Promise<Experiment[]> => {
+      const r = await postParsed(
+        zAssessment.passthrough() as never,
+        `/security/assessments/${assessmentId}/experiments/build`,
+        {},
+        { lenient: true },
+      );
+      return (r as unknown as { experiments?: Experiment[] }).experiments ?? [];
+    },
+  });
+}
+
+/** Narrow helper for panels that only want the band out of a bundle. */
 export function pickBand(a?: AssessmentAnalysis | null): UncertaintyBand | null {
   return a?.uncertainty ?? null;
 }
 
 export function pickBudget(a?: AssessmentAnalysis | null): PrivacyBudget | null {
   return a?.privacy ?? null;
+}
+
+export function pickVarianceBudget(
+  a?: AssessmentAnalysis | null,
+): VarianceBudget | null {
+  return a?.variance_budget ?? null;
 }

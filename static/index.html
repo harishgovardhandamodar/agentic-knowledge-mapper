@@ -596,6 +596,21 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 @media (max-width: 1250px) { #designPane.visible { grid-template-columns: 250px 1fr; } .design-body { grid-template-columns: 1fr; } .design-outline { display: none; } }
 @media (max-width: 820px) { #designPane.visible { grid-template-columns: 1fr; grid-template-rows: auto 1fr; } .design-rail { border-right: none; border-bottom: 1px solid var(--border); max-height: 34vh; } .design-topbar { flex-wrap: wrap; } }
 .sec-card { background: var(--bg2); border: 1px solid var(--border); border-radius: 10px; padding: 16px 18px; margin-bottom: 14px; }
+
+/* ---- calibration panel -------------------------------------------------
+   Sits directly above the score so the "this is ordinal" caveat is read at
+   the same moment as the number it qualifies. Amber left rule, not red: this
+   is a modelling property of every assessment, not a failure state. */
+.sec-calibration { background: var(--bg2); border: 1px solid var(--border); border-left: 3px solid var(--amber, #f59e0b);
+  border-radius: 10px; padding: 14px 16px; margin-bottom: 14px; }
+.sec-calibration[hidden] { display: none; }
+.sec-cal-note { font-size: 12px; line-height: 1.55; color: var(--text); margin-bottom: 8px; }
+.sec-cal-note b { font-weight: 700; }
+.sec-cal-warn { border-left: 2px solid var(--amber, #f59e0b); padding-left: 8px; }
+.sec-cal-stats { display: flex; flex-wrap: wrap; gap: 14px; font-size: 11.5px; color: var(--text2); margin-bottom: 8px; }
+.sec-cal-stats i { margin-right: 4px; color: var(--amber, #f59e0b); }
+.sec-cal-stats b { color: var(--text); font-variant-numeric: tabular-nums; }
+.sec-cal-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 4px; }
 .sec-card h3 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text2); margin-bottom: 10px; font-weight: 600; }
 .sec-card h4 { font-size: 13px; margin: 12px 0 6px; }
 .sec-card p, .sec-card li { font-size: 12.5px; line-height: 1.6; }
@@ -1375,6 +1390,7 @@ body.pane-sec-top-collapsed .sec-topbar-sub { display: none; }
             </div>
             <div id="secControls" class="sec-ctl-list">Loading control catalogue…</div>
           </div>
+          <div id="secCalibration" class="sec-calibration" hidden></div>
           <div id="secResult"><div class="sec-card"><p style="color:var(--text2)">Pick an investigation, configure the product and exposure, then run the agent. The report includes an executive summary, illustrated data-flow / threat-path / workflow diagrams, a full threat &amp; risk register, a Known Exploits section grounded in this app's graph, and Markdown + PDF export.</p></div></div>
         </div>
       </div>
@@ -7821,8 +7837,63 @@ function renderSecurityReport(data) {
     });
     secUpdateCtlCount();
   }
+  secRenderCalibration(data);
   secRunWhatIf();
   secEnsureMermaid(el);
+}
+
+/* ---- calibration panel -------------------------------------------------
+   The score is an ordinal ranking, not a measurement, and it saturates once
+   coverage passes the residual floor. This panel says so where the number is,
+   because a reader who attests more controls and watches the headline not move
+   deserves the reason next to the number — not a support article.
+   Deliberately dependency-free (no chart library): the saturation curve is a
+   plain bar row, and the engine's own leave-one-out count is authoritative.
+--------------------------------------------------------------------------- */
+function secRenderCalibration(data) {
+  const host = document.getElementById('secCalibration');
+  if (!host) return;
+  const fl = data.floor || (data.scoring && data.scoring.floor) || null;
+  const ev = data.efficacy_evidence || (data.scoring && data.scoring.efficacy_evidence) || null;
+  if (!fl && !ev) { host.hidden = true; return; }
+  host.hidden = false;
+
+  const pct = (v) => (Math.round(v * 100));
+  const floor = fl ? (fl.floor !== undefined ? fl.floor : 0.35) : 0.35;
+  let h = '';
+
+  if (fl) {
+    const beyond = fl.controls_beyond_floor_ids || [];
+    const eff = fl.controls_effective_ids || [];
+    h += `<div class="sec-cal-note">
+      <b>The score is ordinal, not a measurement.</b> Likelihood never falls below
+      ${pct(floor)}% of inherent, so the residual saturates once coverage passes
+      ${pct(1 - floor)}%. Declaring controls past that point raises coverage but cannot
+      lower the headline.
+    </div>`;
+    h += `<div class="sec-cal-stats">
+      <span><i class="fas fa-gauge-high"></i> <b>${fl.floor_capped_count || 0}</b> threats floor-capped</span>
+      <span><i class="fas fa-circle-exclamation"></i> <b>${fl.controls_beyond_floor || 0}</b> of ${(eff.length + beyond.length) || '?'} controls beyond the floor</span>
+      ${(fl.controls_orphaned || []).length ? `<span><i class="fas fa-ghost"></i> <b>${fl.controls_orphaned.length}</b> orphaned (touch no included threat)</span>` : ''}
+    </div>`;
+    if (beyond.length) {
+      h += `<div class="sec-cal-chips">${beyond.map(c => `<span class="std-chip mono">${c}</span>`).join('')}</div>
+      <div class="std-note" style="margin-top:4px">These are real mitigation the model cannot represent further. ${fl.note || ''}</div>`;
+    }
+  }
+
+  if (ev && ev.unvalidated_controls && ev.unvalidated_controls.length) {
+    const un = ev.unvalidated_controls;
+    h += `<div class="sec-cal-note sec-cal-warn">
+      <b>${un.length} of ${ev.n_controls} control efficacies are unvalidated analyst priors.</b>
+      The cited standard establishes the control exists, not how effective it is. Treat the
+      score as conditional on those values being roughly right — the credible interval widens
+      accordingly.
+    </div>`;
+    h += `<div class="sec-cal-chips">${un.slice(0, 10).map(c => `<span class="std-chip mono">${c}</span>`).join('')}${un.length > 10 ? `<span class="std-note">+${un.length - 10} more</span>` : ''}</div>`;
+  }
+
+  host.innerHTML = h;
 }
 
 function mdTableBlock(block) {

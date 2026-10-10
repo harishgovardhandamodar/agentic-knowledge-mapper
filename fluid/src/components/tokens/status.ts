@@ -81,34 +81,52 @@ export const EVIDENCE_META: Record<EvidenceStatus, StatusMeta> = {
 export const SEVERITY_META: Record<SeverityBand, StatusMeta> = {
   critical: {
     label: 'Critical',
-    glyph: '\u25B2\u25B2',
+    glyph: '▲▲',
     className: 'text-severity-critical border-severity-critical',
     description: 'Critical residual risk.',
   },
   high: {
     label: 'High',
-    glyph: '\u25B2',
+    glyph: '▲',
     className: 'text-severity-high border-severity-high',
     description: 'High residual risk.',
   },
   medium: {
     label: 'Medium',
-    glyph: '\u25A0',
+    glyph: '■',
     className: 'text-severity-medium border-severity-medium',
     description: 'Medium residual risk.',
   },
   low: {
     label: 'Low',
-    glyph: '\u25BD',
+    glyph: '▼',
     className: 'text-severity-low border-severity-low',
     description: 'Low residual risk.',
   },
   info: {
     label: 'Info',
-    glyph: '\u25CB',
+    glyph: '○',
     className: 'text-severity-info border-severity-info',
     description: 'Informational.',
   },
+};
+
+/** Fill classes per band, for charts that mark area/bar rather than text. */
+export const SEVERITY_BG: Record<SeverityBand, string> = {
+  critical: 'bg-severity-critical',
+  high: 'bg-severity-high',
+  medium: 'bg-severity-medium',
+  low: 'bg-severity-low',
+  info: 'bg-severity-info',
+};
+
+/** Same map as CSS fill/stroke values, for SVG rendered outside a class list. */
+export const SEVERITY_VAR: Record<SeverityBand, string> = {
+  critical: 'hsl(var(--severity-critical))',
+  high: 'hsl(var(--severity-high))',
+  medium: 'hsl(var(--severity-medium))',
+  low: 'hsl(var(--severity-low))',
+  info: 'hsl(var(--severity-info))',
 };
 
 export const REVIEW_META: Record<ReviewState, StatusMeta> = {

@@ -2,7 +2,7 @@
 
 import { Info } from 'lucide-react';
 import type { EvidenceBreakdown, ResidualInterval, SeverityBand } from '@/types/domain';
-import { EVIDENCE_META, SEVERITY_META } from '@/components/tokens/status';
+import { EVIDENCE_META, SEVERITY_BG, SEVERITY_META, severityFromPct } from '@/components/tokens/status';
 import { StatusBadge } from '@/components/ui/status-badge';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import {
@@ -11,14 +11,6 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
-
-const SEVERITY_BG: Record<SeverityBand, string> = {
-  critical: 'bg-severity-critical',
-  high: 'bg-severity-high',
-  medium: 'bg-severity-medium',
-  low: 'bg-severity-low',
-  info: 'bg-severity-info',
-};
 
 export interface ResidualDisplayProps {
   /** null when the backend reported a point with no computed interval. */
@@ -88,7 +80,7 @@ export function ResidualDisplay({
     );
   }
 
-  const band = severity ?? hintBand(residual.point);
+  const band = severity ?? severityFromPct(residual.point);
   const meta = SEVERITY_META[band];
   const clamp = (v: number) => Math.max(0, Math.min(100, v));
   const lo = clamp(residual.lower);
@@ -210,11 +202,3 @@ function EvidenceStrip({ breakdown }: { breakdown: EvidenceBreakdown }) {
   );
 }
 
-/** Fallback band when the backend did not send a severity string. */
-function hintBand(pct: number): SeverityBand {
-  if (pct >= 80) return 'critical';
-  if (pct >= 60) return 'high';
-  if (pct >= 40) return 'medium';
-  if (pct >= 20) return 'low';
-  return 'info';
-}

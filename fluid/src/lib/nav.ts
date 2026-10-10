@@ -17,6 +17,9 @@ import {
   Palette,
   Lock,
   Home,
+  Gauge,
+  Compass,
+  FlaskConical,
 } from 'lucide-react';
 
 export interface NavItem {
@@ -34,6 +37,9 @@ export const NAV_ITEMS: NavItem[] = [
   { href: '/mapper', label: 'Mapper', icon: Network, hint: 'Knowledge graph of the investigation', built: false, group: 'workspace' },
   { href: '/claims', label: 'Claims', icon: FileText, hint: 'Atomic claims and their evidence spans', built: true, group: 'workspace' },
   { href: '/security', label: 'Security', icon: Shield, hint: 'Threat assessments and residuals', built: true, group: 'analysis' },
+  { href: '/calibration', label: 'Calibration', icon: Gauge, hint: 'Score saturation, efficacy provenance, variance budget', built: true, group: 'analysis' },
+  { href: '/gaps', label: 'Gaps', icon: Compass, hint: 'Open questions and unasked areas', built: true, group: 'analysis' },
+  { href: '/experiments', label: 'Experiments', icon: FlaskConical, hint: 'Planned tests for what is still open', built: true, group: 'analysis' },
   { href: '/privacy', label: 'Privacy', icon: Lock, hint: 'External-reach budget and erasure', built: true, group: 'analysis' },
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard, hint: 'Cross-investigation metrics', built: false, group: 'analysis' },
   { href: '/manager', label: 'Manager', icon: Users, hint: 'Review queue and stewardship', built: false, group: 'system' },

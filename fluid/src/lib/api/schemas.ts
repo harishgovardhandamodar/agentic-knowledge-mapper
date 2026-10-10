@@ -79,6 +79,84 @@ export const zReproManifest = z
   .passthrough();
 export type ReproManifest = z.infer<typeof zReproManifest>;
 
+/** Provenance for one control efficacy (app.security.control_evidence). */
+export const zControlProvenance = z
+  .object({
+    control_id: z.string(),
+    declared: z.number().nullable().optional(),
+    posterior_mean: z.number().nullable().optional(),
+    basis: z.string().optional(),
+    source: z.string().optional(),
+    n_observations: z.number().optional(),
+    concentration: z.number().optional(),
+    note: z.string().optional(),
+    validated: z.boolean().optional(),
+  })
+  .passthrough();
+export type ControlProvenance = z.infer<typeof zControlProvenance>;
+
+export const zEfficacyEvidence = z
+  .object({
+    n_controls: z.number().optional(),
+    validated_controls: z.array(z.string()).optional(),
+    unvalidated_controls: z.array(z.string()).optional(),
+    all_validated: z.boolean().optional(),
+    widest_concentration: z.number().nullable().optional(),
+    widest_control: z.string().nullable().optional(),
+    basis_note: z.string().optional(),
+    records: z.record(zControlProvenance).optional(),
+  })
+  .passthrough();
+
+/** Why the residual score saturated (app.security._floor_diagnostics). */
+export const zFloorDiagnostics = z
+  .object({
+    floor: z.number().optional(),
+    floor_capped: z.boolean().optional(),
+    floor_capped_threats: z.array(z.string()).optional(),
+    floor_capped_count: z.number().optional(),
+    floor_capped_pct: z.number().optional(),
+    controls_beyond_floor: z.number().optional(),
+    controls_beyond_floor_ids: z.array(z.string()).optional(),
+    controls_effective: z.number().optional(),
+    controls_effective_ids: z.array(z.string()).optional(),
+    controls_orphaned: z.array(z.string()).optional(),
+    noise_epsilon: z.number().optional(),
+    note: z.string().optional(),
+  })
+  .passthrough();
+export type FloorDiagnostics = z.infer<typeof zFloorDiagnostics>;
+
+/** Decomposition of the credible interval (app.uncertainty.variance_budget). */
+export const zVarianceBudget = z
+  .object({
+    total_variance: z.number().optional(),
+    inherent_probability_variance: z.number().optional(),
+    control_efficacy_variance: z.number().optional(),
+    interaction_variance: z.number().optional(),
+    share_inherent: z.number().optional(),
+    share_efficacy: z.number().optional(),
+    share_interaction: z.number().optional(),
+    shares_sum: z.number().optional(),
+    interaction_note: z.string().optional(),
+    quantified: z.array(z.string()).optional(),
+    unquantified: z.record(z.string()).optional(),
+    control_provenance: z
+      .object({
+        n_controls: z.number().optional(),
+        validated: z.number().optional(),
+        unvalidated: z.number().optional(),
+        all_validated: z.boolean().optional(),
+        note: z.string().optional(),
+      })
+      .passthrough()
+      .optional(),
+    floor_capped: z.boolean().optional(),
+    note: z.string().optional(),
+  })
+  .passthrough();
+export type VarianceBudget = z.infer<typeof zVarianceBudget>;
+
 /** One threat row from security.score_assessment. */
 export const zThreatRow = z
   .object({
@@ -121,6 +199,9 @@ export const zAssessment = z
     uncertainty: zUncertaintyBand.nullable().optional(),
     privacy: zPrivacyBudget.nullable().optional(),
     repro: zReproManifest.nullable().optional(),
+    floor_capped: z.boolean().nullable().optional(),
+    floor: zFloorDiagnostics.nullable().optional(),
+    efficacy_evidence: zEfficacyEvidence.nullable().optional(),
     assessment_path: z.string().optional(),
     markdown: z.string().nullable().optional(),
   })
@@ -145,8 +226,81 @@ export const zAssessmentAnalysis = z.object({
   uncertainty: zUncertaintyBand.nullable(),
   privacy: zPrivacyBudget.nullable(),
   repro: zReproManifest.nullable(),
+  // Calibration extras ride along with the band so a consumer cannot read the
+  // interval without the list of what produced it and what it omits.
+  variance_budget: zVarianceBudget.nullable().optional(),
+  efficacy_evidence: zEfficacyEvidence.nullable().optional(),
+  floor_capped: z.boolean().nullable().optional(),
 });
 export type AssessmentAnalysis = z.infer<typeof zAssessmentAnalysis>;
+
+/** GET /api/investigations/{id}/research-gaps — open questions + novel areas. */
+export const zResearchGaps = z.object({
+  gaps: z
+    .array(
+      z
+        .object({
+          question: z.string(),
+          kinds: z.array(z.string()).optional(),
+          exps: z.array(z.unknown()).optional(),
+          supporting: z.number(),
+          novel: z.boolean(),
+        })
+        .passthrough(),
+    )
+    .optional(),
+  novel_areas: z
+    .array(
+      z.object({ topic: z.string(), artifacts: z.number() }).passthrough(),
+    )
+    .optional(),
+});
+export type ResearchGaps = z.infer<typeof zResearchGaps>;
+
+/** GET /api/security/eval — the regression suite, as a gate report. */
+export const zEvalReport = z
+  .object({
+    ok: z.boolean(),
+    cases_run: z.number().optional(),
+    cases_failed: z.number().optional(),
+    invariants_run: z.number().optional(),
+    invariants_failed: z.number().optional(),
+    engine_invariants_run: z.number().optional(),
+    engine_invariants_failed: z.number().optional(),
+    engine_invariants: z
+      .array(z.object({ name: z.string(), ok: z.boolean(), detail: z.unknown() }).passthrough())
+      .optional(),
+    failures: z.array(z.record(z.unknown())).optional(),
+    pack: z.record(z.unknown()).optional(),
+  })
+  .passthrough();
+export type EvalReport = z.infer<typeof zEvalReport>;
+
+/** GET /api/security/controls — the catalogue with its provenance. */
+export const zControlCatalog = z
+  .object({
+    items: z.array(zControlProvenance.passthrough()).optional(),
+    controls: z.array(zControlProvenance.passthrough()).optional(),
+  })
+  .passthrough();
+
+/** One planned experiment (app.model_eval.plan_experiments). */
+export const zExperiment = z
+  .object({
+    id: z.string().optional(),
+    control_id: z.string().optional(),
+    title: z.string().optional(),
+    question: z.string().optional(),
+    hypothesis: z.string().nullable().optional(),
+    method: z.string().nullable().optional(),
+    status: z.string().nullable().optional(),
+    priority: z.number().nullable().optional(),
+    burden: z.string().nullable().optional(),
+    limitations: z.array(z.string()).optional(),
+    success_criteria: z.string().nullable().optional(),
+  })
+  .passthrough();
+export type Experiment = z.infer<typeof zExperiment>;
 
 /** One verified claim (app.claims.verify_claim). */
 export const zVerifiedClaim = z

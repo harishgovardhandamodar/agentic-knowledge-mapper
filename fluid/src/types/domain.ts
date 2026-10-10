@@ -108,3 +108,89 @@ export interface ResidualInterval {
 
 /** Evidence-status histogram behind a residual (brief §4). */
 export type EvidenceBreakdown = Partial<Record<EvidenceStatus, number>>;
+
+/**
+ * Provenance for one control efficacy, from the engine's calibration layer.
+ *
+ * `basis` is the epistemic claim: `expert_elicited` means a single analyst
+ * chose the number and nobody has measured it. That distinction is the whole
+ * reason this type exists — the residual score is a function of these values,
+ * so a reader is entitled to know which ones are evidence and which are
+ * opinion.
+ */
+export interface ControlProvenance {
+  control_id: string;
+  /** The catalogue value. */
+  declared: number | null;
+  /** Prior + observations, still retaining the prior's weight. */
+  posterior_mean: number | null;
+  basis: 'measured' | 'expert_elicited' | 'literature' | string;
+  source: string;
+  n_observations: number;
+  concentration: number;
+  note: string;
+  validated: boolean;
+  /** Filled by the client from the Beta interval, not sent by the engine. */
+  lower?: number;
+  upper?: number;
+}
+
+/** Rollup of provenance across one assessment's declared controls. */
+export interface EfficacyEvidenceSummary {
+  n_controls: number;
+  validated_controls: string[];
+  unvalidated_controls: string[];
+  all_validated: boolean;
+  widest_concentration: number | null;
+  widest_control: string | null;
+  basis_note: string;
+  records: Record<string, ControlProvenance>;
+}
+
+/**
+ * Why the residual score stopped responding to controls.
+ *
+ * The 35% likelihood floor means the headline saturates: past it, declaring
+ * more real controls changes coverage but not the number. `controls_beyond_floor`
+ * is the leave-one-out ablation count that makes that visible, so "I attested
+ * more and nothing moved" has an answer.
+ */
+export interface FloorDiagnostics {
+  floor: number;
+  floor_capped: boolean;
+  floor_capped_threats: string[];
+  floor_capped_count: number;
+  floor_capped_pct: number;
+  controls_beyond_floor: number;
+  controls_beyond_floor_ids: string[];
+  controls_effective: number;
+  controls_effective_ids: string[];
+  /** Controls touching no included threat — inert, distinct from floored. */
+  controls_orphaned: string[];
+  noise_epsilon: number;
+  note: string;
+}
+
+/** Decomposition of the credible interval by input, plus what it omits. */
+export interface VarianceBudgetSummary {
+  total_variance: number;
+  inherent_probability_variance: number;
+  control_efficacy_variance: number;
+  interaction_variance: number;
+  share_inherent: number;
+  share_efficacy: number;
+  share_interaction: number;
+  shares_sum?: number;
+  interaction_note?: string;
+  quantified: string[];
+  unquantified: Record<string, string>;
+  control_provenance: {
+    n_controls: number;
+    validated: number;
+    unvalidated: number;
+    all_validated: boolean;
+    note?: string;
+  };
+  floor_capped: boolean;
+  note: string;
+}
