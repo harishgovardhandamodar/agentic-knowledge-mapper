@@ -11000,12 +11000,20 @@ function secLeadRiskHtml(rp) {
   }).join('');
 
   const tw = (rp.trend_windows || []).map(w => {
-    const color = w.direction === 'worsening' ? 'var(--red, #d9534f)'
-      : w.direction === 'improving' ? 'var(--green, #3fb950)' : 'var(--text3)';
-    return `<span style="display:inline-flex;gap:4px;align-items:baseline;margin-right:14px;" title="${escHtml(String(w.direction).replace(/_/g, ' '))} · ${w.samples} in window, ${w.prior_samples} before">
+    // The direction label is the sign of a mean difference. The significance
+    // block beside it is the measured version: direction is only claimed when
+    // the bootstrap interval excludes zero, otherwise the move is noise.
+    const sig = w.significance || {};
+    const verdict = sig.verdict || w.direction;
+    const measured = verdict === 'improving' || verdict === 'worsening';
+    const color = verdict === 'worsening' ? 'var(--red, #d9534f)'
+      : verdict === 'improving' ? 'var(--green, #3fb950)' : 'var(--text3)';
+    const iv = (sig.lower !== undefined && sig.lower !== null && sig.upper !== undefined && sig.upper !== null)
+      ? `[${sig.lower}, ${sig.upper}]` : 'n too small to measure';
+    return `<span style="display:inline-flex;gap:4px;align-items:baseline;margin-right:14px;" title="${escHtml(String(verdict).replace(/_/g, ' '))} · ${w.samples} in window, ${w.prior_samples} before · 90% interval ${iv}">
        <b>${w.window_days}d</b>
        <span style="color:var(--text2);">${secLeadNum(w.mean_residual_pct, '%')}</span>
-       <span style="color:${color};font-weight:700;">${escHtml(String(w.direction).replace(/_/g, ' '))}</span>
+       <span style="color:${color};font-weight:700;">${escHtml(String(verdict).replace(/_/g, ' '))}</span>${measured ? '' : '<span style="color:var(--text3);font-size:10px;" title="Inside sampling noise — not a real move">~</span>'}
        <span style="color:var(--text3);font-size:10.5px;">n=${w.samples}</span>
      </span>`;
   }).join('');

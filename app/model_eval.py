@@ -584,6 +584,29 @@ def _experiment_prereqs(meta: dict[str, Any]) -> list[str]:
     return prereqs
 
 
+def _trial_plan(method_type: str) -> dict[str, Any]:
+    """Trial count for one planned experiment, from power analysis.
+
+    Every plan proposes what it needs rather than a round default: the trials
+    for 80% power at a 20% effect, capped at what a human will actually run.
+    A plan whose requirement exceeds the cap says so in its own note instead
+    of silently proposing an underpowered test.
+    """
+    from . import experiments as _E
+    need = _E.required_trials(0.2, power=0.8)["n"] or 30
+    planned = min(int(need), 50)
+    out: dict[str, Any] = {
+        "n_trials": planned,
+        "trials_for_80_power": int(need),
+    }
+    if planned < need:
+        out["power_note"] = (
+            f"80% power needs {need} trials; capped at {planned} for "
+            f"practicality. A clean run at this size is inconclusive, not a "
+            f"pass -- see experiments.score_result.")
+    return out
+
+
 def plan_experiments(meta: dict[str, Any], attacks: list[dict],
                      dimensions: list[dict], hypotheses: list[dict],
                      mitigation_plan: list[dict]) -> dict[str, Any]:
@@ -626,7 +649,12 @@ def plan_experiments(meta: dict[str, Any], attacks: list[dict],
             "fail_criteria": "threshold missed on two independent runs",
             "effort": effort, "prerequisites": need,
             "linked_evidence_ids": list(evidence or []),
-            "status": "proposed", "rationale": rationale})
+            "status": "proposed", "rationale": rationale,
+            # A plan that proposes 30 trials for an effect needing 84 is
+            # proposing a test it cannot pass. The trial count is computed
+            # from the detectable effect, not chosen, so every plan is
+            # self-consistent at birth.
+            **_trial_plan(method_type)})
 
     for d in dimensions or []:
         if not isinstance(d, dict):

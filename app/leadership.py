@@ -495,6 +495,68 @@ def _distribution(values: list[float]) -> dict[str, int]:
     return out
 
 
+def _bootstrap_delta_ci(prior: list[float], window: list[float], *,
+                        draws: int = 2000, seed: int = 1729,
+                        level: float = 0.90) -> dict[str, Any]:
+    """Bootstrap interval for a window-minus-prior mean difference.
+
+    Trend strips compare two means and label the direction from the sign of
+    the delta. On n=2 vs n=3 that label is indistinguishable from noise, and
+    it is presented identically to a real move. This returns the delta with an
+    interval and a verdict: the direction is only claimed when the interval
+    excludes zero.
+
+    Seeded and deterministic, like the rest of the engine: the same rows
+    always yield the same interval.
+    """
+    import random
+    if not prior or not window:
+        return {"delta": None, "lower": None, "upper": None,
+                "verdict": "insufficient_history",
+                "reason": "One side of the split is empty; there is no "
+                          "difference to measure."}
+    if len(prior) < 2 or len(window) < 2:
+        # A single observation per side resamples to a zero-width interval,
+        # which would present one data point as a measured trend.
+        return {"delta": round(sum(window) / len(window)
+                               - sum(prior) / len(prior), 1),
+                "lower": None, "upper": None,
+                "verdict": "insufficient_history",
+                "n_prior": len(prior), "n_window": len(window),
+                "reason": ("Fewer than two observations on a side; a "
+                           "bootstrap over one point is a point, not an "
+                           "interval.")}
+    rng = random.Random(seed)
+    diffs = []
+    for _ in range(max(1, draws)):
+        mp = sum(rng.choice(prior) for _ in prior) / len(prior)
+        mw = sum(rng.choice(window) for _ in window) / len(window)
+        diffs.append(mw - mp)
+    diffs.sort()
+    lo_i = int((1.0 - level) / 2.0 * len(diffs))
+    hi_i = int((1.0 + level) / 2.0 * len(diffs)) - 1
+    lo = diffs[max(0, lo_i)]
+    hi = diffs[min(len(diffs) - 1, hi_i)]
+    mean = sum(diffs) / len(diffs)
+    if lo > 0:
+        verdict = "worsening"
+    elif hi < 0:
+        verdict = "improving"
+    else:
+        verdict = "indistinguishable_from_flat"
+    return {
+        "delta": round(mean, 1),
+        "lower": round(lo, 1),
+        "upper": round(hi, 1),
+        "level": level,
+        "verdict": verdict,
+        "n_prior": len(prior),
+        "n_window": len(window),
+        "reason": ("Direction claimed only when the interval excludes zero; "
+                   "otherwise the move is inside the sampling noise."),
+    }
+
+
 def _trend(rows: list[Any], cutoff: datetime) -> dict[str, Any]:
     """Residual and confidence over time, split at the window."""
     buckets: dict[str, dict[str, list[float]]] = {"prior": {"v": [], "c": []},
@@ -520,6 +582,12 @@ def _trend(rows: list[Any], cutoff: datetime) -> dict[str, Any]:
     win_c = _m(buckets["window"]["c"])
     delta = (round(win_v - prior_v, 1)
              if prior_v is not None and win_v is not None else None)
+    # The direction label below is kept for its existing readers, but it is
+    # the sign of a mean difference with no test behind it. The significance
+    # block is the measured version: the direction is only claimed when the
+    # bootstrap interval excludes zero.
+    significance = _bootstrap_delta_ci(buckets["prior"]["v"],
+                                       buckets["window"]["v"])
     return {
         "prior_mean_residual": prior_v,
         "window_mean_residual": win_v,
@@ -527,6 +595,7 @@ def _trend(rows: list[Any], cutoff: datetime) -> dict[str, Any]:
         "direction": ("improving" if delta is not None and delta < 0
                       else "worsening" if delta is not None and delta > 0
                       else "flat" if delta == 0 else "insufficient_history"),
+        "significance": significance,
         "prior_mean_confidence_pct": round(prior_c * 100, 0) if prior_c is not None else None,
         "window_mean_confidence_pct": round(win_c * 100, 0) if win_c is not None else None,
         "note": "Prior = everything before the window; a move with no prior cannot be called a trend.",
@@ -578,6 +647,10 @@ def _trend_windows(rows: list[Any], windows=TREND_WINDOWS) -> list[dict[str, Any
             "direction": ("improving" if delta is not None and delta < 0
                           else "worsening" if delta is not None and delta > 0
                           else "flat" if delta == 0 else "insufficient_history"),
+            # The direction above is the sign of a mean difference. The
+            # significance block is the measured version: direction claimed
+            # only when the bootstrap interval excludes zero.
+            "significance": _bootstrap_delta_ci(pv, wv),
             "mean_confidence_pct": (round(sum(wc) / len(wc) * 100)
                                     if wc else None),
             "prior_mean_confidence_pct": (round(sum(pc) / len(pc) * 100)

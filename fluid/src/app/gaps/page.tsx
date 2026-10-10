@@ -2,7 +2,7 @@
 
 import * as React from 'react';
 import { Compass, Lightbulb, Search } from 'lucide-react';
-import { useResearchGaps } from '@/lib/api/queries';
+import { useResearchGaps, useRuledOutGaps, useSetGapStatus } from '@/lib/api/queries';
 import { useUi } from '@/lib/stores/ui';
 import { PageHeader } from '@/components/shell/page-header';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -18,6 +18,15 @@ type Gap = {
   exps?: unknown[];
   supporting: number;
   novel: boolean;
+  lifecycle?: { status: string; evidence?: string | null; decided_by?: string | null };
+};
+
+const LIFECYCLE_LABEL: Record<string, string> = {
+  open: 'Open',
+  investigating: 'Investigating',
+  answered: 'Answered',
+  ruled_out: 'Ruled out',
+  verified: 'Verified',
 };
 
 /**
@@ -32,6 +41,8 @@ type Gap = {
 export default function GapsPage() {
   const { investigationId } = useUi();
   const { data, isLoading, isError } = useResearchGaps(investigationId);
+  const { data: ruledOut } = useRuledOutGaps(investigationId);
+  const setStatus = useSetGapStatus(investigationId);
   const [onlyNovel, setOnlyNovel] = React.useState(false);
 
   const gaps: Gap[] = data?.gaps ?? [];
@@ -93,10 +104,23 @@ export default function GapsPage() {
               >
                 <div className="flex items-start justify-between gap-3">
                   <p className="text-sm">{g.question}</p>
-                  <Badge variant={g.novel ? 'default' : 'muted'} className="shrink-0">
-                    {g.novel ? 'novel' : `${g.supporting} supporting`}
-                  </Badge>
+                  <div className="flex shrink-0 items-center gap-1.5">
+                    {g.lifecycle && g.lifecycle.status !== 'open' && (
+                      <Badge variant="outline" className="text-[10px]">
+                        {LIFECYCLE_LABEL[g.lifecycle.status] ?? g.lifecycle.status}
+                      </Badge>
+                    )}
+                    <Badge variant={g.novel ? 'default' : 'muted'}>
+                      {g.novel ? 'novel' : `${g.supporting} supporting`}
+                    </Badge>
+                  </div>
                 </div>
+                <GapActions
+                  status={g.lifecycle?.status ?? 'open'}
+                  onSet={(status, evidence) =>
+                    setStatus.mutate({ question: g.question, status, evidence })
+                  }
+                />
                 {g.kinds && g.kinds.length > 0 && (
                   <div className="mt-1.5 flex flex-wrap gap-1">
                     {g.kinds.map((k) => (
@@ -143,6 +167,106 @@ export default function GapsPage() {
             </ul>
           </CardContent>
         </Card>
+      )}
+
+      {ruledOut && ruledOut.count > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              Ruled out
+              <Badge variant="outline">{ruledOut.count}</Badge>
+            </CardTitle>
+            <CardDescription>
+              Investigated and found absent — with what ruled each one out. These stop
+              the next researcher re-investigating the same dead end.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ul className="flex flex-col gap-2">
+              {ruledOut.ruled_out.map((r) => (
+                <li key={r.question} className="rounded-md border p-3 text-sm">
+                  <p>{r.question}</p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Ruled out by {r.evidence ?? 'unnamed evidence'}
+                    {r.decided_by ? ` · ${r.decided_by}` : ''}
+                  </p>
+                </li>
+              ))}
+            </ul>
+          </CardContent>
+        </Card>
+      )}
+    </div>
+  );
+}
+
+function GapActions({
+  status,
+  onSet,
+}: {
+  status: string;
+  onSet: (status: string, evidence?: string) => void;
+}) {
+  const [rulingOut, setRulingOut] = React.useState(false);
+  const [evidence, setEvidence] = React.useState('');
+  const [error, setError] = React.useState<string | null>(null);
+
+  if (rulingOut) {
+    return (
+      <div className="mt-2 flex flex-col gap-1.5">
+        <div className="flex gap-1.5">
+          <input
+            value={evidence}
+            onChange={(e) => setEvidence(e.target.value)}
+            placeholder="What ruled it out? (required)"
+            className="min-w-0 flex-1 rounded-md border bg-background px-2 py-1 text-xs"
+          />
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => {
+              if (!evidence.trim()) {
+                setError('Ruling out requires naming the evidence.');
+                return;
+              }
+              setError(null);
+              onSet('ruled_out', evidence.trim());
+              setRulingOut(false);
+              setEvidence('');
+            }}
+          >
+            Rule out
+          </Button>
+          <Button size="sm" variant="ghost" onClick={() => setRulingOut(false)}>
+            Cancel
+          </Button>
+        </div>
+        {error && <p className="text-[11px] text-destructive">{error}</p>}
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-2 flex flex-wrap gap-1.5">
+      {status === 'open' && (
+        <Button size="sm" variant="ghost" onClick={() => onSet('investigating')}>
+          Investigate
+        </Button>
+      )}
+      {status === 'investigating' && (
+        <>
+          <Button size="sm" variant="ghost" onClick={() => onSet('answered')}>
+            Mark answered
+          </Button>
+          <Button size="sm" variant="ghost" onClick={() => setRulingOut(true)}>
+            Rule out…
+          </Button>
+        </>
+      )}
+      {(status === 'answered' || status === 'ruled_out') && (
+        <Button size="sm" variant="ghost" onClick={() => onSet('open')}>
+          Reopen
+        </Button>
       )}
     </div>
   );

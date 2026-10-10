@@ -346,6 +346,10 @@ class SecurityRescoreRequest(BaseModel):
     active_controls: list[str] | None = None
     applicability: dict | None = None
     persist: bool = False
+    # Who set the applicability weights. Without this the variance budget's
+    # "likelihood_judgement: unquantified" can never be resolved.
+    author: str | None = None
+    rationale: str = ""
 
 
 class SecuritySubjectRequest(BaseModel):
@@ -1403,7 +1407,54 @@ def investigation_gaps(inv_id: int, db: Session = Depends(get_db)):
     inv = db.query(Investigation).filter(Investigation.id == inv_id).first()
     if not inv:
         raise HTTPException(404, "Investigation not found")
-    return gaps_fn(db, inv_id)
+    out = gaps_fn(db, inv_id)
+    # Stored lifecycle states ride along: a settled question keeps its computed
+    # support counts but reports its status, so "investigated and ruled out"
+    # is distinguishable from "never looked at".
+    from .explainer import gap_states as _states
+    states = _states(db, inv_id)
+    for g in out.get("gaps") or []:
+        st = states.get(g.get("question") or "")
+        if st:
+            g["lifecycle"] = st
+    return out
+
+
+class GapStatusRequest(BaseModel):
+    question: str
+    status: str
+    evidence: str | None = None
+    decided_by: str | None = None
+
+
+@app.post("/api/investigations/{inv_id}/research-gaps/status")
+def set_gap_status(inv_id: int, data: GapStatusRequest,
+                   db: Session = Depends(get_db)):
+    """Move one research gap along its lifecycle.
+
+    A ruled-out gap without named evidence is refused with 422: "we looked
+    and found nothing" is only a finding when it says what looking meant.
+    """
+    from .explainer import set_gap_status as _set
+    inv = db.query(Investigation).filter(Investigation.id == inv_id).first()
+    if not inv:
+        raise HTTPException(404, "Investigation not found")
+    try:
+        return _set(db, inv_id, data.question,
+                    data.status, evidence=data.evidence,
+                    decided_by=data.decided_by)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+
+
+@app.get("/api/investigations/{inv_id}/research-gaps/ruled-out")
+def ruled_out_gaps(inv_id: int, db: Session = Depends(get_db)):
+    """Questions investigated and ruled out, with what ruled each one out."""
+    from .explainer import ruled_out_register as _ruled
+    inv = db.query(Investigation).filter(Investigation.id == inv_id).first()
+    if not inv:
+        raise HTTPException(404, "Investigation not found")
+    return _ruled(db, inv_id)
 
 
 @app.post("/api/investigations/{inv_id}/research-gaps/run")
@@ -1760,6 +1811,12 @@ def _security_json(rec: SecurityAssessment, *, analysis: bool = False) -> dict:
         "floor_capped": scoring.get("floor_capped"),
         "floor": scoring.get("floor"),
         "efficacy_evidence": scoring.get("efficacy_evidence"),
+        # Who set the applicability weights behind this score. Stored rows
+        # carry them in judgments_json; rows scored in-memory carry them in
+        # the scoring result itself. Legacy rows have neither, and report an
+        # empty list rather than an unattributed one.
+        "judgments": _load(getattr(rec, "judgments_json", None), [])
+        or scoring.get("judgments") or [],
         "perspectives": perspectives,
         "artifact_count": next(
             ((p.get("investigation") or {}).get("total_artifacts", 0)
@@ -1986,6 +2043,9 @@ def rescore_security_assessment(assessment_id: int, data: SecurityRescoreRequest
         exposure, inherent,
         active_controls=active,
         applicability=data.applicability,
+        applicability_author=(data.author or "").strip()
+        or ledger_api.request_actor(request),
+        applicability_rationale=data.rationale or "",
     )
     prev_residual = getattr(rec, "residual_pct", None)
     new_id = None
@@ -2016,6 +2076,7 @@ def rescore_security_assessment(assessment_id: int, data: SecurityRescoreRequest
                 "openshell": ctl.get("openshell", {}),
             }),
             scoring_json=json.dumps(result),
+            judgments_json=json.dumps(result.get("judgments") or []),
             perspectives_json=json.dumps(sec_engine._perspective_views({
                 "threats": result["threats"],
                 "scoring": result,
@@ -2065,6 +2126,7 @@ def rescore_security_assessment(assessment_id: int, data: SecurityRescoreRequest
         "distribution": result["distribution"],
         "breakdown": result["breakdown"],
         "threats": result["threats"],
+        "judgments": result.get("judgments") or [],
         "persisted": data.persist,
     }
 
@@ -2367,6 +2429,17 @@ def compare_assessments(assessment_id: int, other_id: int,
                         "delta": (round(vb - va, 1)
                                   if va is not None and vb is not None
                                   else None)}
+        # A delta between two points invites subtraction; the verdict asks the
+        # prior question of whether the intervals can be told apart at all.
+        try:
+            from . import benchmarks as _B
+            from . import uncertainty as _U
+            out["verdict"] = _B.compare_verdict(
+                _U.assessment_interval(sa), _U.assessment_interval(sb),
+                label_a=f"#{a.id}", label_b=f"#{b.id}")
+        except Exception:
+            out["verdict"] = {"verdict": "unmeasured",
+                              "reason": "Bands could not be computed."}
     return out
 
 
@@ -3780,6 +3853,22 @@ def get_attack_tree(assessment_id: int, db: Session = Depends(get_db)):
     scoring = _load_json_safe(getattr(rec, "scoring_json", None))
     from . import scenarios as _sc
     return _sc.attack_tree(scoring)
+
+
+@app.get("/api/security/assessments/{assessment_id}/scenario-probes")
+def get_scenario_probes(assessment_id: int, n_trials: int = 20,
+                        db: Session = Depends(get_db)):
+    """Probe plans for this assessment's derived scenarios.
+
+    Closes the loop the product name promises: a derived scenario becomes the
+    probes that would test it, with the controls an outcome is attributed to.
+    Plans reference the fixed probe library, so nothing here invents a method;
+    scenarios with no matching probe are counted, not hidden.
+    """
+    rec = _assessment_or_404(assessment_id, db)
+    scoring = _load_json_safe(getattr(rec, "scoring_json", None))
+    from . import scenarios as _sc
+    return _sc.scenarios_probe_plan(scoring, n_trials=max(1, min(n_trials, 50)))
 
 
 @app.get("/api/probes")

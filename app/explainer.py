@@ -1545,6 +1545,86 @@ def investigation_gaps(db, inv_id: int) -> dict:
                             for t, c in novel_areas]}
 
 
+#: Lifecycle states for a research gap, in order. A gap moves forward along
+#: this list; moving it backward (reopening) is allowed but recorded as a new
+#: decision, never an edit, so the history shows the reversal.
+GAP_STATUSES = ("open", "investigating", "answered", "ruled_out", "verified")
+
+#: Terminal states: the question is settled and stops appearing as open.
+GAP_TERMINAL = ("answered", "ruled_out", "verified")
+
+
+def gap_states(db, inv_id: int) -> dict:
+    """Stored lifecycle state per question, keyed by question text."""
+    from .models import ResearchGap
+    out = {}
+    for g in db.query(ResearchGap).filter(
+            ResearchGap.investigation_id == inv_id).all():
+        out[g.question] = {
+            "status": g.status, "evidence": g.evidence,
+            "decided_by": g.decided_by,
+            "updated_at": (g.updated_at.isoformat() if g.updated_at else None),
+        }
+    return out
+
+
+def set_gap_status(db, inv_id, question, status, *,
+                   evidence=None, decided_by=None):
+    """Move one gap along its lifecycle.
+
+    A ruled-out gap without named evidence is refused: "we looked and found
+    nothing" is only a finding when it says what looking meant. Reopening a
+    settled gap is allowed -- the row keeps the latest decision and the ledger
+    keeps the history, so a reversal is visible rather than silent.
+    """
+    from .models import ResearchGap
+    status = str(status or "").lower()
+    if status not in GAP_STATUSES:
+        raise ValueError(f"unknown gap status {status!r}; "
+                         f"expected one of {GAP_STATUSES}")
+    if status == "ruled_out" and not (evidence or "").strip():
+        raise ValueError("ruled_out requires evidence: name what ruled it out")
+    row = db.query(ResearchGap).filter(
+        ResearchGap.investigation_id == inv_id,
+        ResearchGap.question == question).first()
+    if row is None:
+        row = ResearchGap(investigation_id=inv_id, question=question,
+                          status=status, evidence=evidence,
+                          decided_by=decided_by)
+        db.add(row)
+    else:
+        row.status = status
+        if evidence is not None:
+            row.evidence = evidence
+        if decided_by is not None:
+            row.decided_by = decided_by
+    db.commit()
+    db.refresh(row)
+    return {"question": row.question, "status": row.status,
+            "evidence": row.evidence, "decided_by": row.decided_by}
+
+
+def ruled_out_register(db, inv_id):
+    """Questions investigated and ruled out, with what ruled each one out.
+
+    Negative results are findings: a gap ruled out with named evidence stops
+    the next researcher re-investigating the same dead end, and tells a reader
+    the absence was looked for rather than overlooked.
+    """
+    from .models import ResearchGap
+    rows = db.query(ResearchGap).filter(
+        ResearchGap.investigation_id == inv_id,
+        ResearchGap.status == "ruled_out").all()
+    return {
+        "ruled_out": [{
+            "question": g.question, "evidence": g.evidence,
+            "decided_by": g.decided_by,
+            "updated_at": (g.updated_at.isoformat() if g.updated_at else None),
+        } for g in rows],
+        "count": len(rows),
+    }
+
+
 def launch_gap_research(db, inv_id: int, top_n: int = 3,
                         max_items: int = 12) -> dict:
     """Fetch more research -- papers first -- on the least-covered gaps.

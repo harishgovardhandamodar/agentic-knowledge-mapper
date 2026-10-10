@@ -34,8 +34,10 @@ ORIGIN_CHAIN = "control_gap_chain"
 ORIGIN_AMPLIFIER = "residual_amplifier"
 ORIGIN_CROSSCUT = "cross_cutting_gap"
 
-#: A chain longer than this is not a scenario, it is a campaign.
-MAX_CHAIN = 3
+#: Default ceiling on path length. Longer paths enumerate fast (beam search),
+#: but each extra hop is a less likely composition; 5 is where the shipped
+#: catalogue stops yielding distinct findings.
+MAX_CHAIN = 5
 
 
 def _floor(scoring: dict[str, Any]) -> float:
@@ -108,35 +110,68 @@ def uncovered_chains(scoring: dict[str, Any], *,
             out.append(rec)
 
     out.sort(key=lambda s: (-float(s["residual_score"]), s["id"]))
-    return out[:24]
+    # Deduplicate route variants: paths to the same endpoint with the same gap
+    # are one finding reached different ways, not several findings. Keep the
+    # longest route -- it carries the most information about how the endpoint
+    # is reached -- and drop the rest before stratifying.
+    best: dict[tuple[str, tuple[str, ...]], dict[str, Any]] = {}
+    for sc in out:
+        key = (str(sc.get("endpoint") or sc.get("weakest_link")),
+               tuple(sorted(sc.get("uncovered_by") or [])))
+        if key not in best or int(sc.get("hops") or 2) > int(
+                best[key].get("hops") or 2):
+            best[key] = sc
+    out = list(best.values())
+    # Stratify by path length before capping: long paths share high-residual
+    # endpoints and would otherwise crowd out every shorter finding. A reader
+    # needs the best 2-hop, 3-hop and longer paths each, not 24 variants of
+    # the same endpoint.
+    by_hops: dict[int, list[dict[str, Any]]] = {}
+    for sc in out:
+        by_hops.setdefault(int(sc.get("hops") or 2), []).append(sc)
+    stratified: list[dict[str, Any]] = []
+    while len(stratified) < 24 and any(by_hops.values()):
+        for hops in sorted(by_hops):
+            if by_hops[hops]:
+                stratified.append(by_hops[hops].pop(0))
+                if len(stratified) >= 24:
+                    break
+    return stratified
 
 
 def _chain_record(legs: list[dict[str, Any]], gap: list[str],
                   weights: dict[str, dict[str, float]]) -> dict[str, Any]:
-    """Build a scenario record for an ordered path of threat rows."""
+    """Build a scenario record for an ordered path of threat rows.
+
+    The endpoint is the finding (what the composition reaches); the weakest
+    leg is where coverage fails most. On a strictly declining path they are
+    the same node, but a lateral move can put the minimum mid-path -- and
+    conflating the two would misplace the scenario on the coverage scatter.
+    """
     ids = [str(r.get("id")) for r in legs]
     weak = min(legs, key=lambda r: float(r.get("coverage") or 0.0))
-    strong = legs[0] if legs and legs[0] is not weak else (legs[-1] if legs else weak)
+    endpoint = legs[-1]
+    strong = legs[0]
     return {
         "id": scenario_id(ids),
         "origin": ORIGIN_CHAIN,
-        "title": f"{ids[-1]} reached via {' → '.join(ids[:-1])}"
-        if len(ids) > 2 else f"{weak.get('id')} reached via {strong.get('id')}",
+        "title": f"{ids[-1]} reached via {' → '.join(ids[:-1])}",
         "chain": ids,
         "hops": len(ids),
         "weakest_link": weak.get("id"),
+        "endpoint": endpoint.get("id"),
         "precondition": strong.get("title") or strong.get("id"),
-        "exploit": weak.get("title") or weak.get("id"),
-        "coverage_of_exploit": round(float(weak.get("coverage") or 0.0), 1),
-        "residual_score": round(float(weak.get("residual_score") or 0.0), 2),
+        "exploit": endpoint.get("title") or endpoint.get("id"),
+        "coverage_of_exploit": round(float(endpoint.get("coverage") or 0.0), 1),
+        "residual_score": round(float(endpoint.get("residual_score") or 0.0), 2),
         "uncovered_by": sorted(gap),
         "why": (
             f"{' → '.join(ids)}: the control(s) {', '.join(sorted(gap)) or 'none'} "
-            f"that carry the early legs do not reach {weak.get('id')}, which "
-            f"sits at {round(float(weak.get('coverage') or 0.0), 1)}% coverage. "
+            f"that carry the early legs do not reach {endpoint.get('id')}, which "
+            f"sits at {round(float(endpoint.get('coverage') or 0.0), 1)}% coverage. "
             f"Each leg scores acceptably; the composition does not."
         ),
-        "floor_capped": bool(weak.get("floor_capped")),
+        "floor_capped": bool(endpoint.get("floor_capped")),
     }
 
 
@@ -156,39 +191,85 @@ def _path_gap(path: list[dict[str, Any]],
     return sorted(gap)
 
 
+#: Beam width for multi-hop path search. Wide enough to keep genuinely
+#: different routes, narrow enough that the search stays instant.
+PATH_BEAM = 24
+
+#: A lateral move (coverage flat or rising slightly) costs this much against
+#: the path score. Pivots are how real attackers traverse, but an unconstrained
+#: lateral walk is combinatorial and says nothing -- so each one must pay.
+LATERAL_COST = 0.5
+
+
 def _long_chains(rows: list[dict[str, Any]],
                  weights: dict[str, dict[str, float]],
                  max_chain: int) -> list[list[dict[str, Any]]]:
-    """Enumerate paths of length 3..max_chain that degrade along the way.
+    """Enumerate paths up to ``max_chain`` with beam search over a cost model.
 
-    The ordering constraint is what makes this tractable and meaningful: a
-    path is interesting when coverage *falls* as it goes, because each leg is
-    assumed to be handled by the controls for the previous one. Without a
-    monotone decline the enumeration is combinatorial and says nothing.
+    The old version required strict monotone decline and stopped at 3 hops.
+    That blinds it to lateral moves -- same-coverage pivots, which is how real
+    attackers traverse -- while an unconstrained walk explodes
+    combinatorially. The beam keeps the 24 best-scoring partial paths at each
+    length, where the score rewards declining coverage and charges for lateral
+    moves. A path that only ever moves sideways scores itself out of the beam.
     """
-    ordered = sorted(rows, key=lambda r: -float(r.get("coverage") or 0.0))
+    by_id = {str(r.get("id")): r for r in rows}
+    # Beam entries: (score, path_ids). Higher is better.
+    beam: list[tuple[float, list[str]]] = [
+        (0.0, [str(r.get("id"))]) for r in rows]
     found: list[list[dict[str, Any]]] = []
-    cap = min(max_chain, len(ordered))
+    seen: set[tuple[str, ...]] = set()
 
-    def walk(path: list[dict[str, Any]]) -> None:
-        if len(path) >= cap:
-            return
-        last_cov = float(path[-1].get("coverage") or 0.0)
-        for r in ordered:
-            if any(r.get("id") == p.get("id") for p in path):
-                continue
-            cov = float(r.get("coverage") or 0.0)
-            if cov >= last_cov:
-                continue  # must decline
-            if _path_gap(path + [r], weights):
-                found.append(path + [r])
-                walk(path + [r])
-
-    for r in ordered:
-        walk([r])
-    # Longest paths first: they are the findings a pairwise scan cannot produce.
-    found.sort(key=lambda p: (-len(p), [str(x.get("id")) for x in p]))
-    return found[:12]
+    for _length in range(2, min(max_chain, len(rows)) + 1):
+        candidates: list[tuple[float, list[str]]] = []
+        for score, path in beam:
+            last = by_id[path[-1]]
+            last_cov = float(last.get("coverage") or 0.0)
+            for r in rows:
+                tid = str(r.get("id"))
+                if tid in path:
+                    continue
+                cov = float(r.get("coverage") or 0.0)
+                decline = last_cov - cov
+                step = decline if decline > 0 else -LATERAL_COST
+                new_score = score + step
+                # A path that never declines is pivoting in place, not
+                # attacking: require at least one real decline overall.
+                trial = path + [tid]
+                if all(float(by_id[t].get("coverage") or 0.0)
+                       >= float(by_id[path[0]].get("coverage") or 0.0)
+                       for t in trial[1:]):
+                    continue
+                if not _path_gap([by_id[t] for t in trial], weights):
+                    continue
+                key = tuple(trial)
+                if key in seen:
+                    continue
+                seen.add(key)
+                candidates.append((new_score, trial))
+        candidates.sort(key=lambda c: -c[0])
+        beam = candidates[:PATH_BEAM]
+        for _, trial in beam:
+            if len(trial) == _length:
+                found.append([by_id[t] for t in trial])
+        if not beam:
+            break
+    # Longest paths first -- they are the findings a pairwise scan cannot
+    # produce -- but stratified by length, so 5-hop paths do not crowd out
+    # every 3-hop one before the caller ever sees it.
+    by_len: dict[int, list[list[dict[str, Any]]]] = {}
+    for p in found:
+        by_len.setdefault(len(p), []).append(p)
+    for paths in by_len.values():
+        paths.sort(key=lambda p: [str(x.get("id")) for x in p])
+    out: list[list[dict[str, Any]]] = []
+    while len(out) < 12 and any(by_len.values()):
+        for length in sorted(by_len, reverse=True):
+            if by_len[length]:
+                out.append(by_len[length].pop(0))
+                if len(out) >= 12:
+                    break
+    return out
 
 
 #: A control's contribution must differ by this much between the two legs
@@ -372,4 +453,119 @@ def scenarios(scoring: dict[str, Any], *, limit: int = 40) -> dict[str, Any]:
         "note": ("Every scenario names the catalogue rows and control ids it "
                  "was derived from. A scenario that cannot say what produced "
                  "it is a story, and this method does not emit those."),
+    }
+
+
+# --------------------------------------------------------------------------
+# Scenario to probe wiring
+# --------------------------------------------------------------------------
+#
+# A derived scenario that cannot be tested is a story with provenance. This
+# section turns each scenario into the probe plan that would test it, so the
+# scenarios page and the probes page are two ends of one loop rather than
+# adjacent tabs with no wire between them.
+#
+# The mapping is deliberately explicit and narrow: a threat's STRIDE family
+# selects the probe family, and the scenario's uncovered controls select the
+# attribution. Anything the mapping cannot cover yields no probe rather than
+# a guessed one.
+
+#: Threat STRIDE family -> probe attack classes that exercise it.
+STRIDE_TO_PROBES: dict[str, tuple[str, ...]] = {
+    "information disclosure": ("verbatim_extraction", "canary_exfiltration",
+                               "membership_probe"),
+    "spoofing": ("prompt_injection",),
+    "elevation": ("prompt_injection", "scope_probe"),
+    "tampering": ("prompt_injection", "scope_probe"),
+    "repudiation": ("scope_probe",),
+    "compliance": (),
+}
+
+
+def _probes_for_threat(threat: dict[str, Any]) -> list[str]:
+    stride = str((threat or {}).get("stride") or "").lower()
+    out: list[str] = []
+    for family, probes in STRIDE_TO_PROBES.items():
+        if family in stride:
+            out.extend(probes)
+    seen: set[str] = set()
+    return [p for p in out if not (p in seen or seen.add(p))]
+
+
+def scenario_probe_plan(scenario: dict[str, Any], *,
+                        threats_by_id: dict[str, dict[str, Any]] | None = None,
+                        n_trials: int = 20) -> dict[str, Any]:
+    """Turn one derived scenario into an executable probe plan.
+
+    Returns the probe ids that exercise the scenario's weakest link, the
+    controls to attribute the outcome to, and the pre-registration parameters
+    -- so the caller can go from "T05 reached via T01" to running probes in
+    one step, without inventing a method. A scenario whose threat family maps
+    to no probe yields an empty plan with the reason stated, never a guessed
+    probe.
+    """
+    from . import probes as _pr
+
+    threats_by_id = threats_by_id or {}
+    weak_id = scenario.get("weakest_link")
+    weak = threats_by_id.get(str(weak_id)) or {}
+    probe_ids = _probes_for_threat(weak)
+    # Probes that do not exist in the harness are filtered, not assumed.
+    probe_ids = [p for p in probe_ids if p in _pr.PROBES]
+    controls = list(scenario.get("uncovered_by") or [])
+    if not probe_ids:
+        return {
+            "scenario_id": scenario.get("id"),
+            "probes": [],
+            "attribute_to": [],
+            "n_trials": n_trials,
+            "reason": ("No probe in the harness exercises this threat family; "
+                       "the scenario stands untested rather than tested by "
+                       "an unrelated probe."),
+        }
+    return {
+        "scenario_id": scenario.get("id"),
+        "scenario_title": scenario.get("title"),
+        "weakest_link": weak_id,
+        "probes": [{"probe_id": p,
+                    "attack_class": _pr.PROBES[p]["attack_class"],
+                    "description": _pr.PROBES[p]["description"]}
+                   for p in probe_ids],
+        "attribute_to": controls,
+        "n_trials": n_trials,
+        "rationale": (
+            f"{weak_id} is the scenario's weakest link at "
+            f"{scenario.get('coverage_of_exploit')}% coverage. These probes "
+            f"exercise its threat family; attributing the outcome to "
+            f"{', '.join(controls) or 'no controls'} records an efficacy "
+            f"trial for each."),
+    }
+
+
+def scenarios_probe_plan(scoring: dict[str, Any], *,
+                         limit: int = 10, n_trials: int = 20) -> dict[str, Any]:
+    """Probe plans for an assessment's top scenarios, ranked by residual.
+
+    Returns plans only for scenarios that map to a real probe. The count of
+    untestable scenarios is reported alongside, so "we tested everything we
+    could" is distinguishable from "we tested everything".
+    """
+    derived = scenarios(scoring, limit=limit)
+    threats_by_id = {str(t.get("id")): t for t in _rows(scoring)}
+    plans = []
+    untestable = 0
+    for sc in derived["scenarios"]:
+        plan = scenario_probe_plan(sc, threats_by_id=threats_by_id,
+                                   n_trials=n_trials)
+        if plan["probes"]:
+            plans.append(plan)
+        else:
+            untestable += 1
+    return {
+        "plans": plans,
+        "untestable_scenarios": untestable,
+        "n_trials_each": n_trials,
+        "note": ("Each plan names the scenario it tests, the probes that "
+                 "exercise it, and the controls an outcome is attributed to. "
+                 "Untestable scenarios are counted, not hidden."),
     }

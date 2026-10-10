@@ -202,6 +202,20 @@ export const zAssessment = z
     floor_capped: z.boolean().nullable().optional(),
     floor: zFloorDiagnostics.nullable().optional(),
     efficacy_evidence: zEfficacyEvidence.nullable().optional(),
+    judgments: z
+      .array(
+        z
+          .object({
+            kind: z.string().optional(),
+            subject: z.string().optional(),
+            value: z.number().optional(),
+            author: z.string().optional(),
+            rationale: z.string().optional(),
+            recorded_at: z.string().optional(),
+          })
+          .passthrough(),
+      )
+      .optional(),
     assessment_path: z.string().optional(),
     markdown: z.string().nullable().optional(),
   })
@@ -245,6 +259,15 @@ export const zResearchGaps = z.object({
           exps: z.array(z.unknown()).optional(),
           supporting: z.number(),
           novel: z.boolean(),
+          lifecycle: z
+            .object({
+              status: z.string(),
+              evidence: z.string().nullable().optional(),
+              decided_by: z.string().nullable().optional(),
+              updated_at: z.string().nullable().optional(),
+            })
+            .passthrough()
+            .optional(),
         })
         .passthrough(),
     )

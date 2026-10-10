@@ -99,6 +99,9 @@ _MIGRATIONS = [
     # older row has no honest posture finding to report.
     ("security_assessments", "pdp_json", "TEXT"),
     ("security_assessments", "controls_json", "TEXT"),
+    # Judgment authorship: who set each applicability/attestation, when, and
+    # why. Additive and nullable; older rows simply have no authors.
+    ("security_assessments", "judgments_json", "TEXT"),
     ("security_assessments", "scoring_json", "TEXT"),
     ("security_assessments", "workflow_text", "TEXT"),
     ("security_assessments", "doc_urls_json", "TEXT"),

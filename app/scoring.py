@@ -285,6 +285,8 @@ def score_assessment(
     inherent_threats: list[dict[str, Any]],
     active_controls: Iterable[str] | None = None,
     applicability: dict[str, float] | None = None,
+    applicability_author: str | None = None,
+    applicability_rationale: str = "",
 ) -> dict[str, Any]:
     """Pure function: inherent + residual scoring for a threat set.
 
@@ -375,6 +377,15 @@ def score_assessment(
             if applicable else 0.0,
         },
         "control_analyst": control_analyst,
+        # Who set the applicability weights. Without this the variance
+        # budget's "likelihood_judgement: unquantified" can never be resolved,
+        # because there is nobody to ask and nothing to calibrate against.
+        "judgments": [
+            record_judgment("applicability", tid, value,
+                            author=(applicability_author or "unknown"),
+                            rationale=applicability_rationale)
+            for tid, value in sorted(app.items())
+        ] if app else [],
     }
 
 
@@ -382,3 +393,59 @@ def _scale_likelihood(base: int, weight: float) -> int:
     """Exposure weight scales likelihood mildly: restricted=full, public=reduced."""
     scaled = round(base * (0.55 + 0.45 * weight))
     return max(1, min(5, scaled))
+
+
+# --------------------------------------------------------------------------
+# Judgment authorship
+# --------------------------------------------------------------------------
+#
+# Likelihood, impact and applicability are analyst assignments, not
+# measurements. The variance budget lists them as unquantified, and they will
+# stay unquantified forever until judgments carry authorship -- you cannot
+# calibrate what you cannot attribute. Every judgment records who decided,
+# when, and why, so a later reviewer can ask "whose 4 was this" and get an
+# answer instead of a shrug.
+
+
+def record_judgment(kind: str, subject: str, value: float, *,
+                    author: str, rationale: str = "") -> dict[str, Any]:
+    """One attributed judgment: who set what, when, and why.
+
+    ``kind`` is one of "applicability", "likelihood", "impact" or
+    "attestation". The value is stored as given -- this records the judgment,
+    it does not second-guess it. A judgment without a rationale is recorded
+    with an empty one rather than refused; the absence is visible downstream.
+    """
+    from datetime import UTC, datetime
+
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(
+            f"judgment value must be numeric, got {value!r}") from None
+    who = str(author or "").strip() or "anonymous"
+    return {
+        "kind": str(kind),
+        "subject": str(subject),
+        "value": v,
+        "author": who,
+        "rationale": str(rationale or ""),
+        "recorded_at": datetime.now(UTC).isoformat(),
+    }
+
+
+def attribute_applicability(applicability: dict[str, float], *,
+                            author: str, rationale: str = "") -> dict[str, Any]:
+    """Wrap a per-threat applicability map with its authorship.
+
+    Returns ``{"values": ..., "judgments": [...]}`` so the caller can pass the
+    values straight into :func:`score_assessment` and store the judgments
+    alongside. The heuristic path attributes to "heuristic"; an analyst or
+    model judgment names itself.
+    """
+    return {
+        "values": dict(applicability or {}),
+        "judgments": [record_judgment("applicability", tid, value,
+                                      author=author, rationale=rationale)
+                      for tid, value in (applicability or {}).items()],
+    }

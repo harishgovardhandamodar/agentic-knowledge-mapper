@@ -4,7 +4,8 @@
  * drift between screens (the old app had the same string built in several
  * files).
  */
-import { useMutation, useQuery, type UseQueryOptions } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient, type UseQueryOptions } from '@tanstack/react-query';
+import { z } from 'zod';
 import { getParsed, postParsed } from './client';
 import {
   zAssessment,
@@ -169,6 +170,43 @@ export function useEval() {
 }
 
 /** Open research questions ranked by coverage, plus unasked areas. */
+export function useSetGapStatus(invId: number | null | undefined) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { question: string; status: string; evidence?: string; decided_by?: string }) =>
+      postParsed(
+        z.object({ question: z.string(), status: z.string() }).passthrough(),
+        `/investigations/${invId}/research-gaps/status`,
+        body,
+      ),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: qk.gaps(invId ?? -1) });
+    },
+  });
+}
+
+export function useRuledOutGaps(invId: number | null | undefined) {
+  return useQuery({
+    queryKey: [...qk.gaps(invId ?? -1), 'ruled-out'],
+    enabled: typeof invId === 'number' && invId > 0,
+    queryFn: () =>
+      getParsed(
+        z.object({
+          ruled_out: z.array(
+            z.object({
+              question: z.string(),
+              evidence: z.string().nullable().optional(),
+              decided_by: z.string().nullable().optional(),
+              updated_at: z.string().nullable().optional(),
+            }),
+          ),
+          count: z.number(),
+        }),
+        `/investigations/${invId}/research-gaps/ruled-out`,
+      ),
+  });
+}
+
 export function useResearchGaps(invId: number | null | undefined) {
   return useQuery({
     queryKey: qk.gaps(invId ?? -1),

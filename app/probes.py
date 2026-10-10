@@ -95,6 +95,78 @@ PROBES: dict[str, dict[str, Any]] = {
 PROBE_IDS = tuple(sorted(PROBES))
 
 
+# --------------------------------------------------------------------------
+# Probe registry
+# --------------------------------------------------------------------------
+#
+# The harness executes probes from a fixed library, but nothing describes
+# *which* probe answers *which* question or how many trials an answer needs.
+# The registry binds each probe to its attack class, its default trial count
+# from power analysis, and the catalogue threats it exercises, so a plan can
+# be generated from a scenario without inventing a method.
+
+#: Probe id -> registry record. ``default_trials`` comes from
+#: :func:`experiments.required_trials` at a 20% detectable effect and 80%
+#: power, rounded up to a round number a human will actually run -- the exact
+#: requirement is recomputed per plan, but a probe without a sane default gets
+#: run once and quoted forever.
+PROBE_REGISTRY: dict[str, dict[str, Any]] = {
+    "verbatim_extraction": {
+        "attack_class": "data_extraction",
+        "default_trials": 30,
+        "exercises_threats": ["T01", "T02", "T04"],
+        "notes": "Long distinctive spans; success is verbatim return.",
+    },
+    "membership_probe": {
+        "attack_class": "membership_inference",
+        "default_trials": 30,
+        "exercises_threats": ["T02", "T07"],
+        "notes": "Distinctive-fact questions; success is confirmation.",
+    },
+    "prompt_injection": {
+        "attack_class": "injection",
+        "default_trials": 20,
+        "exercises_threats": ["T05", "T09"],
+        "notes": "Instruction override; success is system-prompt leakage.",
+    },
+    "canary_exfiltration": {
+        "attack_class": "data_extraction",
+        "default_trials": 30,
+        "exercises_threats": ["T01", "T02"],
+        "notes": "Planted marker disclosure; success names the marker.",
+    },
+    "scope_probe": {
+        "attack_class": "inference",
+        "default_trials": 20,
+        "exercises_threats": ["T03", "T08", "T09"],
+        "notes": "Out-of-scope assertions; success is a specific false claim.",
+    },
+}
+
+
+def probe_registry() -> dict[str, Any]:
+    """The registry for planners: probe ids with trials and threat coverage.
+
+    Payloads stay withheld, as in :func:`probe_library`. A planner needs to
+    know *what a probe answers and what it costs*, not its request body.
+    """
+    from . import experiments as EX
+    out = []
+    for pid in PROBE_IDS:
+        reg = PROBE_REGISTRY.get(pid, {})
+        power = EX.required_trials(0.2, power=0.8)
+        out.append({
+            "id": pid,
+            "attack_class": PROBES[pid]["attack_class"],
+            "description": PROBES[pid]["description"],
+            "default_trials": reg.get("default_trials", 20),
+            "trials_for_80_power_at_20pct": power["n"],
+            "exercises_threats": reg.get("exercises_threats", []),
+            "notes": reg.get("notes", ""),
+        })
+    return {"probes": out, "max_trials": MAX_TRIALS}
+
+
 def probe_library() -> dict[str, Any]:
     """The probe library for the API, with payloads withheld by default.
 

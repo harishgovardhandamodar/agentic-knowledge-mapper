@@ -2,7 +2,10 @@
 
 import * as React from 'react';
 import { useSearchParams } from 'next/navigation';
-import { useAssessment, useAssessmentAnalysis } from '@/lib/api/queries';
+import { useAssessment, useAssessmentAnalysis, useAssessments } from '@/lib/api/queries';
+import { useUi } from '@/lib/stores/ui';
+import { getParsed } from '@/lib/api/client';
+import { z } from 'zod';
 import { toResidualInterval } from '@/lib/api/adapters';
 import { PageHeader } from '@/components/shell/page-header';
 import { ResidualDisplay } from '@/components/security/residual-display';
@@ -71,9 +74,174 @@ export function AssessmentWorkspace() {
           </div>
 
           <ThreatTable threats={assessment.scoring?.threats ?? assessment.threats ?? []} />
+
+          <JudgmentsCard judgments={assessment.judgments ?? []} />
+
+          <CompareCard currentId={assessment.id} />
         </div>
       )}
     </div>
+  );
+}
+
+const zCompareVerdict = z
+  .object({
+    verdict: z.string(),
+    direction: z.string().optional(),
+    reason: z.string().optional(),
+    overlap_pct_points: z.number().optional(),
+    overlap_share: z.number().optional(),
+  })
+  .passthrough();
+
+const zCompare = z
+  .object({
+    a: z.object({ id: z.number() }).passthrough(),
+    b: z.object({ id: z.number() }).passthrough(),
+    residual_pct: z
+      .object({
+        a: z.number().nullable().optional(),
+        b: z.number().nullable().optional(),
+        delta: z.number().nullable().optional(),
+      })
+      .passthrough()
+      .optional(),
+    verdict: zCompareVerdict.optional(),
+  })
+  .passthrough();
+
+/**
+ * Who set the weights behind this score.
+ *
+ * Applicability is an analyst assignment, not a measurement. Without authorship
+ * it can never be calibrated; with it, a later reviewer can ask "whose 0.8 was
+ * this" and get an answer. Legacy rows report an empty list rather than an
+ * unattributed one.
+ */
+function JudgmentsCard({ judgments }: { judgments: { kind?: string; subject?: string; value?: number; author?: string; rationale?: string }[] }) {
+  if (judgments.length === 0) return null;
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-sm">Judgments</CardTitle>
+        <CardDescription>
+          Who set the weights behind this score. Unsigned weights stay unsigned here
+          rather than gaining an author retroactively.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="overflow-x-auto p-0">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b text-left text-xs uppercase tracking-wide text-muted-foreground">
+              <th className="px-4 py-2 font-medium">What</th>
+              <th className="px-4 py-2 font-medium">Value</th>
+              <th className="px-4 py-2 font-medium">Author</th>
+              <th className="px-4 py-2 font-medium">Rationale</th>
+            </tr>
+          </thead>
+          <tbody>
+            {judgments.map((j, i) => (
+              <tr key={`${j.kind}-${j.subject}-${i}`} className="border-b last:border-0 hover:bg-accent/30">
+                <td className="px-4 py-2 font-mono text-xs">
+                  {j.kind}:{j.subject}
+                </td>
+                <td className="tabular px-4 py-2 text-right">{j.value}</td>
+                <td className="px-4 py-2 font-mono text-xs">{j.author ?? 'unknown'}</td>
+                <td className="px-4 py-2 text-xs text-muted-foreground">{j.rationale || '—'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </CardContent>
+    </Card>
+  );
+}
+
+/**
+ * Do two assessments differ by more than their intervals allow?
+ *
+ * Two point estimates invite subtraction; the verdict asks first whether the
+ * intervals can be told apart at all. Overlapping bands render as
+ * "indistinguishable" rather than as a delta begging to be quoted.
+ */
+function CompareCard({ currentId }: { currentId: number }) {
+  const { investigationId } = useUi();
+  const { data: assessments } = useAssessments(investigationId);
+  const [otherId, setOtherId] = React.useState<number | null>(null);
+  const [result, setResult] = React.useState<z.infer<typeof zCompare> | null>(null);
+  const [loading, setLoading] = React.useState(false);
+
+  const options = (assessments ?? []).filter((a) => a.id !== currentId);
+
+  const compare = async (oid: number) => {
+    setOtherId(oid);
+    setLoading(true);
+    try {
+      setResult(await getParsed(zCompare, `/security/assessments/${currentId}/compare/${oid}`));
+    } catch {
+      setResult(null);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const verdict = result?.verdict;
+  const delta = result?.residual_pct?.delta;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-sm">Compare</CardTitle>
+        <CardDescription>
+          Against another assessment of this investigation. Same method only — a
+          confidence next to a residual is refused, not averaged.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-3">
+        <div className="flex flex-wrap gap-1.5">
+          {options.slice(0, 10).map((a) => (
+            <button
+              key={a.id}
+              onClick={() => compare(a.id)}
+              className={`rounded-full border px-2.5 py-0.5 text-xs transition-colors ${
+                otherId === a.id ? 'border-primary bg-primary/10' : 'hover:bg-accent/50'
+              }`}
+            >
+              #{a.id} {a.product_name ?? ''}
+            </button>
+          ))}
+          {options.length === 0 && (
+            <span className="text-xs text-muted-foreground">No other assessments to compare with.</span>
+          )}
+        </div>
+
+        {loading && <Skeleton className="h-16 w-full" />}
+
+        {verdict && (
+          <div className="rounded-md border p-3 text-sm">
+            <div className="flex flex-wrap items-baseline gap-2">
+              <Badge
+                variant={verdict.verdict === 'distinguishable' ? 'default' : 'muted'}
+              >
+                {verdict.verdict === 'distinguishable'
+                  ? `distinguishable (${verdict.direction})`
+                  : verdict.verdict === 'indistinguishable'
+                    ? 'indistinguishable'
+                    : 'unmeasured'}
+              </Badge>
+              {delta != null && (
+                <span className="tabular text-xs text-muted-foreground">
+                  headline delta {delta > 0 ? '+' : ''}{delta}
+                </span>
+              )}
+            </div>
+            {verdict.reason && (
+              <p className="mt-1.5 text-xs text-muted-foreground">{verdict.reason}</p>
+            )}
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

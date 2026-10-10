@@ -714,3 +714,49 @@ def reviewer_disagreement(reviews: list[dict[str, Any]]) -> dict[str, Any]:
         stats["note"] = ("Fewer than two reviewer pairs judged the same "
                          "artifact; agreement is unmeasured, not perfect.")
     return {"conflicts": conflicts, "stats": stats}
+
+
+def compare_verdict(band_a: dict[str, Any] | None,
+                    band_b: dict[str, Any] | None,
+                    label_a: str = "a", label_b: str = "b") -> dict[str, Any]:
+    """Do two assessments differ by more than their intervals allow?
+
+    Two point estimates invite subtraction; two intervals invite the prior
+    question of whether they can be told apart at all. Returns one of three
+    verdicts:
+
+    * ``distinguishable`` -- the intervals do not overlap: the move is real
+      at the reported level, with the direction stated.
+    * ``indistinguishable`` -- the intervals overlap: the numbers differ but
+      the difference is inside the measurement noise.
+    * ``unmeasured`` -- at least one side has no band, so the question cannot
+      be answered rather than answered "no".
+    """
+    def _iv(band):
+        if not isinstance(band, dict):
+            return None
+        try:
+            lo, hi = float(band["lower_pct"]), float(band["upper_pct"])
+        except (TypeError, ValueError, KeyError):
+            return None
+        return (lo, hi)
+
+    ia, ib = _iv(band_a), _iv(band_b)
+    if ia is None or ib is None:
+        return {"verdict": "unmeasured",
+                "reason": (f"{label_a if ia is None else label_b} has no "
+                           f"credible interval; the comparison cannot be "
+                           f"decided rather than decided against a move.")}
+    (lo_a, hi_a), (lo_b, hi_b) = ia, ib
+    overlap = max(0.0, min(hi_a, hi_b) - max(lo_a, lo_b))
+    width = max(hi_a - lo_a, hi_b - lo_b, 1e-9)
+    if overlap <= 0:
+        direction = "down" if hi_b < lo_a else "up"
+        return {"verdict": "distinguishable", "direction": direction,
+                "reason": (f"Intervals [{lo_a:g}, {hi_a:g}] and "
+                           f"[{lo_b:g}, {hi_b:g}] do not overlap.")}
+    return {"verdict": "indistinguishable",
+            "overlap_pct_points": round(overlap, 1),
+            "overlap_share": round(overlap / width, 3),
+            "reason": (f"Intervals overlap by {overlap:.1f} points; the "
+                       f"headline move is inside the measurement noise.")}

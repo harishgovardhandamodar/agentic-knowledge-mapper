@@ -47,6 +47,7 @@ def setup(client):
         exposure="confidential_data", overall_pct=res["residual_pct"],
         inherent_pct=res["inherent_pct"], residual_pct=res["residual_pct"],
         markdown="# stub", scoring_json=json.dumps(res),
+        threats_json=json.dumps(res["threats"]),
         controls_json=json.dumps({"active_controls": ["C01", "C02"]}),
         assurance_json=json.dumps({"assessed": True, "threats": []}))
     db.add(rec)
@@ -169,9 +170,10 @@ class TestDataset:
         body = d.json()
         assert body["dataset_version"] == "1"
         assert body["counts"] == {"assessments": 1, "threats": 12,
-                                  "controls": 2, "artifacts": 1, "reviews": 1}
+                                  "controls": 2, "artifacts": 1, "reviews": 1,
+                                  "judgments": 0}
         assert set(body["tables"]) == {"assessments", "threats", "controls",
-                                       "artifacts", "reviews"}
+                                       "artifacts", "reviews", "judgments"}
 
     def test_scores_travel_with_pack_and_calibration(self, client, setup):
         row = client.get(
@@ -204,3 +206,61 @@ class TestDataset:
 
     def test_missing_investigation_is_404(self, client):
         assert client.get("/api/investigations/999999/dataset").status_code == 404
+
+
+class TestGapLifecycleApi:
+    def test_ruled_out_without_evidence_is_refused(self, client, setup):
+        r = client.post(
+            f"/api/investigations/{setup['inv']}/research-gaps/status",
+            json={"question": "Is X true?", "status": "ruled_out"})
+        assert r.status_code == 422
+
+    def test_gap_lifecycle_round_trip(self, client, setup):
+        q = "Is X true?"
+        r = client.post(
+            f"/api/investigations/{setup['inv']}/research-gaps/status",
+            json={"question": q, "status": "investigating",
+                  "decided_by": "ana"})
+        assert r.status_code == 200
+        assert r.json()["status"] == "investigating"
+        r = client.post(
+            f"/api/investigations/{setup['inv']}/research-gaps/status",
+            json={"question": q, "status": "ruled_out",
+                  "evidence": "ran 30 probes, zero hits", "decided_by": "ana"})
+        assert r.status_code == 200
+        d = client.get(
+            f"/api/investigations/{setup['inv']}/research-gaps/ruled-out")
+        assert d.status_code == 200
+        assert d.json()["count"] >= 1
+        assert any(x["question"] == q for x in d.json()["ruled_out"])
+
+    def test_unknown_status_is_refused(self, client, setup):
+        r = client.post(
+            f"/api/investigations/{setup['inv']}/research-gaps/status",
+            json={"question": "Is X true?", "status": "bogus"})
+        assert r.status_code == 422
+
+
+class TestJudgmentsApi:
+    def test_rescore_attributes_authorship(self, client, setup):
+        r = client.post(
+            f"/api/security/assessments/{setup['rec']}/rescore",
+            json={"applicability": {"T01": 0.8}, "author": "ana",
+                  "rationale": "chat surface present", "persist": False})
+        assert r.status_code == 200
+        body = r.json()
+        assert any(j["author"] == "ana" and j["subject"] == "T01"
+                   for j in body.get("judgments", []))
+
+    def test_unattributed_rescore_uses_the_session_actor(self, client, setup):
+        # No explicit author: the request actor (session key) is recorded
+        # instead. That distinguishes two anonymous callers from each other,
+        # which a shared "unknown" could not.
+        r = client.post(
+            f"/api/security/assessments/{setup['rec']}/rescore",
+            json={"applicability": {"T01": 0.8}, "persist": False})
+        assert r.status_code == 200
+        judgments = r.json().get("judgments", [])
+        assert judgments, "applicability without author must still be recorded"
+        assert all(j["author"] for j in judgments)
+        assert all(j["author"] != "ana" for j in judgments)

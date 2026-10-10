@@ -34,7 +34,8 @@ from typing import Any
 DATASET_VERSION = "1"
 
 #: Tables in export order. Fixed so a diff of two exports is meaningful.
-TABLES = ("assessments", "threats", "controls", "artifacts", "reviews")
+TABLES = ("assessments", "threats", "controls", "artifacts", "reviews",
+          "judgments")
 
 
 def _load(raw: Any) -> Any:
@@ -173,6 +174,37 @@ def _domain_of(url: Any) -> str | None:
         return None
 
 
+def judgment_rows(rec: Any) -> list[dict[str, Any]]:
+    """One row per recorded judgment behind an assessment's score.
+
+    Reads the stored judgments column first, falling back to the judgments
+    embedded in the scoring result. A row with neither contributes no judgment
+    rows rather than unattributed ones -- an anonymous weight is not data
+    about authorship.
+    """
+    stored = _load(getattr(rec, "judgments_json", None)) or []
+    scoring = _load(getattr(rec, "scoring_json", None)) or {}
+    seen: set[tuple[Any, Any, Any]] = set()
+    out = []
+    for j in list(stored) + list(scoring.get("judgments") or []):
+        if not isinstance(j, dict):
+            continue
+        key = (j.get("kind"), j.get("subject"), j.get("author"))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({
+            "assessment_id": getattr(rec, "id", None),
+            "kind": j.get("kind"),
+            "subject": j.get("subject"),
+            "value": j.get("value"),
+            "author": j.get("author"),
+            "rationale_present": bool(j.get("rationale")),
+            "recorded_at": j.get("recorded_at"),
+        })
+    return out
+
+
 def review_rows(reviews: list[dict[str, Any]],
                 artifact_id: Any = None) -> list[dict[str, Any]]:
     """One row per recorded review, with the reviewer named.
@@ -216,6 +248,7 @@ def build_dataset(investigation_id: Any, assessments: list[Any],
         "reviews": [rw for a in artifacts
                     for rw in review_rows(reviews_by_artifact.get(a.id, []),
                                           artifact_id=a.id)],
+        "judgments": [j for r in assessments for j in judgment_rows(r)],
     }
     manifest = R.manifest(
         inputs={"tables": {k: R.canonical(v) for k, v in tables.items()}},

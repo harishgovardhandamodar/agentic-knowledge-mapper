@@ -151,8 +151,10 @@ class TestScenarioAndProbeEndpoints:
         by_id = {n["id"]: n for n in body["nodes"]}
         for e in body["edges"]:
             assert e["from"] in by_id and e["to"] in by_id
-            assert (by_id[e["from"]]["coverage"]
-                    > by_id[e["to"]]["coverage"])
+            # Every edge names the gap it represents. Per-edge decline is not
+            # asserted: the beam permits lateral moves, and the decline
+            # guarantee belongs to whole paths (tested in test_scenarios).
+            assert e["uncovered_by"], "an edge without a gap is decoration"
 
     def test_probe_library_withholds_payloads(self, client):
         d = client.get("/api/probes")

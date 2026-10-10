@@ -40,7 +40,7 @@ class TestScenarioProvenance:
             if sc["origin"] == S.ORIGIN_CHAIN:
                 assert len(sc["chain"]) >= 2
                 assert sc["weakest_link"] in sc["chain"]
-                assert sc["chain"][-1] == sc["weakest_link"]
+                assert sc["chain"][-1] == sc["endpoint"]
                 assert sc["uncovered_by"], "a chain must name the missing control"
 
     def test_amplifiers_are_floor_bound_rows(self):
@@ -73,11 +73,12 @@ class TestScenarioFindings:
         # at 55% on a single control while its peers are at 69%+. The findings
         # must all be distinct (endpoint, gap) pairs, never restatements.
         s = S.scenarios(_score(ALL))
-        keys = [(sc["weakest_link"], tuple(sorted(sc.get("uncovered_by") or [])))
-                for sc in s["scenarios"]]
+        chains = [sc for sc in s["scenarios"]
+                  if sc["origin"] == S.ORIGIN_CHAIN]
+        keys = [(sc["endpoint"], tuple(sorted(sc.get("uncovered_by") or [])))
+                for sc in chains]
         assert len(set(keys)) == len(keys)
-        assert all(sc.get("hops", 2) >= 2 for sc in s["scenarios"]
-                   if sc["origin"] == S.ORIGIN_CHAIN)
+        assert all(sc.get("hops", 2) >= 2 for sc in chains)
 
     def test_partial_mitigation_reveals_the_composition_gap(self):
         # The whole point: a partially-mitigated system has more to say than
@@ -148,3 +149,29 @@ class TestMultiHop:
         by_id = {n["id"]: n for n in tree["nodes"]}
         for e in tree["edges"]:
             assert by_id[e["from"]]["coverage"] > by_id[e["to"]]["coverage"]
+
+
+class TestPathDecline:
+    def _cov(self, tid):
+        inherent = [
+            {"id": t[0], "title": t[1], "stride": t[2], "owasp": t[3],
+             "likelihood": float(sec._scale_likelihood(t[4], 1.0)),
+             "impact": float(t[5]), "description": t[6],
+             "mitigations": list(t[7])}
+            for t in sec._THREAT_CATALOG
+        ]
+        r = sec.score_assessment("confidential_data", inherent,
+                                 active_controls=ALL[:4])
+        return {t["id"]: t["coverage"] for t in r["threats"]}
+
+    def test_every_chain_declines_from_first_to_last(self):
+        cov = self._cov(None)
+        s = S.scenarios(_score(ALL[:4]))
+        chains = [sc for sc in s["scenarios"]
+                  if sc["origin"] == S.ORIGIN_CHAIN]
+        assert chains
+        for sc in chains:
+            first, last = sc["chain"][0], sc["chain"][-1]
+            assert cov[last] < cov[first], (
+                f"{sc['id']}: a path that never declines is pivoting, "
+                f"not attacking")

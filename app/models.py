@@ -216,7 +216,6 @@ class AgentEvent(Base):
 class Explanation(Base):
     """Agentic explainer output: researched, illustrated answer to a question."""
     __tablename__ = "explanations"
-
     id = Column(Integer, primary_key=True, index=True)
     investigation_id = Column(Integer, ForeignKey("investigations.id", ondelete="CASCADE"),
                               nullable=False, index=True)
@@ -239,6 +238,32 @@ class Explanation(Base):
     quiz = Column(Text, nullable=True)  # JSON: interactive quiz items
     bookmarked = Column(Integer, nullable=False, default=0)  # 0|1 saved to bookmarks
     watched = Column(Integer, nullable=False, default=0)  # 0|1 auto re-answer on drift
+
+
+class ResearchGap(Base):
+    """Lifecycle state for one open research question.
+
+    The gaps endpoint computes questions fresh from the roadmap on every read,
+    so a question that was investigated and ruled out simply reappears as
+    "open" next time -- investigated-and-absent is indistinguishable from
+    never-looked-at. This table records what happened to each question, keyed
+    by the question text within one investigation. A ruled-out gap requires
+    named evidence: "we looked and found nothing" is a finding, but only when
+    it says what "looked" means.
+    """
+    __tablename__ = "research_gaps"
+
+    id = Column(Integer, primary_key=True, index=True)
+    investigation_id = Column(Integer, ForeignKey("investigations.id",
+                                                  ondelete="CASCADE"),
+                              nullable=False, index=True)
+    question = Column(String(1000), nullable=False)
+    # open|investigating|answered|ruled_out|verified
+    status = Column(String(20), nullable=False, default="open")
+    evidence = Column(Text, nullable=True)  # what settled it, if anything did
+    decided_by = Column(String(120), nullable=True)
+    created_at = Column(DateTime, default=_now)
+    updated_at = Column(DateTime, default=_now, onupdate=_now)
 
 
 class CorpusPage(Base):
@@ -281,6 +306,12 @@ class SecurityAssessment(Base):
     inherent_pct = Column(Float, nullable=True)  # pre-control score
     residual_pct = Column(Float, nullable=True)  # post-control score (headline)
     controls_json = Column(Text, nullable=True)  # JSON: active controls + control plan
+    # Who decided the judgments behind the score: per-threat applicability and
+    # per-control attestation, each with author, timestamp and rationale.
+    # Likelihood, impact and applicability are analyst assignments; without
+    # authorship they can never be calibrated, and the variance budget lists
+    # them as unquantified forever. Nullable: older rows predate authorship.
+    judgments_json = Column(Text, nullable=True)  # JSON: list of judgment records
     scoring_json = Column(Text, nullable=True)  # JSON: breakdown/distribution/breakdown
     perspectives_json = Column(Text, nullable=True)  # JSON: per-audience highlight panels
     posture = Column(String(500), nullable=True)

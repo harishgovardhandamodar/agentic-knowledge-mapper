@@ -15,6 +15,7 @@ import { SEVERITY_META, severityFromPct } from '@/components/tokens/status';
 import { StatusBadge } from '@/components/ui/status-badge';
 import { ScenarioOriginFilter } from '@/components/charts/scenario-origin-filter';
 import { ScenarioCoverageScatter } from '@/components/charts/scenario-coverage-scatter';
+import { ScenarioProbePlan } from '@/components/charts/scenario-probe-plan';
 import { AttackTreeView, type AttackTreeData } from '@/components/charts/attack-tree-view';
 
 const zScenario = z
@@ -24,6 +25,8 @@ const zScenario = z
     title: z.string(),
     chain: z.array(z.string()).optional(),
     weakest_link: z.string().optional(),
+    endpoint: z.string().optional(),
+    hops: z.number().optional(),
     precondition: z.string().optional(),
     exploit: z.string().optional(),
     uncovered_by: z.array(z.string()).optional(),
@@ -74,6 +77,29 @@ const zAttackTree = z.object({
   note: z.string().optional(),
 });
 
+const zProbePlan = z.object({
+  scenario_id: z.string(),
+  scenario_title: z.string().optional(),
+  weakest_link: z.string().optional(),
+  probes: z.array(
+    z.object({
+      probe_id: z.string(),
+      attack_class: z.string(),
+      description: z.string(),
+    }),
+  ),
+  attribute_to: z.array(z.string()),
+  n_trials: z.number(),
+  rationale: z.string(),
+  reason: z.string().optional(),
+});
+
+const zScenarioProbes = z.object({
+  plans: z.array(zProbePlan),
+  untestable_scenarios: z.number(),
+  n_trials_each: z.number(),
+});
+
 const ORIGIN_META: Record<string, { label: string; glyph: string; blurb: string }> = {
   control_gap_chain: {
     label: 'Chain',
@@ -107,6 +133,7 @@ export default function ScenariosPage() {
   const [data, setData] = React.useState<z.infer<typeof zScenarios> | null>(null);
   const [loading, setLoading] = React.useState(false);
   const [origin, setOrigin] = React.useState<string>('all');
+  const [probePlans, setProbePlans] = React.useState<z.infer<typeof zScenarioProbes> | null>(null);
   const [tree, setTree] = React.useState<AttackTreeData | null>(null);
   const [selectedNode, setSelectedNode] = React.useState<string | null>(null);
 
@@ -121,6 +148,9 @@ export default function ScenariosPage() {
       .then((d) => !cancelled && setData(d))
       .catch(() => !cancelled && setData(null))
       .finally(() => !cancelled && setLoading(false));
+    void getParsed(zScenarioProbes, `/security/assessments/${id}/scenario-probes`)
+      .then((d) => !cancelled && setProbePlans(d))
+      .catch(() => !cancelled && setProbePlans(null));
     void getParsed(zAttackTree, `/security/assessments/${id}/attack-tree`)
       .then((d) => !cancelled && setTree({ ...d, edges: d.edges ?? [] }))
       .catch(() => !cancelled && setTree(null));
@@ -267,6 +297,10 @@ export default function ScenariosPage() {
                         ))}
                       </div>
                     )}
+                    <ScenarioProbePlan
+                      scenarioId={s.id}
+                      plans={probePlans}
+                    />
                     {s.uncovered_by && s.uncovered_by.length > 0 && (
                       <div className="flex flex-wrap items-center gap-1.5">
                         <Link2 className="size-3 text-muted-foreground" aria-hidden />
