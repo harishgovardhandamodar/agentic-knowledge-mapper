@@ -22,6 +22,8 @@ Stdlib only. The benchmark tables carry a version; changing one is a deliberate
 act with a diff, matching how the threat pack is versioned.
 """
 
+from typing import Any
+
 #: Bump when any mapping below changes, so a stored assessment names the table
 #: it was graded against.
 BENCHMARK_VERSION = "2026.1"
@@ -167,7 +169,17 @@ def inter_rater(rows, *, keys=("likelihood", "impact")) -> dict:
         a = [r[0].get(key) for r in pairs]
         b = [r[1].get(key) for r in pairs]
         kappa = cohens_kappa(a, b)
-        out[key] = {"kappa": kappa, "band": _kappa_band(kappa)}
+        # Kappa is prevalence-sensitive and this catalogue's L/I marginals are
+        # heavily skewed, so a low kappa can mean "the distribution is lopsided"
+        # rather than "the raters disagree". Alpha and AC1 correct for that by
+        # construction; reporting all three says which reading applies.
+        out[key] = {
+            "kappa": kappa,
+            "band": _kappa_band(kappa),
+            "krippendorff_alpha": krippendorff_alpha(
+                list(zip(a, b, strict=True))),
+            "gwet_ac1": gwet_ac1(list(zip(a, b, strict=True))),
+        }
     if pairs and len(keys):
         out["mean_kappa"] = round(
             sum(out[k]["kappa"] for k in keys) / len(keys), 4)
@@ -237,3 +249,376 @@ def _ece_band(ece: float) -> str:
     if ece <= 0.2:
         return "weak"
     return "mis-calibrated"
+
+
+# --------------------------------------------------------------------------
+# Krippendorff's alpha and Gwet's AC1
+# --------------------------------------------------------------------------
+#
+# Cohen's kappa is prevalence-sensitive: it collapses when the marginal
+# distribution of a category is heavily skewed, which it is here -- most threat
+# rows land on one or two of the L/I values, so an assessor's perfect agreement
+# still reports a low kappa. That is a property of the statistic, not a
+# disagreement, and quoting kappa alone understates reliability exactly where the
+# data is most skewed.
+#
+# Alpha and AC1 both correct for prevalence by construction, so reporting them
+# alongside kappa says which reading applies.
+
+
+def krippendorff_alpha(rows: list[tuple[str, str]]) -> float:
+    """Krippendorff's alpha for two raters over a nominal scale.
+
+    ``rows`` is a list of ``(rater_a, rater_b)`` paired judgements. Returns a
+    value in -1..1 where 1 is perfect agreement, corrected for observed
+    disagreement beyond what the marginals predict. Unlike kappa it is
+    defined at zero observed disagreement (returns 1.0), so it is safe to
+    report on a clean run.
+    """
+    pairs = [(str(a), str(b)) for a, b in rows if a is not None and b is not None]
+    n = len(pairs)
+    if n < 2:
+        return 1.0 if n == 1 else 0.0
+    agree = sum(1 for a, b in pairs if a == b)
+    # Observed disagreement (D_o) as the proportion of disagreeing units.
+    d_o = (n - agree) / n
+    # Expected disagreement (D_e) from the two raters' own marginals.
+    a_counts: dict[str, int] = {}
+    b_counts: dict[str, int] = {}
+    for a, b in pairs:
+        a_counts[a] = a_counts.get(a, 0) + 1
+        b_counts[b] = b_counts.get(b, 0) + 1
+    d_e = sum((a_counts[k] / n) * (b_counts[k] / n) for k in a_counts)
+    if d_e == 0:
+        # Both raters used a single, identical category: perfect (or total)
+        # agreement by construction.
+        return 1.0
+    return round(1.0 - d_o / d_e, 4)
+
+
+def gwet_ac1(rows: list[tuple[str, str]], categories: list[str] | None = None) -> float:
+    """Gwet's AC1: prevalence-corrected agreement, always defined.
+
+    Handles the case alpha reports as 1.0 for degenerate marginals; useful as a
+    stable companion to kappa across skewed severities.
+    """
+    pairs = [(str(a), str(b)) for a, b in rows if a is not None and b is not None]
+    n = len(pairs)
+    if n < 2:
+        return 1.0 if n == 1 else 0.0
+    if not categories:
+        seen = {a for a, _ in pairs} | {b for _, b in pairs}
+        categories = sorted(seen)
+    k = max(1, len(categories))
+    agree = sum(1 for a, b in pairs if a == b)
+    p_a = agree / n
+    # Each category's marginal across both raters.
+    cat_tot: dict[str, int] = {}
+    for a, b in pairs:
+        cat_tot[a] = cat_tot.get(a, 0) + 1
+        cat_tot[b] = cat_tot.get(b, 0) + 1
+    pi = sum((c / (2 * n)) ** 2 for c in cat_tot.values())
+    pe = (1.0 / (k - 1)) * (k * pi - 1.0)
+    if abs(1.0 - pe) < 1e-12:
+        return 1.0
+    return round((p_a - pe) / (1.0 - pe), 4)
+
+
+# --------------------------------------------------------------------------
+# Grounding confusion matrix
+# --------------------------------------------------------------------------
+
+
+def grounding_confusion_matrix(samples: list[dict[str, Any]]) -> dict[str, Any]:
+    """Per-reason precision/recall for the grounding verdict.
+
+    ``samples`` are ``{"expected": <drop reason or "kept">,
+    "predicted": <same>}`` rows from a labelled fixture set. Returns overall
+    accuracy plus per-class precision/recall/F1, so a failure mode is named
+    with numbers rather than a single pass/fail. ``explain_drop`` reasons are
+    treated as a nominal scale; the classifier is only ever reported, never
+    tuned against these labels in the same pass.
+    """
+    classes = sorted({s["expected"] for s in samples}
+                  | {s["predicted"] for s in samples})
+    tp = {c: 0 for c in classes}
+    fp = {c: 0 for c in classes}
+    fn = {c: 0 for c in classes}
+    correct = 0
+    for s in samples:
+        e, p = s["expected"], s["predicted"]
+        if e == p:
+            correct += 1
+            tp[e] = tp.get(e, 0) + 1
+        else:
+            fp[p] = fp.get(p, 0) + 1
+            fn[e] = fn.get(e, 0) + 1
+    n = len(samples)
+    per_class = {}
+    for c in classes:
+        prec = tp[c] / (tp[c] + fp[c]) if (tp[c] + fp[c]) else 0.0
+        rec = tp[c] / (tp[c] + fn[c]) if (tp[c] + fn[c]) else 0.0
+        f1 = (2 * prec * rec / (prec + rec)) if (prec + rec) else 0.0
+        per_class[c] = {"precision": round(prec, 3), "recall": round(rec, 3),
+                        "f1": round(f1, 3), "support": tp[c] + fn[c]}
+    return {
+        "n": n,
+        "accuracy": round(correct / n, 3) if n else 0.0,
+        "macro_f1": round(
+            sum(v["f1"] for v in per_class.values()) / len(per_class), 3
+        ) if per_class else 0.0,
+        "per_class": per_class,
+        "confusion": {e: {p: (tp.get(p, 0) if e == p else fp.get(p, 0))
+                          for p in classes} for e in classes},
+    }
+
+
+# --------------------------------------------------------------------------
+# Ablation: how much of the headline each modelling choice is responsible for
+# --------------------------------------------------------------------------
+
+
+def ablation_report(inherent_threats: list[dict[str, Any]],
+                    active_controls: list[str], *,
+                    exposure: str = "confidential_data") -> dict[str, Any]:
+    """Sensitivity of ``residual_pct`` to each modelling choice, one at a time.
+
+    A residual score that only means "rank these risks" should not be quoted as
+    if it were a measurement, and this is the check that says by how much each
+    choice contributes. Each variant temporarily changes one module constant
+    (:func:`security.score_assessment` reads them at call time), re-runs the
+    identical arithmetic, and reports the headline delta.
+
+    Returns ``base_residual_pct``, the ``variants``, ``max_abs_delta`` and a
+    ``fragile`` flag for any single choice whose removal moves the headline by
+    more than 5 points -- i.e. the number is substantially an artefact of that
+    choice, and a reviewer should be told which one.
+    """
+    from . import security as sec
+
+    base = sec.score_assessment(exposure, inherent_threats,
+                                active_controls=active_controls)["residual_pct"]
+
+    def _variant(label: str, attr: str, value) -> dict[str, Any]:
+        saved = getattr(sec, attr)
+        try:
+            setattr(sec, attr, value)
+            pct = sec.score_assessment(
+                exposure, inherent_threats,
+                active_controls=active_controls)["residual_pct"]
+        finally:
+            setattr(sec, attr, saved)  # restore: this mutates a module global
+        return {"label": label, "residual_pct": pct,
+                "delta_pct_points": round(pct - base, 2)}
+
+    variants = [
+        _variant("no residual floor", "_MIN_RESIDUAL_LIKELIHOOD", 0.0),
+        _variant("breadth only", "_WORST_WEIGHT", 0.0),
+        _variant("worst only", "_BREADTH_WEIGHT", 0.0),
+    ]
+    deltas = [abs(v["delta_pct_points"]) for v in variants]
+    return {
+        "base_residual_pct": round(base, 2),
+        "variants": variants,
+        "max_abs_delta": round(max(deltas), 2),
+        "fragile": any(d > 5.0 for d in deltas),
+        "note": ("Each variant changes one modelling choice and re-runs the "
+                 "same arithmetic. A large delta means the headline is largely "
+                 "that choice rather than the threat set."),
+    }
+
+
+# --------------------------------------------------------------------------
+# The scoring contract
+# --------------------------------------------------------------------------
+
+
+#: Every key ``score_assessment`` must return, and its type. Consumers --
+#: ``_perspective_views``, the markdown renderer, the PDF, the GUI and the API
+#: -- all read ``result["scoring"]["breakdown"][key]`` by string across ~10 call
+#: sites. A rename there would break every narrative panel silently, because a
+#: missing key renders as an empty cell rather than an error. Pinning the shape
+#: turns that class of regression into a failing invariant.
+SCORING_CONTRACT: dict[str, type] = {
+    "method": str,
+    "worst_weight": float,
+    "breadth_weight": float,
+    "top_n": int,
+    "min_residual_floor": float,
+    "min_applicability": float,
+    "exposure": str,
+    "applicable_threats": int,
+    "total_threats": int,
+    "mean_coverage": float,
+}
+
+#: Keys the result envelope itself must carry, for the same reason.
+RESULT_CONTRACT: tuple[str, ...] = (
+    "threats", "assessment_path", "inherent_pct", "residual_pct", "delta",
+    "posture", "inherent_posture", "active_controls", "distribution",
+    "breakdown", "control_analyst",
+    # Calibration block, added alongside the provenance work.
+    "floor_capped", "floor", "efficacy_evidence",
+)
+
+
+def validate_scoring_contract(result: dict[str, Any]) -> list[str]:
+    """Return the contract violations in one scoring result (empty if clean).
+
+    Checks presence and type only -- not values. A wrong type or a renamed key
+    is a defect; an odd number is a finding, and the two must not be conflated.
+    """
+    problems: list[str] = []
+    for key in RESULT_CONTRACT:
+        if key not in result:
+            problems.append(f"result.{key} missing")
+    bd = result.get("breakdown")
+    if not isinstance(bd, dict):
+        problems.append("result.breakdown missing or not a mapping")
+        return problems
+    for key, expected in SCORING_CONTRACT.items():
+        if key not in bd:
+            problems.append(f"breakdown.{key} missing")
+        elif not isinstance(bd[key], expected | int | float) or (
+                expected is int and isinstance(bd[key], bool)):
+            problems.append(
+                f"breakdown.{key} is {type(bd[key]).__name__}, "
+                f"expected {expected.__name__}")
+    return problems
+
+
+def research_report_sections(*, assessment: dict[str, Any],
+                             analysis: dict[str, Any],
+                             meta: dict[str, Any]) -> list[dict[str, Any]]:
+    """Structured sections for the research report.
+
+    The ordering is the argument: the headline and its interval first, then
+    immediately what the interval does *not* cover, then the provenance of the
+    inputs and the sensitivity analysis. A limitations section at the end of a
+    report is a disclaimer; the same limitations immediately after the number
+    are part of the result.
+    """
+    unc = analysis.get("uncertainty") or {}
+    floor = assessment.get("floor") or {}
+    ev = assessment.get("efficacy_evidence") or {}
+    vb = analysis.get("variance_budget") or unc.get("variance_budget") or {}
+    dp = analysis.get("dp_accounting") or {}
+    ds = analysis.get("domain_spend") or {}
+    sections: list[dict[str, Any]] = []
+
+    sections.append({
+        "key": "headline",
+        "title": "Result",
+        "lines": [
+            f"Inherent risk {assessment.get('inherent_pct')}/100 → residual "
+            f"{assessment.get('residual_pct')}/100 "
+            f"({assessment.get('posture', '')}).",
+        ],
+    })
+
+    if unc:
+        sections.append({
+            "key": "interval",
+            "title": "Credible interval",
+            "lines": [
+                f"{unc.get('level', 0.9):.0%} interval "
+                f"[{unc.get('lower_pct')}–{unc.get('upper_pct')}] around "
+                f"{unc.get('mean_pct')}.",
+            ],
+        })
+    if vb:
+        unq = vb.get("unquantified") or {}
+        lines = [f"Modelled variance: "
+                 f"{vb.get('share_inherent', 0):.0%} inherent likelihood, "
+                 f"{vb.get('share_efficacy', 0):.0%} control efficacy."]
+        if unq:
+            lines.append("")
+            lines.append("Not covered by this interval:")
+            lines += [f"{k.replace('_', ' ')} — {v}" for k, v in unq.items()]
+        sections.append({"key": "variance_budget",
+                         "title": "Variance budget", "lines": lines})
+    if floor:
+        sections.append({
+            "key": "saturation",
+            "title": "Score saturation",
+            "lines": [
+                f"Likelihood floored at {floor.get('floor', 0.35):.0%}; the "
+                f"score saturates once coverage passes "
+                f"{1 - floor.get('floor', 0.35):.0%}.",
+                f"{floor.get('controls_beyond_floor', 0)} of the declared "
+                f"controls no longer move the headline.",
+            ],
+        })
+    if ev and ev.get("unvalidated_controls"):
+        sections.append({
+            "key": "provenance",
+            "title": "Efficacy provenance",
+            "lines": [
+                f"{len(ev['unvalidated_controls'])} of {ev.get('n_controls', 0)} "
+                f"control efficacies are unvalidated analyst priors; the cited "
+                f"standard establishes the control, not its effectiveness.",
+            ],
+        })
+    if dp and dp.get("epsilon") is not None:
+        sections.append({
+            "key": "privacy",
+            "title": "External reach",
+            "lines": [
+                f"Composed (ε, δ) = ({dp.get('epsilon')}, {dp.get('delta')}) "
+                f"across {dp.get('distinct_domains', 0)} observer domain(s).",
+                dp.get("note", ""),
+            ],
+        })
+    if ds:
+        sections.append({
+            "key": "domain_spend",
+            "title": "Observer-distinct spend",
+            "lines": [
+                f"Concave spend {ds.get('concave_spend')} vs linear "
+                f"{ds.get('linear_spend')} (fetch count overstates reach by "
+                f"{ds.get('spread')}).",
+            ],
+        })
+    abl = ablation_report(
+        [{"id": t["id"], "likelihood": t["likelihood"], "impact": t["impact"]}
+         for t in (assessment.get("threats") or [])],
+        assessment.get("active_controls") or []) if (
+            assessment.get("threats")) else None
+    if abl:
+        lines = [f"Base residual {abl['base_residual_pct']}; max single-choice "
+                 f"delta {abl['max_abs_delta']}."]
+        lines += [f"{v['label']}: {v['delta_pct_points']:+} points"
+                  for v in abl["variants"]]
+        sections.append({"key": "sensitivity",
+                         "title": "Model sensitivity (ablation)",
+                         "lines": lines})
+    return sections
+
+
+def render_research_report(*, assessment: dict[str, Any],
+                           analysis: dict[str, Any],
+                           meta: dict[str, Any]) -> str:
+    """Markdown rendering of the research report sections."""
+    lines: list[str] = []
+    product = meta.get("product_name") or "this subject"
+    lines.append(f"# Research report — {product}")
+    lines.append("")
+    if meta.get("exposure"):
+        lines.append(f"_Exposure:_ **{meta['exposure']}** · "
+                     f"_Assessment:_ #{meta.get('id')} · "
+                     f"_Path:_ {meta.get('assessment_path') or 'standard'}")
+    if (meta.get("pack") or {}).get("fingerprint"):
+        lines.append(f"_Threat pack:_ `{meta['pack'].get('version')}` "
+                     f"({str(meta['pack']['fingerprint'])[:12]})")
+    lines.append("")
+    lines.append("---")
+    for sec in research_report_sections(assessment=assessment,
+                                        analysis=analysis, meta=meta):
+        lines.append(f"## {sec['title']}")
+        lines.append("")
+        lines.extend(sec["lines"])
+        lines.append("")
+    lines.append("---")
+    lines.append("*Generated from the measured properties of this assessment; "
+                 "the limitations are part of the result, not a disclaimer.*")
+    return "\n".join(lines)

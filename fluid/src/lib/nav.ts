@@ -19,6 +19,7 @@ import {
   Home,
   Gauge,
   Compass,
+  FileOutput,
   FlaskConical,
 } from 'lucide-react';
 
@@ -40,6 +41,7 @@ export const NAV_ITEMS: NavItem[] = [
   { href: '/calibration', label: 'Calibration', icon: Gauge, hint: 'Score saturation, efficacy provenance, variance budget', built: true, group: 'analysis' },
   { href: '/gaps', label: 'Gaps', icon: Compass, hint: 'Open questions and unasked areas', built: true, group: 'analysis' },
   { href: '/experiments', label: 'Experiments', icon: FlaskConical, hint: 'Planned tests for what is still open', built: true, group: 'analysis' },
+  { href: '/report', label: 'Report', icon: FileOutput, hint: 'Exportable research report with its limitations', built: true, group: 'analysis' },
   { href: '/privacy', label: 'Privacy', icon: Lock, hint: 'External-reach budget and erasure', built: true, group: 'analysis' },
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard, hint: 'Cross-investigation metrics', built: false, group: 'analysis' },
   { href: '/manager', label: 'Manager', icon: Users, hint: 'Review queue and stewardship', built: false, group: 'system' },

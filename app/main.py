@@ -1604,7 +1604,8 @@ def _assessment_analysis(rec, scoring: dict, ev: dict, ctl: dict,
     legacy or unusual row degrades to ``None`` instead of failing the read --
     an analysis extra must never be the reason an assessment cannot be fetched.
     """
-    out = {"uncertainty": None, "privacy": None, "repro": None}
+    out = {"uncertainty": None, "privacy": None, "repro": None,
+           "dp_accounting": None, "domain_spend": None}
 
     # A credible band only means something for the catalog path, where the
     # stored rows carry likelihood/impact/controls. A model-path assessment has
@@ -1632,6 +1633,11 @@ def _assessment_analysis(rec, scoring: dict, ev: dict, ctl: dict,
                      for e in (ev.get("evidence") or []) if isinstance(e, dict)]
             queries = len(ev.get("queries_run") or [])
             out["privacy"] = P.privacy_budget(pages, queries=queries)
+            # The budget counts; these two say what the count means. `dp` is
+            # the composed (epsilon, delta) the reach would imply under a noise
+            # mechanism -- explicitly *not* a guarantee, because none is added.
+            out["dp_accounting"] = P.dp_accounting(pages, queries=queries)
+            out["domain_spend"] = P.domain_spend(pages, queries=queries)
     except Exception:
         out["privacy"] = None
 
@@ -2436,6 +2442,18 @@ class EvidenceReviewRequest(BaseModel):
     note: str = ""
 
 
+def _load_json_safe(raw: object, default: object = None) -> object:
+    """json.loads that degrades to ``default`` instead of raising.
+
+    A stored column that will not parse is a corrupt row, not a reason to fail
+    the whole read; every caller here already treats a missing field as unknown.
+    """
+    try:
+        return json.loads(raw) if raw else (default if default is not None else {})
+    except Exception:
+        return default if default is not None else {}
+
+
 def _assessment_or_404(assessment_id: int, db: Session) -> SecurityAssessment:
     rec = db.query(SecurityAssessment).filter(
         SecurityAssessment.id == assessment_id).first()
@@ -2609,6 +2627,12 @@ def review_assurance_evidence(assessment_id: int, artifact_id: int,
     ledger_api.human_action(request, "reviewed_evidence", {
         "assessment": rec.id, "artifact": artifact_id, "review": review,
         "reviewer": reviewer})
+    # A reviewer accepting primary evidence is the one moment the system learns
+    # something *observed* rather than *asserted*. If the artifact records an
+    # attack outcome, record it as a control-efficacy trial so the residual's
+    # credible interval can narrow. Best-effort: the assessment still reads
+    # fine when the evidence turns out to carry no outcome.
+    calibration = _calibration_from_review(rec, art, review, reviewer)
     db.refresh(rec)
     return {
         "assessment_id": rec.id,
@@ -2617,10 +2641,58 @@ def review_assurance_evidence(assessment_id: int, artifact_id: int,
         "reviewer": reviewer,
         "evidence_confidence": getattr(rec, "evidence_confidence", None),
         "impact": impact,
+        "calibration": calibration,
         "note": ("The stored residual is unchanged: the stored assurance pass "
                  "is the record of what was true when it was scored. The next "
                  "assessment reflects this review."),
     }
+
+
+def _calibration_from_review(rec, art, review: str, reviewer: str) -> dict | None:
+    """Turn an accepted evidence review into a control-efficacy trial, if any.
+
+    Only accepted, primary, adversarial-test evidence can move efficacy -- a
+    vendor doc or a press mention proves a control *exists*, not that it works.
+    The artifact text is read for an explicit outcome ("blocked" vs
+    "bypassed"); if it asserts none, or asserts both, nothing is recorded and
+    the return says why, rather than inventing a measurement.
+    """
+    if review != "accepted":
+        return None
+    from . import assurance as _a
+    from . import security as _sec
+    if not _a.artifact_provenance(art).get("is_primary"):
+        return None
+    blob = " ".join(str(x or "") for x in (
+        getattr(art, "title", ""), getattr(art, "description", ""),
+        getattr(art, "content", "")))
+    if not _a.adversarial_test_evidenced([art]):
+        return None
+    outcome = _sec.efficacy_outcome_from_text(blob)
+    if outcome is None:
+        return {"recorded": False,
+                "reason": "Evidence records no single attack outcome "
+                          "(or asserts both), so no efficacy trial was recorded."}
+    # Which controls does this test exercise? The acceptance log is the
+    # declared set for this assessment; the test is evidence about all of
+    # them, so record a trial against each. Coarse but honest -- and it never
+    # invents a value the text did not state.
+    try:
+        ctl_doc = json.loads(getattr(rec, "controls_json", None) or "{}") or {}
+    except Exception:
+        ctl_doc = {}
+    controls = list(ctl_doc.get("active_controls") or [])
+    if not controls:
+        return {"recorded": False,
+                "reason": "No declared controls to attribute this evidence to."}
+    for cid in controls:
+        _sec.record_efficacy_trial(
+            cid, held=(outcome == "held"),
+            source=f"evidence #{art.id} ({getattr(art, 'artifact_type', '')})",
+            note=f"accepted by {reviewer}")
+    return {"recorded": True, "outcome": outcome, "controls": controls,
+            "note": "Recorded as an attack trial; repeated outcomes are what "
+                    "narrow the credible interval."}
 
 
 def _evidence_review_impact(art: Artifact, ens: dict) -> dict:
@@ -3619,6 +3691,47 @@ def get_security_markdown(assessment_id: int, db: Session = Depends(get_db)):
     if not rec:
         raise HTTPException(404, "Assessment not found")
     return PlainTextResponse(rec.markdown, media_type="text/markdown")
+
+
+@app.get("/api/security/assessments/{assessment_id}/report")
+def get_research_report(assessment_id: int,
+                        db: Session = Depends(get_db)):
+    """A composable research report for one assessment.
+
+    Deliberately *not* the stored ``markdown``: that is the record of what the
+    engine believed at scoring time. This is assembled live from the measured
+    properties -- the credible band with its variance budget, the floor
+    diagnostics, the efficacy provenance and the DP accounting -- so the
+    limitations travel with the claims instead of living in a separate view.
+
+    Returns structured sections rather than a rendered string so the caller
+    chooses its own format; ``format=markdown`` renders one for convenience.
+    """
+    rec = _assessment_or_404(assessment_id, db)
+    scoring = _load_json_safe(getattr(rec, "scoring_json", None)) or {}
+    ev = _load_json_safe(getattr(rec, "evidence_json", None)) or {}
+    ctl = _load_json_safe(getattr(rec, "controls_json", None)) or {}
+    pack = {"version": getattr(rec, "threat_pack_version", None),
+            "fingerprint": getattr(rec, "threat_pack_fingerprint", None)}
+    analysis = _assessment_analysis(rec, scoring, ev, ctl, pack)
+    from . import benchmarks as B
+    report_md = B.render_research_report(
+        assessment=scoring, analysis=analysis, meta={
+            "id": rec.id, "product_name": rec.product_name,
+            "exposure": rec.exposure,
+            "assessment_path": scoring.get("assessment_path"),
+            "pack": pack,
+        })
+    sections = B.research_report_sections(
+        assessment=scoring, analysis=analysis, meta={
+            "id": rec.id, "product_name": rec.product_name,
+            "exposure": rec.exposure,
+            "assessment_path": scoring.get("assessment_path"),
+            "pack": pack,
+        })
+    return {"assessment_id": rec.id, "markdown": report_md,
+            "sections": sections,
+            "contract_violations": B.validate_scoring_contract(scoring)}
 
 
 @app.get("/api/security/assessments/{assessment_id}/pdf")

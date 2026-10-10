@@ -24,6 +24,7 @@ three, all as pure functions over data the rest of the app already has.
 Stdlib only, no app imports, no I/O.
 """
 import hashlib
+import math
 import re
 
 #: Default spend ceiling for one investigation. Chosen to allow a genuine
@@ -36,7 +37,11 @@ DEFAULT_BUDGET = {"max_spend": 60.0, "query_cost": 1.0, "novel_page_cost": 1.5}
 NGRAM = 8
 
 _URL_HOST = re.compile(r"^[a-z]+://([^/]+)", re.I)
-_WORD = re.compile(r"[a-z0-9]+")
+# Case-insensitive on purpose. A canary is very often machine-generated in caps
+# (ZKQ7XQ PROVINCEDIAMOND42 ...); a lowercase-only tokeniser silently drops
+# those words, and a short all-caps canary then produces *no* n-grams at all --
+# a detector that can never fire, reported as "non-member".
+_WORD = re.compile(r"[a-z0-9]+", re.I)
 
 
 def domain_of(url: str) -> str:
@@ -194,3 +199,340 @@ def verify_erasure(subject: str, run_id: str, *, salt: str,
     """Does a disclosed (subject, salt) open the stored commitment?"""
     return (erasure_commitment(subject, run_id, salt=salt)["commitment"]
             == (commitment or "").strip())
+
+
+# --------------------------------------------------------------------------
+# Differential-privacy accounting
+# --------------------------------------------------------------------------
+#
+# The spend account above is a budget, not a bound: it counts what was fetched
+# but makes no statement about how much an observer could learn. A privacy
+# reviewer asking "is this (epsilon, delta)-DP?" needs an actual accountant, so
+# this section provides one over the *sensitivity* of each query.
+#
+# The accounting is honest about what it can and cannot claim:
+#
+# * The engine adds no randomised noise to anything, so this is NOT a claim
+#   that the system is differentially private. It measures the *sensitivity*
+#   structure that would drive such a claim, and reports the composition bound
+#   that the observed reach would imply if noise at a chosen scale were added.
+# * Sensitivity is per-query and domain-weighted: touching one more host is a
+#   weaker leak than touching one more page of the same host, because a single
+#   host cannot correlate its own observations across subjects.
+#
+# The RDP accountant is the standard conversion (Canonne et al.), so a reader can
+# check it against the literature rather than taking the constant on trust.
+
+#: Default target delta for converting RDP to (epsilon, delta).
+DEFAULT_DELTA = 1e-5
+
+#: Sensitivity weight per distinct external domain reached. One host is one
+#: observer; several pages from one host is not several observers.
+DOMAIN_SENSITIVITY = 1.0
+#: Additional sensitivity per novel page beyond the first on a host.
+PAGE_SENSITIVITY = 0.25
+
+
+def _log_add(a: float, b: float) -> float:
+    """log(exp(a) + exp(b)) without the overflow."""
+    m = max(a, b)
+    return m + math.log(math.exp(a - m) + math.exp(b - m))
+
+
+def rdp_epsilon(orders: list[float], noise_multiplier: float) -> float:
+    """Renyi DP of order ``orders`` for the Gaussian mechanism.
+
+    ``epsilon(alpha) = alpha / (2 * sigma^2)``, the standard closed form for the
+    Gaussian mechanism without subsampling. Kept as a function of the order
+    because the conversion to (epsilon, delta) optimizes over orders rather than
+    picking one.
+    """
+    s2 = max(1e-12, float(noise_multiplier) ** 2)
+    return sum(a / (2.0 * s2) for a in orders)
+
+
+def epsilon_from_rdp(orders: list[float], noise_multiplier: float,
+                     delta: float = DEFAULT_DELTA) -> tuple[float, float]:
+    """Convert RDP guarantees to the best (epsilon, delta) at any order.
+
+    Returns ``(epsilon, optimal_order)``. This is the standard
+    ``eps = min_alpha (rdp_alpha + log(1/delta)) / (alpha - 1)`` conversion.
+    """
+    best_eps, best_alpha = float("inf"), 2.0
+    for a in orders:
+        if a <= 1.0:  # the (alpha-1) conversion is undefined at alpha=1
+            continue
+        eps = (rdp_epsilon([a], noise_multiplier) + math.log(1.0 / delta)) / (a - 1.0)
+        if eps < best_eps:
+            best_eps, best_alpha = eps, a
+    return round(best_eps, 4), best_alpha
+
+
+def dp_accounting(pages, *, queries: int = 0, noise_multiplier: float = 1.0,
+                  delta: float = DEFAULT_DELTA,
+                  seen_hashes=None) -> dict:
+    """(epsilon, delta) implied by the reach of one research run.
+
+    Composes per-domain sensitivities the way a budget composes -- but by
+    composition, not by addition, which is the difference the spend counter
+    cannot express. Returns the composed bound plus the per-domain breakdown, so
+    a reviewer can see *which* hosts drove the number.
+
+    ``noise_multiplier`` is the sigma a differentially private mechanism would
+    use; the engine currently applies no noise, so this reports what the bound
+    *would* be. ``mechanism`` names that explicitly so the number is never
+    quoted as a guarantee the system does not make.
+    """
+    cfg_seen = set(seen_hashes or [])
+    ext = [p for p in (pages or []) if _is_external(p.get("url", ""))]
+    by_domain: dict[str, int] = {}
+    for p in ext:
+        d = domain_of(p.get("url", ""))
+        if not d:
+            continue
+        by_domain[d] = by_domain.get(d, 0) + (0 if _digest(
+            p.get("text", "")) in cfg_seen else 1)
+
+    # Per-domain sensitivity: each distinct observer costs its own unit, plus a
+    # marginal cost per additional novel page from the same observer.
+    sens = sum(DOMAIN_SENSITIVITY + PAGE_SENSITIVITY * (n - 1)
+               for n in by_domain.values())
+    # A query touches the search path, which sees the subject; charge it once.
+    total_sensitivity = sens + (DOMAIN_SENSITIVITY if queries else 0.0)
+
+    orders = [a / 2.0 for a in range(4, 129)]  # 2.0 .. 64.0; alpha>1 only
+    # The composed epsilon for a sensitivity-S query is S times the unit bound.
+    unit_eps, alpha = epsilon_from_rdp(orders, noise_multiplier, delta)
+    eps = unit_eps * total_sensitivity
+    return {
+        "epsilon": round(eps, 4),
+        "delta": delta,
+        "optimal_order": alpha,
+        "noise_multiplier": noise_multiplier,
+        "sensitivity": round(total_sensitivity, 4),
+        "per_domain": [{"domain": d, "novel_pages": n,
+                        "sensitivity": round(
+                            DOMAIN_SENSITIVITY + PAGE_SENSITIVITY * (n - 1), 4)}
+                       for d, n in sorted(by_domain.items())],
+        "distinct_domains": len(by_domain),
+        "queries": queries,
+        "mechanism": "accounted-not-enforced",
+        "note": ("The engine adds no noise, so this is NOT a differential-"
+                 "privacy guarantee. It is the composed sensitivity structure "
+                 "that such a guarantee would have to be calibrated to. To "
+                 "claim (epsilon, delta)-DP, add a noise mechanism at the "
+                 "stated multiplier and report this number alongside it."),
+    }
+
+
+# --------------------------------------------------------------------------
+# Domain-distinct spend
+# --------------------------------------------------------------------------
+
+
+def domain_spend(pages, *, queries: int = 0, budget: dict | None = None,
+                 seen_hashes=None) -> dict:
+    """Spend weighted by *distinct observers*, not raw fetches.
+
+    Reaching three hosts once each is a wider exposure than fetching ten pages
+    from one host, because a single host cannot correlate its own observations
+    while three can. The first novel page on a host costs full price; further
+    pages from the same host are discounted, which is the concavity the
+    query-counter budget lacks.
+
+    Returns the concave spend alongside the linear one so a caller can show
+    both: the linear number is what the existing budget charges, the concave is
+    what the exposure actually is.
+    """
+    cfg = {**DEFAULT_BUDGET, **(budget or {})}
+    seen = set(seen_hashes or [])
+    ext = [p for p in (pages or []) if _is_external(p.get("url", ""))]
+    by_domain: dict[str, int] = {}
+    for p in ext:
+        d = domain_of(p.get("url", ""))
+        if not d:
+            continue
+        if _digest(p.get("text", "")) not in seen:
+            by_domain[d] = by_domain.get(d, 0) + 1
+
+    concave = 0.0
+    for n in by_domain.values():
+        first = cfg["novel_page_cost"]
+        rest = cfg["novel_page_cost"] * 0.4  # same observer, correlated views
+        concave += first + rest * (n - 1)
+    concave += queries * cfg["query_cost"]
+
+    linear = queries * cfg["query_cost"] + sum(by_domain.values()) * \
+        cfg["novel_page_cost"]
+    return {
+        "concave_spend": round(concave, 2),
+        "linear_spend": round(linear, 2),
+        "spread": round(linear - concave, 2),
+        "per_domain": [{"domain": d, "novel_pages": n} for d, n in
+                       sorted(by_domain.items())],
+        "distinct_domains": len(by_domain),
+        "note": ("Concave spend discounts repeat views from an observer you "
+                 "already reached. A non-zero spread means raw fetch count "
+                 "overstates the exposure."),
+    }
+
+
+# --------------------------------------------------------------------------
+# Detector operating characteristics
+# --------------------------------------------------------------------------
+#
+# An 8-gram overlap detector is either useful or it is not, and "useful" is an
+# empirical question: at what threshold does it start flagging real extractions,
+# and how many innocent coincidences does it flag on the way? Without a measured
+# ROC, a single hit is being treated as proof of leakage when it may just be
+# boilerplate.
+#
+# The calibration set below is synthetic by construction, which is stated rather
+# than hidden: it measures the detector against *planted* positives and clean
+# negatives, which is the only way to get ground truth without a leak catalogue.
+# It bounds the detector's behaviour; it does not certify it.
+
+
+def _roc_points(scores: list[float], labels: list[bool],
+                thresholds: list[float]) -> list[dict]:
+    """TPR/FPR at each threshold (positive = true extraction)."""
+    pos = sum(labels)
+    neg = len(labels) - pos
+    out = []
+    for t in thresholds:
+        pairs = list(zip(scores, labels, strict=False))
+        tp = sum(1 for s, lab in pairs if lab and s >= t)
+        fp = sum(1 for s, lab in pairs if not lab and s >= t)
+        out.append({
+            "threshold": round(t, 3),
+            "tpr": round(tp / pos, 3) if pos else 0.0,
+            "fpr": round(fp / neg, 3) if neg else 0.0,
+            "precision": round(tp / (tp + fp), 3) if (tp + fp) else 0.0,
+            "tp": tp, "fp": fp,
+        })
+    return out
+
+
+def _auc(scores: list[float], labels: list[bool]) -> float:
+    """ROC AUC via the rank-sum identity (ties averaged)."""
+    pos = [s for s, lab in zip(scores, labels, strict=False) if lab]
+    neg = [s for s, lab in zip(scores, labels, strict=False) if not lab]
+    if not pos or not neg:
+        return 0.0
+    wins = 0.0
+    for p in pos:
+        for n in neg:
+            wins += 1.0 if p > n else (0.5 if p == n else 0.0)
+    return round(wins / (len(pos) * len(neg)), 4)
+
+
+def _extraction_score(artifact_text: str, output: str) -> float:
+    """Fraction of an artifact's distinctive N-grams present in one output."""
+    grams = _ngrams(artifact_text)
+    if not grams:
+        return 0.0
+    out = _ngrams(output)
+    return len(grams & out) / len(grams)
+
+
+def detector_roc(thresholds: list[float] | None = None) -> dict:
+    """Measure the extraction detector on a planted-positive calibration set.
+
+    Positives are artifacts reproduced verbatim in an output; negatives are the
+    same artifacts against unrelated outputs. Reports AUC and the TPR/FPR curve
+    so the operating point used by :func:`extraction_resistance` can be chosen
+    against numbers rather than intuition.
+    """
+    thresholds = thresholds or [0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.7, 0.9]
+    artifacts = [
+        "the vendor stores telemetry in the eu region for thirty days and "
+        "deletes it automatically afterwards",
+        "prompt retention defaults to zero days when the workspace is marked "
+        "as containing regulated personal data",
+        "agent tool calls execute inside a sandbox with no network route to "
+        "the host filesystem and read only the declared working directory",
+        "credentials are brokered at call time and never persisted to the "
+        "agent context window or the conversation transcript",
+        "classification is enforced before any model call renders output into "
+        "a connected asset record",
+    ]
+    # Unrelated outputs: no artifact's distinctive phrasing appears.
+    negatives = [
+        "the quarterly revenue increased by eleven percent year over year "
+        "driven mainly by the enterprise segment",
+        "we recommend reviewing the deployment guide before upgrading to the "
+        "latest release candidate",
+        "the documentation portal lists supported regions and their data "
+        "residency commitments for each plan tier",
+        "customer support tickets are triaged daily and escalated after the "
+        "acknowledged response window expires",
+        "the roadmap currently tracks three workstreams for the coming "
+        "quarter with owners assigned to each",
+    ]
+    scores, labels = [], []
+    for art, neg in zip(artifacts, negatives, strict=False):
+        # Positive: the artifact reproduced verbatim, and truncated to half
+        # (a partial leak is still a leak).
+        scores.append(_extraction_score(art, art))
+        labels.append(True)
+        scores.append(_extraction_score(art, art[: len(art) // 2]))
+        labels.append(True)
+        # Negative: a different artifact's output, plus the clean output.
+        other = artifacts[(artifacts.index(art) + 1) % len(artifacts)]
+        scores.append(_extraction_score(art, other))
+        labels.append(False)
+        scores.append(_extraction_score(art, neg))
+        labels.append(False)
+
+    curve = _roc_points(scores, labels, thresholds)
+    # The operating point the engine actually uses (severity >= 0.4 is "high").
+    operating = min(curve, key=lambda p: abs(p["threshold"] - 0.4))
+    return {
+        "n_positive": sum(labels),
+        "n_negative": len(labels) - sum(labels),
+        "auc": _auc(scores, labels),
+        "curve": curve,
+        "operating_point": operating,
+        "calibration": "synthetic planted positives",
+        "note": ("Bounds the detector against planted reproductions and clean "
+                 "negatives. A high FPR means common phrasing trips it, and a "
+                 "single flag should be read as 'inspect this', not 'leaked'."),
+    }
+
+
+def membership_detector_roc() -> dict:
+    """ROC for the canary membership signal.
+
+    ``membership_inference`` returns member / non-member / inconclusive from an
+    8-gram overlap. This measures how often that is right against outputs with a
+    planted canary and outputs without one, so the signal's reliability is a
+    number rather than an assumption.
+    """
+    canary = ("ZKQ7XQ PROVINCEDIAMOND42 ledger marker alpha seven bravo "
+              "charlie delta echo")
+    member_outputs = [
+        f"... {canary} ... appears in section 3 of the corpus record ...",
+        f"corpus note: {canary} signed off by the steward",
+    ]
+    non_member_outputs = [
+        "the ledger record does not contain any such marker in this section",
+        "unrelated summary of the quarterly controls review",
+    ]
+    scores = []
+    labels = []
+    for o in member_outputs:
+        scores.append(1.0 if (_ngrams(canary) & _ngrams(o)) else 0.0)
+        labels.append(True)
+    for o in non_member_outputs:
+        scores.append(1.0 if (_ngrams(canary) & _ngrams(o)) else 0.0)
+        labels.append(False)
+    curve = _roc_points(scores, labels, [0.5])
+    return {
+        "auc": _auc(scores, labels),
+        "curve": curve,
+        "n": len(labels),
+        "calibration": "synthetic planted canary",
+        "note": ("The detector keys on an 8-gram, so a distinctive planted "
+                 "canary is found reliably; the failure mode is a canary "
+                 "that is too short or too common, not a missed overlap."),
+    }

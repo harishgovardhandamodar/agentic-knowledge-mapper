@@ -965,6 +965,29 @@ def grounding_cases() -> list[dict[str, Any]]:
          "quote": "the encryption keys live in a KMS vault", "source": source,
          "entail_min": 0.6,
          "expect": {"verdict": "supported", "verified_by": "entailment"}},
+        # Premise addition: every content word of the source is present, but the
+        # claim smuggles in a causal step the source never licensed. Pure term
+        # overlap scores this as well supported, which is why it is pinned.
+        {"name": "ground-premise-addition-causal",
+         "quote": ("retains API prompts for 30 days before deletion, "
+                   "therefore the KMS vault can read them"),
+         "source": source,
+         "expect": {"reason": "premise_addition"}},
+        {"name": "ground-premise-addition-modal-upgrade",
+         "quote": "the service must retain API prompts for 30 days",
+         "source": source,
+         "expect": {"reason": "premise_addition"}},
+        {"name": "ground-premise-addition-absolute",
+         "quote": "the service never retains API prompts",
+         "source": source,
+         "expect": {"reason": "negation_flip"}},
+        # A source that genuinely asserts the stronger claim must NOT be
+        # penalised: the detector checks the source, not a keyword list.
+        {"name": "ground-absolute-in-source-is-allowed",
+         "quote": "the service never retains API prompts",
+         "source": "The service never retains API prompts; they are discarded "
+                   "at the edge.",
+         "expect": {"verdict": "supported", "reason": "verbatim"}},
     ]
 
 
@@ -1162,7 +1185,108 @@ def engine_invariants() -> list[dict[str, Any]]:
                                               "applicability_weights",
                                               "aggregation_weights")),
                 "detail": {"named": len(unq)}})
+
+    # Grounding must name *which* failure mode, not just that it failed. A
+    # confusion matrix over the labelled fixture set is the empirical
+    # substrate: it says which reason is being confused for which, with
+    # numbers, instead of a boolean.
+    cm = B.grounding_confusion_matrix(_grounding_labels())
+    out.append({"name": "grounding-reasons-are-distinguishable",
+                "ok": cm["macro_f1"] >= 0.7,
+                "detail": {"accuracy": cm["accuracy"],
+                           "macro_f1": cm["macro_f1"],
+                           "weakest": min(cm["per_class"].items(),
+                                          key=lambda kv: kv[1]["f1"])[0]
+                           if cm["per_class"] else None}})
+
+    # Kappa is prevalence-sensitive and the L/I marginals are heavily skewed,
+    # so alpha/AC1 must be reported beside it. This pins that they are present
+    # and sane rather than that they exceed some threshold -- agreement depends
+    # on the raters, not on the statistics.
+    rater_rows = [("low", "low"), ("low", "low"), ("high", "high"),
+                  ("high", "high"), ("medium", "low"), ("medium", "medium")]
+    inter = B.inter_rater([({"likelihood": a, "impact": a},
+                            {"likelihood": b, "impact": b})
+                           for a, b in rater_rows])
+    _scale = inter.get("likelihood") or {}
+    out.append({"name": "prevalence-corrected-agreement-reported",
+                "ok": "krippendorff_alpha" in _scale and "gwet_ac1" in _scale,
+                "detail": {k: _scale[k] for k in
+                           ("kappa", "krippendorff_alpha", "gwet_ac1")
+                           if k in _scale}})
+
+    # Sensitivity: how much of the headline is each modelling choice?
+    inh_list = _inherent("confidential_data")
+    abl = B.ablation_report(inh_list, ["C01", "C02"])
+    out.append({"name": "ablation-reports-model-sensitivity",
+                "ok": abl["max_abs_delta"] >= 0 and "fragile" in abl,
+                "detail": {"base": abl["base_residual_pct"],
+                           "max_abs_delta": abl["max_abs_delta"],
+                           "fragile": abl["fragile"]}})
+
+    # The DP accounting must never be quotable as a guarantee: the engine adds
+    # no noise, so the number is a sensitivity structure, not (epsilon, delta)
+    # protection. An invariant so a future edit cannot quietly drop the caveat.
+    dp = P.dp_accounting([{"url": "https://a.test/x", "text": "t"}],
+                         queries=1)
+    out.append({"name": "dp-accounting-is-not-a-guarantee",
+                "ok": dp["mechanism"] == "accounted-not-enforced"
+                and "NOT a differential-privacy guarantee" in dp["note"],
+                "detail": {"mechanism": dp["mechanism"],
+                           "epsilon": dp["epsilon"]}})
+
+    # Observers, not fetches, drive the exposure bound: five pages on one host
+    # is a smaller exposure than one page on five.
+    dp_one = P.dp_accounting([{"url": f"https://a.test/{i}", "text": str(i)}
+                              for i in range(5)])
+    dp_many = P.dp_accounting([{"url": f"https://h{i}.test/x", "text": str(i)}
+                               for i in range(5)])
+    out.append({"name": "dp-cost-tracks-observers-not-fetches",
+                "ok": dp_many["epsilon"] > dp_one["epsilon"],
+                "detail": {"one_host": dp_one["epsilon"],
+                           "five_hosts": dp_many["epsilon"]}})
+
+    # The leak detectors must discriminate: an undetectable canary is a silent
+    # false negative, the worst failure mode for a detector.
+    roc = P.detector_roc()
+    mroc = P.membership_detector_roc()
+    out.append({"name": "leak-detectors-discriminate",
+                "ok": roc["auc"] > 0.8 and mroc["auc"] > 0.8,
+                "detail": {"extraction_auc": roc["auc"],
+                           "membership_auc": mroc["auc"]}})
+
+    # The scoring envelope is read by string from ~10 narrative consumers, so
+    # a renamed breakdown key would blank every panel instead of erroring.
+    # Pin the shape.
+    contract = B.validate_scoring_contract(
+        sec.score_assessment("confidential_data", inh_list,
+                             active_controls=["C01", "C02"]))
+    out.append({"name": "scoring-result-honours-its-contract",
+                "ok": not contract,
+                "detail": {"violations": contract}})
     return out
+
+
+def _grounding_labels() -> list[dict[str, Any]]:
+    """Labelled (expected, predicted) pairs for the grounding confusion matrix.
+
+    Derived from the regression cases themselves so the matrix and the pass/fail
+    suite can never describe different classifiers -- if a case drifts, both
+    views drift together rather than one silently going stale.
+    """
+    from . import grounding as G
+    rows: list[dict[str, Any]] = []
+    for case in grounding_cases():
+        exp = case["expect"].get("reason")
+        if exp is None:
+            continue
+        r = G.verify_grounding(
+            case["quote"], [{"source": "s1", "quote": case["quote"]}],
+            {"s1": case["source"]}, entail_min=case.get("entail_min"))
+        actual = (r["kept"][0]["verified_by"] if r["kept"]
+                  else (r["dropped"][0]["reason"] if r["dropped"] else None))
+        rows.append({"expected": exp, "predicted": actual})
+    return rows
 
 
 def _tampered_verifies(R, m):

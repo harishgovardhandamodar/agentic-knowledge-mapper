@@ -526,6 +526,12 @@ def control_evidence(cid: str) -> dict[str, Any]:
         "source": (observations[-1].get("source") if observations
                    else base["source"]),
         "n_observations": n,
+        # An observation is either a held or breached attack trial. Both count;
+        # the ratio is what the posterior uses, so a run of breached trials
+        # pulls the mean down rather than being quietly discarded.
+        "n_held": sum(1 for o in observations if o.get("efficacy", 0) >= 0.5),
+        "n_breached": sum(
+            1 for o in observations if o.get("efficacy", 1) < 0.5),
         # Beta concentration: the prior keeps its weight and each observation
         # adds one. At n=0 this is the declared unvalidated prior; at n>=1 it
         # widens with the evidence, which is what :mod:`uncertainty` turns into
@@ -546,6 +552,11 @@ def record_efficacy_observation(cid: str, efficacy: float, *,
     interval accordingly. In-memory by design -- observations belong to the
     assessment run that produced them, and are persisted with it rather than
     mutating a global registry across unrelated assessments.
+
+    Prefer :func:`record_efficacy_trial` where the evidence is an observed
+    attack outcome: a real trial is a Bernoulli observation, and passing a
+    hand-chosen float here would let a reviewer assert precision the evidence
+    does not contain.
     """
     cid = str(cid or "").strip().upper()
     try:
@@ -557,6 +568,63 @@ def record_efficacy_observation(cid: str, efficacy: float, *,
     EFFICACY_OBSERVATIONS.setdefault(cid, []).append(
         {"efficacy": round(eff, 4), "source": source, "note": note})
     return control_evidence(cid)
+
+
+def record_efficacy_trial(cid: str, *, held: bool, source: str,
+                          note: str = "") -> dict[str, Any]:
+    """Record one observed attack outcome against a control.
+
+    An adversarial test is a Bernoulli trial: the attack the control claims to
+    stop was actually run, and it either held or it did not. That is the
+    natural scale for efficacy -- "how often does this control do what it says"
+    -- so the observation is recorded as 1.0/0.0 and the posterior is pulled by
+    the observation count rather than toward an invented magnitude.
+
+    The consequence is the honest one: a single successful test moves the mean
+    slightly and barely narrows the interval, because one trial cannot support
+    a tight claim about a 0.70 prior. Tightening the band requires *repeated*
+    outcomes, which is exactly what a research-grade tool should demand.
+    """
+    cid = str(cid or "").strip().upper()
+    EFFICACY_OBSERVATIONS.setdefault(cid, []).append(
+        {"efficacy": 1.0 if held else 0.0, "source": source,
+         "note": note, "trial": True})
+    return control_evidence(cid)
+
+
+#: Vocabulary that turns a written artifact into an observed attack outcome.
+#: Deliberately narrow: a test that only says "we have an egress allowlist"
+#: establishes presence, not that it ever blocked anything, and conflating the
+#: two is how an unvalidated prior becomes a false measurement.
+_HELD_TERMS = (
+    "blocked", "prevented", "denied", "contained", "no exfiltration",
+    "attack failed", "mitigated", "was refused", "rejected the", "neutralised",
+    "neutralized", "stopped the attack",
+)
+_BREACHED_TERMS = (
+    "bypassed", "exfiltrated", "attack succeeded", "got through", "not blocked",
+    "leaked the", "breached the", "succeeded in", "got around",
+)
+
+
+def efficacy_outcome_from_text(blob: str) -> str | None:
+    """Read an artifact's text as an observed control outcome.
+
+    Returns ``"held"``, ``"breached"``, or ``None``. ``None`` covers both "no
+    outcome recorded" and "the text asserts both" — an artifact claiming the
+    attack was blocked *and* that it got through is ambiguous, and resolving
+    that ambiguity by guessing is how a measurement becomes a fiction.
+    """
+    low = f" {blob or ''}".lower()
+    held = any(t in low for t in _HELD_TERMS)
+    breached = any(t in low for t in _BREACHED_TERMS)
+    if held and breached:
+        return None
+    if held:
+        return "held"
+    if breached:
+        return "breached"
+    return None
 
 
 def efficacy_evidence_summary(active: Iterable[str]) -> dict[str, Any]:
@@ -578,6 +646,8 @@ def efficacy_evidence_summary(active: Iterable[str]) -> dict[str, Any]:
         "validated_controls": validated,
         "unvalidated_controls": unvalidated,
         "all_validated": bool(records) and not unvalidated,
+        "n_held_trials": sum(r.get("n_held", 0) for r in records),
+        "n_breached_trials": sum(r.get("n_breached", 0) for r in records),
         "widest_concentration": weakest["concentration"] if weakest else None,
         "widest_control": weakest["control_id"] if weakest else None,
         "basis_note": ("Efficacy values are analyst priors until observations "

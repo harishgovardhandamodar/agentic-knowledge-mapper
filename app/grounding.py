@@ -232,7 +232,68 @@ def entail(text: str, quote: str) -> dict:
         "numbers": "swap" if missing else "match",
         "shared_terms": sorted(shared)[:12],
         "missing_numbers": missing,
+        "premise_added": _premise_addition(quote, text, qt, t_neg),
     }
+
+
+#: Claims of causation, obligation and quantification that a source must state
+#: for the claim to be entailed by it. A claim that keeps every content word of
+#: its source but slips in "therefore", "guarantees", "always" or a bare causal
+#: connective is the most common real hallucination, and term overlap scores it
+#: as well supported because every term really is present.
+_MODAL_OVERREACH = {
+    "guarantees", "guaranteed", "always", "never", "eliminates", "eliminate",
+    "removes", "prevent", "prevents", "impossible", "cannot", "all", "every",
+}
+_CAUSAL_MARKERS = {
+    "therefore", "thus", "hence", "consequently", "because", "causes",
+    "caused", "leads", "results", "so",
+}
+_SCOPE_UPGRADE = {
+    "may": "must", "might": "will", "can": "will", "some": "all",
+    "often": "always", "usually": "always", "likely": "certain",
+}
+
+
+def _premise_addition(quote: str, text: str, qt: list[str],
+                      t_neg: bool) -> bool:
+    """True when the quote asserts more than the source licenses.
+
+    Three signals, each a way a claim can smuggle in an unlicensed step:
+
+    * a causal connective the source never used;
+    * a stronger quantifier or modal than the source's (may -> must);
+    * an absolute ("guarantees", "never") where the source hedged.
+
+    Deliberately conservative: this is a *flag* for a human or a judge model to
+    weigh, not an automatic rejection. A source that genuinely says "guarantees"
+    must not be dropped for saying it, so every marker is checked against the
+    source text before firing.
+    """
+    qset = set(qt)
+    tset = set(_tokens(text))
+    q_low = f" {quote or ''}".lower()
+
+    # Causal connective present in the claim, absent from the source.
+    if any(m in q_low for m in _CAUSAL_MARKERS) and not (
+            any(m in f" {text or ''}".lower() for m in _CAUSAL_MARKERS)):
+        return True
+
+    # A modal/quantifier upgraded beyond what the source actually said.
+    for weaker, stronger in _SCOPE_UPGRADE.items():
+        if stronger in qset and weaker not in tset and stronger in qset:
+            return True
+
+    # An absolute claim where the source only hedged.
+    if any(a in qset for a in _MODAL_OVERREACH) and not (
+            any(a in tset for a in _MODAL_OVERREACH)):
+        return True
+
+    # A negation the source never expressed is the contrapositive of a flip.
+    q_neg = any(w in _NEGATIONS for w in qt)
+    if q_neg and not t_neg:
+        return True
+    return False
 
 
 def explain_drop(text: str, quote: str) -> tuple[str, dict]:
@@ -247,6 +308,11 @@ def explain_drop(text: str, quote: str) -> tuple[str, dict]:
         return "number_swap", e
     if e["polarity"] == "flip" and e["support"] >= 0.5:
         return "negation_flip", e
+    # An unlicensed causal step is a worse failure than a paraphrase: the claim
+    # is wrong in a way the reader is least likely to notice, because every
+    # content word of the source is present.
+    if e.get("premise_added") and e["support"] >= 0.6:
+        return "premise_addition", e
     if e["support"] >= 0.6:
         return "paraphrase", e
     return "not_found_in_source", e
@@ -369,7 +435,7 @@ def verify_grounding(claim_text: str, citations, sources,
         reason, e = explain_drop(body, quote)
         if entail_min is not None and reason in ("paraphrase", "negation_flip") \
                 and e["polarity"] != "flip" and e["numbers"] == "match" \
-                and e["support"] >= entail_min:
+                and e["support"] >= entail_min and not e.get("premise_added"):
             kept.append({"source": key, "quote": quote[:QUOTE_STORE_CHARS],
                          "verified": True, "verified_by": "entailment",
                          "support": e["support"],
