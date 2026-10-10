@@ -11,15 +11,16 @@ import tempfile
 import unittest
 from contextlib import redirect_stderr
 
-
 # Pin the database before app.database is imported: a module that omits
 # this can inherit data/akm.db and write test rows into the live store.
 os.environ["AKM_DATABASE_URL"] = os.environ.get("AKM_TEST_DB") or (
     "sqlite:///" + os.path.join(tempfile.mkdtemp(prefix="akm-obs-"), "test.db"))
 
-from app import database  # noqa: E402
+from app import (
+    database,  # noqa: E402
+    obs,  # noqa: E402
+)
 from app import ledger as L  # noqa: E402
-from app import obs  # noqa: E402
 
 database.init_db()
 
@@ -112,6 +113,36 @@ class TestLog(unittest.TestCase):
             self.assertIn("serious", out)
         finally:
             obs._MIN_LEVEL = original
+
+
+class TestTimed(unittest.TestCase):
+    def _capture(self, fn):
+        buf = io.StringIO()
+        with redirect_stderr(buf):
+            fn()
+        return buf.getvalue()
+
+    def test_span_logs_duration_and_trace(self):
+        def go():
+            with obs.trace_scope("t-span"):
+                with obs.timed("db.query", table="runs"):
+                    pass
+        out = self._capture(go)
+        self.assertIn("db.query", out)
+        self.assertIn("elapsed_ms=", out)
+        self.assertIn("trace=t-span", out)
+        self.assertIn("table=runs", out)
+        self.assertIn("ok=True", out)
+
+    def test_failing_span_logs_ok_false_and_reraises(self):
+        def go():
+            with obs.timed("db.fail"):
+                raise RuntimeError("boom")
+        buf = io.StringIO()
+        with self.assertRaises(RuntimeError):
+            with redirect_stderr(buf):
+                go()
+        self.assertIn("ok=False", buf.getvalue())
 
 
 class TestTraceReachesTheLedger(unittest.TestCase):

@@ -30,7 +30,6 @@ import os
 import sys
 import time
 import uuid
-from typing import Optional
 
 #: Set to "json" for one JSON object per line. Anything else keeps the
 #: human-readable default, which is what you want when reading `docker logs`.
@@ -48,7 +47,7 @@ if _MIN_LEVEL not in _LEVELS:
     _MIN_LEVEL = "info"
 
 
-def new_trace(seed: Optional[str] = None) -> str:
+def new_trace(seed: str | None = None) -> str:
     """A trace id. ``seed`` makes it deterministic when the caller already has a
     natural identity for the work (a session id, an A2A task id)."""
     if seed:
@@ -63,11 +62,11 @@ def _slug(value: str) -> str:
     return out.strip("-")[:40] or "root"
 
 
-def current_trace() -> Optional[str]:
+def current_trace() -> str | None:
     return _TRACE.get()
 
 
-def _coerce(trace_id) -> Optional[str]:
+def _coerce(trace_id) -> str | None:
     """A trace id is a bounded string or nothing.
 
     A non-string that reaches a trace column does not degrade -- SQLite raises
@@ -84,7 +83,7 @@ def _coerce(trace_id) -> Optional[str]:
     return trace_id[:64] or None
 
 
-def set_trace(trace_id: Optional[str]) -> contextvars.Token:
+def set_trace(trace_id: str | None) -> contextvars.Token:
     return _TRACE.set(_coerce(trace_id))
 
 
@@ -96,7 +95,7 @@ def reset_trace(token: contextvars.Token) -> None:
 
 
 @contextlib.contextmanager
-def trace_scope(trace_id: Optional[str]):
+def trace_scope(trace_id: str | None):
     """Bind a trace for the duration of a block, restoring the previous one.
 
     Restores rather than clears, so nesting a session scope inside a task scope
@@ -146,3 +145,25 @@ def _fmt(value) -> str:
     if any(c.isspace() for c in s) or '"' in s:
         return json.dumps(s, default=str)
     return s
+
+
+@contextlib.contextmanager
+def timed(event: str, level: str = "info", **fields):
+    """Time a block and log its duration as one line under the current trace.
+
+    Answers "which subsystem was slow" without a metrics backend: every span
+    emits a single ``elapsed_ms`` log line carrying the trace, so the slow step
+    in a user action is a sort away rather than a guess. Re-raises whatever the
+    block raised -- a timer that swallowed an exception would be worse than no
+    timer -- but logs ``ok=false`` for the failing span first.
+    """
+    start = time.perf_counter()
+    failed = False
+    try:
+        yield
+    except BaseException:
+        failed = True
+        raise
+    finally:
+        elapsed = round((time.perf_counter() - start) * 1000.0, 1)
+        log(event, level, elapsed_ms=elapsed, ok=(not failed), **fields)

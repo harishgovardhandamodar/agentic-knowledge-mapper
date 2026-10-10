@@ -934,6 +934,244 @@ def provider_invariants() -> list[dict[str, Any]]:
     return out
 
 
+def grounding_cases() -> list[dict[str, Any]]:
+    """The hallucination regression suite. Deterministic, no model, no network.
+
+    Each case is a failure mode that a substring gate alone cannot name: an
+    invented quote, a negation flip, a number swap, and an honest paraphrase.
+    Pinning the *reason* -- not just the boolean -- is what stops a future edit
+    from collapsing all four back into one opaque "not found" and quietly
+    losing the distinction the engine depends on.
+    """
+    source = ("The service retains API prompts for 30 days before deletion, "
+              "and the KMS vault holds the encryption keys.")
+    return [
+        {"name": "ground-verbatim-block-quote",
+         "quote": "retains API prompts for 30 days", "source": source,
+         "expect": {"verdict": "supported", "reason": "verbatim"}},
+        {"name": "ground-invented-quote",
+         "quote": "adversaries extract memorized samples", "source": source,
+         "expect": {"verdict": "unverified", "reason": "not_found_in_source"}},
+        {"name": "ground-negation-flip",
+         "quote": "The service does not retain API prompts", "source": source,
+         "expect": {"reason": "negation_flip"}},
+        {"name": "ground-number-swap",
+         "quote": "retains API prompts for 90 days", "source": source,
+         "expect": {"reason": "number_swap"}},
+        {"name": "ground-paraphrase-not-verbatim",
+         "quote": "the encryption keys live in a KMS vault", "source": source,
+         "expect": {"verdict": "unverified", "reason": "paraphrase"}},
+        {"name": "ground-paraphrase-accepted-with-entailment",
+         "quote": "the encryption keys live in a KMS vault", "source": source,
+         "entail_min": 0.6,
+         "expect": {"verdict": "supported", "verified_by": "entailment"}},
+    ]
+
+
+def _run_grounding_case(case: dict[str, Any]) -> dict[str, Any]:
+    from . import grounding as G
+    exp = case["expect"]
+    failures = []
+    r = G.verify_grounding(
+        case["quote"], [{"source": "s1", "quote": case["quote"]}],
+        {"s1": case["source"]}, entail_min=case.get("entail_min"))
+    if "verdict" in exp and r["verdict"] != exp["verdict"]:
+        failures.append({"field": "verdict", "expected": exp["verdict"],
+                         "actual": r["verdict"]})
+    if "reason" in exp:
+        reason = r["kept"][0]["verified_by"] if r["kept"] else \
+            (r["dropped"][0]["reason"] if r["dropped"] else None)
+        if reason != exp["reason"]:
+            failures.append({"field": "reason", "expected": exp["reason"],
+                             "actual": reason})
+    if "verified_by" in exp:
+        actual = r["kept"][0]["verified_by"] if r["kept"] else None
+        if actual != exp["verified_by"]:
+            failures.append({"field": "verified_by",
+                             "expected": exp["verified_by"], "actual": actual})
+    return {"name": case["name"], "ok": not failures, "failures": failures,
+            "result": {"verdict": r["verdict"], "n_sources": r["n_sources"]}}
+
+
+def grounding_invariants() -> list[dict[str, Any]]:
+    """Properties the grounding gate must hold whatever the model emits."""
+    from . import claims as C
+    from . import grounding as G
+    out = []
+    source = "The vendor encrypts customer data at rest using managed keys."
+    # A verbatim quote is never rejected.
+    body = "The vendor encrypts customer data at rest using managed keys."
+    r = G.verify_grounding("c", [{"source": "s", "quote": body}], {"s": source})
+    out.append({"name": "verbatim-quote-always-supports",
+                "ok": r["verdict"] == "supported",
+                "detail": {"verdict": r["verdict"]}})
+    # More independent sources never lower calibrated confidence.
+    vals = [G.calibrated_confidence(n) for n in (0, 1, 2, 3, 5)]
+    out.append({"name": "confidence-monotone-in-sources",
+                "ok": all(a <= b for a, b in zip(vals, vals[1:],
+                                                strict=False)),
+                "detail": {"values": vals}})
+    # The free-text guard can only ever remove text, never add it.
+    doc = ("# Report\n"
+           "The vendor encrypts customer data at rest using managed keys.\n"
+           "Adversaries extract memorized training samples from the endpoint.")
+    guarded = C.guard_free_text(doc, [{"id": "p", "text": source}])
+    out.append({"name": "guard-never-adds-text",
+                "ok": len(guarded["text"]) <= len(doc),
+                "detail": {"before": len(doc), "after": len(guarded["text"])}})
+    out.append({"name": "guard-drops-the-invented-sentence",
+                "ok": "Adversaries" not in guarded["text"],
+                "detail": {"kept": len(guarded["kept"]),
+                           "dropped": len(guarded["dropped"])}})
+    return out
+
+
+def engine_invariants() -> list[dict[str, Any]]:
+    """Structural properties of the newer analysis modules (WS3-WS7).
+
+    Kept as one block alongside the grounding invariants so a regression in the
+    uncertainty band, the privacy budget, the benchmark crosswalk or the
+    reproducibility manifest fails the same gate as everything else.
+    """
+    from . import benchmarks as B
+    from . import privacy as P
+    from . import repro as R
+    from . import uncertainty as U
+    out = []
+
+    # The credible band must contain the headline it is reported next to.
+    inherent = _inherent("confidential_data")
+    res = sec.score_assessment("confidential_data", inherent,
+                               active_controls=["C02", "C04"])
+    band = U.assessment_interval(res)
+    out.append({"name": "uncertainty-band-contains-headline",
+                "ok": band["headline_inside"],
+                "detail": {"headline": band["headline_pct"],
+                           "lower": band["lower_pct"],
+                           "upper": band["upper_pct"]}})
+
+    # A control can never raise the residual it is meant to lower.
+    before = U.residual_interval(0.6, [])["mean"]
+    after = U.residual_interval(0.6, [(0.8, U.DIRECT)])["mean"]
+    out.append({"name": "control-never-raises-residual",
+                "ok": after <= before,
+                "detail": {"before": before, "after": after}})
+
+    # Every threat in the catalogue resolves to an external benchmark.
+    cov = B.coverage([t[0] for t in sec._THREAT_CATALOG], kind="threat")
+    out.append({"name": "threat-catalogue-fully-benchmarked",
+                "ok": cov["fraction"] == 1.0,
+                "detail": {"unmapped": cov["unmapped"]}})
+
+    # A batch of perfectly correct, perfectly confident predictions is calibrated.
+    rel = B.reliability([(1.0, True)] * 8)
+    out.append({"name": "reliability-perfect-is-zero-error",
+                "ok": rel["brier"] == 0.0 and rel["ece"] == 0.0,
+                "detail": rel})
+
+    # A stored artifact reproduced verbatim by an output is caught.
+    leak = ("the vendor stores telemetry in the eu region for thirty days "
+            "and deletes it automatically afterwards")
+    ext = P.extraction_resistance([("A1", leak)], [leak])
+    out.append({"name": "privacy-flags-verbatim-extraction",
+                "ok": not ext["ok"] and ext["stats"]["high"] >= 1,
+                "detail": ext["stats"]})
+
+    # Exhausting the budget is a first-class state, not a silent overrun.
+    big = [{"url": f"https://d{i}.com/p", "text": f"text {i}"} for i in range(30)]
+    budget = P.privacy_budget(big, budget={"max_spend": 10.0})
+    out.append({"name": "privacy-budget-exhausts-loudly",
+                "ok": budget["exhausted"] and budget["advice"] == "refuse",
+                "detail": {"advice": budget["advice"],
+                           "remaining": budget["remaining"]}})
+
+    # An erasure commitment opens for the right subject and no one else.
+    commit = P.erasure_commitment("acme", "run-1", salt="s")["commitment"]
+    out.append({"name": "erasure-commitment-is-selectively-openable",
+                "ok": P.verify_erasure("acme", "run-1", salt="s",
+                                       commitment=commit)
+                and not P.verify_erasure("other", "run-1", salt="s",
+                                         commitment=commit),
+                "detail": {"commitment": commit[:12]}})
+
+    # The same inputs reproduce the same manifest fingerprint, and tampering
+    # is detected.
+    m = R.manifest(inputs={"source": "hello"}, seeds={"mc": 1729})
+    out.append({"name": "repro-manifest-is-deterministic",
+                "ok": m["fingerprint"]
+                == R.manifest(inputs={"source": "hello"},
+                              seeds={"mc": 1729})["fingerprint"],
+                "detail": {"fingerprint": m["fingerprint"]}})
+    out.append({"name": "repro-manifest-detects-tampering",
+                "ok": R.verify(m) and not _tampered_verifies(R, m),
+                "detail": {"fingerprint": m["fingerprint"]}})
+
+    # The residual score declares its own saturation. A model whose headline
+    # stops responding to controls must say so rather than presenting a
+    # static number as a measurement.
+    allc = [c["id"] for c in sec._CONTROL_CATALOG]
+    sat = sec.score_assessment("confidential_data", inherent,
+                               active_controls=allc)
+    fl = sat.get("floor") or {}
+    out.append({"name": "score-declares-floor-saturation",
+                "ok": bool(fl.get("floor_capped"))
+                and fl.get("controls_beyond_floor", 0) > 0
+                and sat.get("floor_capped") is True,
+                "detail": {"residual_pct": sat["residual_pct"],
+                           "beyond_floor": fl.get("controls_beyond_floor"),
+                           "effective": fl.get("controls_effective")}})
+
+    # Every efficacy the catalogue reports carries its provenance, and no
+    # unvalidated prior is presented as a measurement.
+    cat = sec.control_catalog()
+    out.append({"name": "control-efficacy-declares-provenance",
+                "ok": bool(cat)
+                and all(r.get("evidence", {}).get("basis") in sec.EFFICACY_BASIS
+                        for r in cat)
+                and all("efficacy_is_prior" in r for r in cat),
+                "detail": {"controls": len(cat)}})
+
+    # The band names what it does not cover, so an interval cannot be read as
+    # the total uncertainty of the assessment.
+    band = U.assessment_interval(sat, draws=400)
+    vb = band.get("variance_budget") or {}
+    unq = vb.get("unquantified") or {}
+    out.append({"name": "band-declares-unquantified-inputs",
+                "ok": bool(unq)
+                and "threat_catalogue_completeness" in unq
+                and "residual_floor" in unq
+                and vb.get("total_variance", 0) > 0,
+                "detail": {"unquantified": len(unq),
+                           "total_variance": vb.get("total_variance")}})
+
+    # An unvalidated control must not be reported with the confidence of a
+    # measured one: dropping to a tight prior has to narrow the band.
+    prov = band["upper_pct"] - band["lower_pct"]
+    optimistic_band = U.assessment_interval(
+        sat, draws=400,
+        evidence_by_control={cid: U.DIRECT for cid in allc})
+    optimistic = optimistic_band["upper_pct"] - optimistic_band["lower_pct"]
+    out.append({"name": "unvalidated-prior-widens-the-band",
+                "ok": prov > optimistic,
+                "detail": {"unvalidated": prov, "as_measured": optimistic}})
+
+    # Every input the deterministic engine holds fixed is named as such.
+    out.append({"name": "variance-budget-covers-fixed-inputs",
+                "ok": all(k in unq for k in ("threat_impact_values",
+                                              "likelihood_judgement",
+                                              "applicability_weights",
+                                              "aggregation_weights")),
+                "detail": {"named": len(unq)}})
+    return out
+
+
+def _tampered_verifies(R, m):
+    import copy
+    m2 = copy.deepcopy(m)
+    m2["seeds"]["mc"] = 999
+    return R.verify(m2)
+
+
 def run_eval() -> dict[str, Any]:
     """Run every case and invariant. ``ok`` is the gate."""
     results = [_run_case(c) for c in cases()]
@@ -952,10 +1190,17 @@ def run_eval() -> dict[str, Any]:
     pdp_invs = provider_invariants()
     failed_pdp = [r for r in pdp_results if not r["ok"]]
     failed_pdp_inv = [i for i in pdp_invs if not i["ok"]]
+    gr_results = [_run_grounding_case(c) for c in grounding_cases()]
+    gr_invs = grounding_invariants()
+    failed_gr = [r for r in gr_results if not r["ok"]]
+    failed_gr_inv = [i for i in gr_invs if not i["ok"]]
+    eng_invs = engine_invariants()
+    failed_eng_inv = [i for i in eng_invs if not i["ok"]]
     return {
         "ok": not failed and not failed_inv and not failed_model
         and not failed_model_inv and not failed_pf and not failed_pf_inv
-        and not failed_pdp and not failed_pdp_inv,
+        and not failed_pdp and not failed_pdp_inv
+        and not failed_gr and not failed_gr_inv and not failed_eng_inv,
         "pack": tp.pack_manifest(),
         "cases_run": len(results),
         "cases_failed": len(failed),
@@ -981,6 +1226,15 @@ def run_eval() -> dict[str, Any]:
         "provider_invariants_failed": len(failed_pdp_inv),
         "provider_cases": pdp_results,
         "provider_invariants": pdp_invs,
+        "grounding_cases_run": len(gr_results),
+        "grounding_cases_failed": len(failed_gr),
+        "grounding_invariants_run": len(gr_invs),
+        "grounding_invariants_failed": len(failed_gr_inv),
+        "grounding_cases": gr_results,
+        "grounding_invariants": gr_invs,
+        "engine_invariants_run": len(eng_invs),
+        "engine_invariants_failed": len(failed_eng_inv),
+        "engine_invariants": eng_invs,
         "failures": [{"case": r["name"], "why": r["failures"]} for r in failed]
                    + [{"invariant": i["name"], "detail": i["detail"]}
                       for i in failed_inv]
@@ -995,7 +1249,13 @@ def run_eval() -> dict[str, Any]:
                    + [{"provider_case": r["name"], "why": r["failures"]}
                       for r in failed_pdp]
                    + [{"provider_invariant": i["name"], "detail": i["detail"]}
-                      for i in failed_pdp_inv],
+                      for i in failed_pdp_inv]
+                   + [{"grounding_case": r["name"], "why": r["failures"]}
+                      for r in failed_gr]
+                   + [{"grounding_invariant": i["name"], "detail": i["detail"]}
+                       for i in failed_gr_inv]
+                   + [{"engine_invariant": i["name"], "detail": i["detail"]}
+                      for i in failed_eng_inv],
     }
 
 
@@ -1063,6 +1323,18 @@ def render(report: dict[str, Any]) -> str:
     for i in report.get("provider_invariants", []):
         mark = "ok  " if i["ok"] else "FAIL"
         lines.append(f"  [{mark}] provider invariant: {i['name']}")
+    for r in report.get("grounding_cases", []):
+        mark = "ok  " if r["ok"] else "FAIL"
+        lines.append(f"  [{mark}] grounding: {r['name']}")
+        for f in r["failures"]:
+            lines.append(f"         {f['field']}: expected {f['expected']}, "
+                         f"got {f['actual']}")
+    for i in report.get("grounding_invariants", []):
+        mark = "ok  " if i["ok"] else "FAIL"
+        lines.append(f"  [{mark}] grounding invariant: {i['name']}")
+    for i in report.get("engine_invariants", []):
+        mark = "ok  " if i["ok"] else "FAIL"
+        lines.append(f"  [{mark}] engine invariant: {i['name']}")
     lines.append(f"{'PASS' if report['ok'] else 'FAIL'}: "
                  f"{report['cases_run']} cases, {report['invariants_run']} "
                  f"invariants, {report.get('model_cases_run', 0)} model cases, "
@@ -1072,7 +1344,11 @@ def render(report: dict[str, Any]) -> str:
                  f"portfolio invariants, "
                  f"{report.get('provider_cases_run', 0)} provider cases, "
                  f"{report.get('provider_invariants_run', 0)} "
-                 f"provider invariants")
+                 f"provider invariants, "
+                 f"{report.get('grounding_cases_run', 0)} grounding cases, "
+                 f"{report.get('grounding_invariants_run', 0)} "
+                 f"grounding invariants, "
+                 f"{report.get('engine_invariants_run', 0)} engine invariants")
     return "\n".join(lines)
 
 

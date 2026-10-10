@@ -24,10 +24,9 @@ Two rules keep the signal honest:
 Stdlib + SQLAlchemy only, like the rest of the persistence layer.
 """
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from .models import QueryShapeYield
-from .database import SessionLocal
 
 #: Words carrying no signal about what a query is *asking for*. Stripping them
 #: is what turns "the 2023 alignment tax in practice" and "alignment tax
@@ -114,7 +113,7 @@ def record_yield(db, investigation_id: int, queries: list, *, found: int = 0,
                           for q in (queries or [])) if s]
     if not shapes:
         return []
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     share_f = float(found) / len(shapes)
     share_k = float(kept) / len(shapes)
     share_c = float(llm_calls) / len(shapes)
@@ -222,7 +221,8 @@ def suggest_queries(db, investigation_id: int, limit: int = 5) -> list:
         if pair in seen or pair in used:
             continue
         used.add(pair)
-        out.append({"shape": pair, "text": f"{terms[i]} {terms[i + 1]} {inv.title}"[:120]})
+        text = f"{terms[i]} {terms[i + 1]} {inv.title}"[:120]
+        out.append({"shape": pair, "text": text})
         if len(out) >= limit:
             break
     return out
@@ -235,3 +235,129 @@ def clear_yields(db, investigation_id: int) -> int:
          .delete(synchronize_session=False))
     db.commit()
     return n
+
+
+#: Rounds every observed shape is guaranteed before yield decides the rest. This
+#: is the difference between a ranking and a starvation: ``rank_queries`` only
+#: reorders, but a *budget* split can hand a barren shape zero rounds forever,
+#: and a shape that found nothing before is exactly the one a changed corpus can
+#: revive. One round is cheap; the discovery it protects is not.
+REVISIT_ROUNDS = 1
+
+#: Event thresholds for re-running an assessment. Deliberately few and coarse:
+#: a trigger that fires on noise trains the operator to ignore it.
+DEFAULT_TRIGGERS = {"drift": 0.35, "new_sources": 5, "max_age_days": 30}
+
+
+def allocate_rounds(stats, rounds: int, *, revisit: int = REVISIT_ROUNDS) -> list:
+    """Split a round budget across observed shapes in proportion to their yield.
+
+    ``stats`` is the output of :func:`shape_stats` (or any list of dicts with
+    ``shape`` and ``yield``). Every shape gets the ``revisit`` floor first, then
+    the remaining rounds are divided by yield using largest-remainder rounding,
+    so the split is exact -- the plan spends *exactly* ``rounds`` and never a
+    fractional round. This is what turns the recorded memory into an actual
+    decision instead of a sort order.
+    """
+    rows = list(stats or [])
+    n = len(rows)
+    if n == 0 or rounds <= 0:
+        return []
+    revisit = max(0, int(revisit))
+    floor = min(revisit, rounds // n)
+    alloc = [floor] * n
+    remaining = rounds - floor * n
+    if remaining > 0:
+        weights = [max(0.0, float(s.get("yield") or 0.0)) for s in rows]
+        total = sum(weights)
+        if total <= 0:
+            # Nothing has ever yielded: the floor plus an even split is the only
+            # defensible answer, and it keeps every shape alive to be observed.
+            weights = [1.0] * n
+            total = float(n)
+        raw = [remaining * w / total for w in weights]
+        alloc = [a + int(r) for a, r in zip(alloc, raw, strict=False)]
+        left = rounds - sum(alloc)
+        order = sorted(range(n), key=lambda i: (-(raw[i] - int(raw[i])), i))
+        for i in order[:left]:
+            alloc[i] += 1
+    out = [{"shape": rows[i]["shape"], "example": rows[i].get("example"),
+            "yield": round(float(rows[i].get("yield") or 0.0), 4),
+            "rounds": alloc[i]} for i in range(n)]
+    out.sort(key=lambda e: (-e["rounds"], e["shape"]))
+    return out
+
+
+def plan_rounds(db, investigation_id: int, rounds: int) -> dict:
+    """A concrete spend plan for the next ``rounds``, from recorded yield.
+
+    Returns the per-shape allocation plus the round split, so a caller can name
+    where the budget goes and why. When nothing has been recorded yet the plan is
+    empty and the caller keeps its default behaviour -- the planner advises, it
+    does not invent history.
+    """
+    stats = shape_stats(db, investigation_id)
+    alloc = allocate_rounds(stats, rounds)
+    return {
+        "rounds": rounds,
+        "allocated": sum(a["rounds"] for a in alloc),
+        "plan": alloc,
+        "unseen_shapes": max(0, rounds - sum(a["rounds"] for a in alloc)),
+    }
+
+
+def stale_shapes(stats, *, now: datetime, max_age_days: int = 30) -> list:
+    """Shapes not observed since ``max_age_days`` -- due for a re-probe.
+
+    Ageing is the counterweight to yield: a shape once barren may simply have
+    been asked before the corpus held anything. This surfaces those, oldest
+    first, without touching the live ranking.
+    """
+    out = []
+    for s in stats or []:
+        iso = s.get("last_seen_at")
+        if not iso:
+            continue
+        try:
+            last = datetime.fromisoformat(iso)
+        except ValueError:
+            continue
+        if last.tzinfo is None:
+            last = last.replace(tzinfo=UTC)
+        age = (now - last).total_seconds() / 86400.0
+        if age >= max_age_days:
+            out.append({"shape": s["shape"], "age_days": round(age, 1)})
+    out.sort(key=lambda e: -e["age_days"])
+    return out
+
+
+def reassessment_triggers(*, drift_score: float = 0.0, new_sources: int = 0,
+                          threat_pack_changed: bool = False,
+                          days_since_run: float | None = None,
+                          thresholds: dict | None = None) -> dict:
+    """Decide whether changed conditions warrant re-running an assessment.
+
+    An assessment is a snapshot, but the world it describes keeps moving: the
+    corpus drifts, new sources arrive, the threat pack gets a version. Re-running
+    on a timer is either wasteful or too late; re-running on an *event* is the
+    right trigger. Each firing reason is named so the re-run can say what
+    changed, and two independent reasons (or a threat-pack bump, which
+    invalidates the whole crosswalk) escalate urgency.
+    """
+    t = {**DEFAULT_TRIGGERS, **(thresholds or {})}
+    reasons = []
+    if drift_score >= t["drift"]:
+        reasons.append(f"corpus drift {drift_score:.2f} >= {t['drift']}")
+    if new_sources >= t["new_sources"]:
+        reasons.append(f"{new_sources} new sources >= {t['new_sources']}")
+    if threat_pack_changed:
+        reasons.append("threat pack version changed")
+    if days_since_run is not None and days_since_run >= t["max_age_days"]:
+        reasons.append(f"age {days_since_run:.0f}d >= {t['max_age_days']}d")
+    if threat_pack_changed or len(reasons) >= 2:
+        urgency = "high"
+    elif reasons:
+        urgency = "normal"
+    else:
+        urgency = "none"
+    return {"triggered": bool(reasons), "reasons": reasons, "urgency": urgency}

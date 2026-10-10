@@ -50,15 +50,15 @@ Status codes used on events
 import json
 import os
 import re
-import sys
 import threading
 import uuid
+from collections.abc import Callable, Iterable
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from hashlib import sha256
-from typing import Any, Iterable, Optional
+from typing import Any, Optional
 
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
@@ -66,8 +66,13 @@ from sqlalchemy.exc import IntegrityError
 from . import grounding as _grounding
 from . import obs
 from .database import SessionLocal
-from .ledger_models import (LedgerApproval, LedgerAuditDrop, LedgerClaim,
-                            LedgerEvent, LedgerRun)
+from .ledger_models import (
+    LedgerApproval,
+    LedgerAuditDrop,
+    LedgerClaim,
+    LedgerEvent,
+    LedgerRun,
+)
 
 GENESIS = "0" * 64
 
@@ -123,17 +128,17 @@ _SECRET_VALUE = re.compile(
 # ``(run_id, seq)`` unique constraint is the real guard and ``append`` retries.
 _LOCK = threading.RLock()
 
-_current_run: ContextVar[Optional[str]] = ContextVar("ledger_run", default=None)
+_current_run: ContextVar[str | None] = ContextVar("ledger_run", default=None)
 _current_mandate: ContextVar[Optional["Mandate"]] = ContextVar("ledger_mandate", default=None)
 # The sitting this run belongs to. Independent of _current_run so a human action
 # with no run of its own can still land on the session spine.
-_current_session: ContextVar[Optional[str]] = ContextVar("ledger_session", default=None)
+_current_session: ContextVar[str | None] = ContextVar("ledger_session", default=None)
 
 
 # ------------------------------------------------------------------ hashing --
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def canon(obj: Any) -> str:
@@ -147,7 +152,7 @@ def digest(obj: Any) -> str:
     return sha256(canon(obj).encode("utf-8")).hexdigest()
 
 
-def text_digest(text: Optional[str]) -> str:
+def text_digest(text: str | None) -> str:
     return sha256((text or "").encode("utf-8")).hexdigest()
 
 
@@ -185,11 +190,11 @@ def _payload(value: Any) -> Any:
     return value if CAPTURE_PAYLOADS else _redact(value)
 
 
-def _dumps(value: Any) -> Optional[str]:
+def _dumps(value: Any) -> str | None:
     return None if value is None else canon(value)
 
 
-def _loads(value: Optional[str], default: Any = None) -> Any:
+def _loads(value: str | None, default: Any = None) -> Any:
     if not value:
         return default
     try:
@@ -199,8 +204,8 @@ def _loads(value: Optional[str], default: Any = None) -> Any:
 
 
 def event_core(*, run_id: str, seq: int, ts: str, actor_type: str, actor: str,
-               kind: str, intent: Optional[str], verdict: Optional[str],
-               severity: Optional[str], data: Any, prev_hash: str) -> dict:
+               kind: str, intent: str | None, verdict: str | None,
+               severity: str | None, data: Any, prev_hash: str) -> dict:
     """The exact structure a row's hash is taken over."""
     return {
         "run_id": run_id, "seq": seq, "ts": ts, "actor_type": actor_type,
@@ -257,7 +262,7 @@ class Mandate:
     require_grounding: bool = False  # ungrounded claims become violations
 
     @classmethod
-    def from_dict(cls, raw: Optional[dict]) -> "Mandate":
+    def from_dict(cls, raw: dict | None) -> "Mandate":
         raw = raw or {}
         fields = {f for f in cls.__dataclass_fields__}  # noqa: F821
         return cls(**{k: v for k, v in raw.items() if k in fields})
@@ -280,9 +285,9 @@ class Mandate:
         return False
 
     def check(self, *, kind: str, actor: str, actor_type: str = "system",
-              intent: Optional[str] = None, tool: Optional[str] = None,
-              domain: Optional[str] = None,
-              counts: Optional[dict] = None) -> Verdict:
+              intent: str | None = None, tool: str | None = None,
+              domain: str | None = None,
+              counts: dict | None = None) -> Verdict:
         """Evaluate one action. First hard failure wins; soft signals are
         reported as ``flag`` so the work continues but the deviation is on the
         record."""
@@ -351,7 +356,7 @@ quote_is_verbatim = _grounding.quote_is_verbatim
 verify_grounding = _grounding.verify_grounding
 
 
-def claim_hash(text: str, citations: Optional[list] = None) -> str:
+def claim_hash(text: str, citations: list | None = None) -> str:
     """Content address for a claim. Two agents asserting the same thing with the
     same citations collide on purpose: that is how 'B just parroted A' becomes
     visible instead of invisible."""
@@ -360,15 +365,15 @@ def claim_hash(text: str, citations: Optional[list] = None) -> str:
 
 # ------------------------------------------------------------------ context --
 
-def current_run() -> Optional[str]:
+def current_run() -> str | None:
     return _current_run.get()
 
 
-def current_mandate() -> Optional[Mandate]:
+def current_mandate() -> Mandate | None:
     return _current_mandate.get()
 
 
-def current_session() -> Optional[str]:
+def current_session() -> str | None:
     return _current_session.get()
 
 
@@ -381,8 +386,8 @@ def current_session() -> Optional[str]:
 SESSION_IDLE_SECONDS = int(os.environ.get("AKM_SESSION_IDLE_S", "1800"))
 
 
-def ensure_session(session_id: str, *, client_key: Optional[str] = None,
-                   label: Optional[str] = None, db=None) -> str:
+def ensure_session(session_id: str, *, client_key: str | None = None,
+                   label: str | None = None, db=None) -> str:
     """Fetch or create a session row. A session is a run row of ``kind='session'``
     so it reuses the same chain machinery -- its timeline is the spine.
 
@@ -397,7 +402,7 @@ def ensure_session(session_id: str, *, client_key: Optional[str] = None,
             row = LedgerRun(id=session_id, kind="session", status="open",
                             label=label or "session",
                             genesis_hash=GENESIS, head_hash=GENESIS, head_seq=-1,
-                            client_key=client_key, last_seen_at=datetime.now(timezone.utc))
+                            client_key=client_key, last_seen_at=datetime.now(UTC))
             db.add(row)
             db.flush()
             _touch_session(session_id, db=db)
@@ -413,13 +418,13 @@ def ensure_session(session_id: str, *, client_key: Optional[str] = None,
 def _touch_session(session_id: str, db) -> None:
     row = db.get(LedgerRun, session_id)
     if row is not None and row.kind == "session":
-        row.last_seen_at = datetime.now(timezone.utc)
+        row.last_seen_at = datetime.now(UTC)
         db.commit()
 
 
-def resolve_session(client_key: Optional[str], *, label: Optional[str] = None,
-                    idle_seconds: Optional[int] = None,
-                    db=None) -> Optional[str]:
+def resolve_session(client_key: str | None, *, label: str | None = None,
+                    idle_seconds: int | None = None,
+                    db=None) -> str | None:
     """Map a browser key to the session id it should keep appending to.
 
     Returns ``None`` for a missing key so callers with no session context behave
@@ -440,11 +445,11 @@ def resolve_session(client_key: Optional[str], *, label: Optional[str] = None,
                        LedgerRun.kind == "session")
                .order_by(LedgerRun.last_seen_at.desc().nullslast())
                .first())
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         if row is not None:
             last = row.last_seen_at
             if last is not None and last.tzinfo is None:
-                last = last.replace(tzinfo=timezone.utc)  # SQLite hands back naive
+                last = last.replace(tzinfo=UTC)  # SQLite hands back naive
             if last is None or (now - last).total_seconds() <= idle:
                 row.last_seen_at = now
                 db.commit()
@@ -458,9 +463,9 @@ def resolve_session(client_key: Optional[str], *, label: Optional[str] = None,
             db.close()
 
 
-def anchor_run(run_id: str, *, session_id: Optional[str] = None,
-               label: Optional[str] = None, kind: str = "task",
-               db=None) -> Optional[str]:
+def anchor_run(run_id: str, *, session_id: str | None = None,
+               label: str | None = None, kind: str = "task",
+               db=None) -> str | None:
     """Record a run on its session's spine, in adoption order.
 
     This is the whole of the session guarantee: the anchor's position in the
@@ -491,7 +496,7 @@ def anchor_run(run_id: str, *, session_id: Optional[str] = None,
             db.close()
 
 
-def _set_session(session_id: Optional[str]):
+def _set_session(session_id: str | None):
     return _current_session.set(session_id)
 
 
@@ -693,13 +698,13 @@ def _as_dt(value):
     """Timestamps arrive as datetimes from the ORM and as strings from exports;
     normalise both so duration maths does not have to care which."""
     if isinstance(value, datetime):
-        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        return value if value.tzinfo else value.replace(tzinfo=UTC)
     if isinstance(value, str) and value:
         try:
             parsed = datetime.fromisoformat(value)
         except ValueError:
             return None
-        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
     return None
 
 
@@ -885,7 +890,7 @@ def _counts(db, run_id: str) -> dict:
     return counts
 
 
-def get_run(run_id: str, db=None) -> Optional[LedgerRun]:
+def get_run(run_id: str, db=None) -> LedgerRun | None:
     own = db is None
     db = db or SessionLocal()
     try:
@@ -895,9 +900,9 @@ def get_run(run_id: str, db=None) -> Optional[LedgerRun]:
             db.close()
 
 
-def ensure_run(run_id: str, mandate: Optional[Mandate] = None,
-               label: Optional[str] = None, db=None,
-               session_id: Optional[str] = None,
+def ensure_run(run_id: str, mandate: Mandate | None = None,
+               label: str | None = None, db=None,
+               session_id: str | None = None,
                kind: str = "task") -> LedgerRun:
     """Fetch or create a run row, backfilling the mandate if one was passed.
 
@@ -917,7 +922,7 @@ def ensure_run(run_id: str, mandate: Optional[Mandate] = None,
             # question with one answer.
             row = LedgerRun(id=run_id, label=label, status="open", kind=kind,
                             genesis_hash=GENESIS, head_hash=GENESIS, head_seq=-1,
-                            last_seen_at=datetime.now(timezone.utc))
+                            last_seen_at=datetime.now(UTC))
             db.add(row)
             db.flush()
         if mandate is not None and not row.mandate_hash:
@@ -941,11 +946,11 @@ def _resolve_mandate(run_id: str, db) -> Mandate:
 
 
 def append(run_id: str, kind: str, actor: str, *, actor_type: str = "system",
-           intent: Optional[str] = None, data: Optional[dict] = None,
-           input_refs: Optional[list] = None,
-           verdict: Optional[str] = None, severity: Optional[str] = None,
-           proof: Optional[dict] = None, ts: Optional[str] = None,
-           mandate: Optional[Mandate] = None, checked: bool = True,
+           intent: str | None = None, data: dict | None = None,
+           input_refs: list | None = None,
+           verdict: str | None = None, severity: str | None = None,
+           proof: dict | None = None, ts: str | None = None,
+           mandate: Mandate | None = None, checked: bool = True,
            _db=None) -> str:
     """Append one event to a run's chain and return its hash.
 
@@ -1026,9 +1031,9 @@ def append(run_id: str, kind: str, actor: str, *, actor_type: str = "system",
 # ------------------------------------------------------------------- proof --
 
 def build_proof(*, run_id: str, seq: int, event_hash: str, prev_hash: str,
-                claim: Optional[str] = None, inputs: Optional[list] = None,
-                method: Optional[dict] = None, output: Any = None,
-                verification: Optional[dict] = None) -> dict:
+                claim: str | None = None, inputs: list | None = None,
+                method: dict | None = None, output: Any = None,
+                verification: dict | None = None) -> dict:
     """Assemble the Proof-of-Work artifact for one event.
 
     Kept separate from ``append`` so a caller can build it once the event hash
@@ -1063,9 +1068,9 @@ def attach_proof(run_id: str, seq: int, proof: dict) -> None:
         db.close()
 
 
-def attach_event_proof(run_id: str, event_hash: str, *, claim: Optional[str] = None,
-                       inputs: Optional[list] = None, method: Optional[dict] = None,
-                       verification: Optional[dict] = None) -> dict:
+def attach_event_proof(run_id: str, event_hash: str, *, claim: str | None = None,
+                       inputs: list | None = None, method: dict | None = None,
+                       verification: dict | None = None) -> dict:
     """Build and attach a proof *from the persisted event*.
 
     Deliberately re-reads the row instead of hashing the caller's in-memory
@@ -1095,7 +1100,7 @@ def attach_event_proof(run_id: str, event_hash: str, *, claim: Optional[str] = N
         db.close()
 
 
-def _claim_of(data: dict) -> Optional[str]:
+def _claim_of(data: dict) -> str | None:
     """Content address of the claim an event asserts, if it asserts one."""
     text = data.get("text") or data.get("claim")
     if not text:
@@ -1119,7 +1124,7 @@ def _inputs_of(data: dict, ev: "LedgerEvent") -> list:
 
 
 def proof_checks(proof: dict, *, data: dict, event_hash: str,
-                 resolves: Optional[callable] = None) -> list:
+                 resolves: Callable | None = None) -> list:
     """Re-derive one event's proof from that event's own fields.
 
     Pure, so a live run and an offline export verify identically. ``resolves``
@@ -1198,7 +1203,7 @@ def verify_proof(run_id: str, seq: int, db=None) -> dict:
         check("event_hash", recomputed == ev.hash,
               {"stored": ev.hash, "recomputed": recomputed})
 
-        def resolves(digest_ref: str) -> Optional[str]:
+        def resolves(digest_ref: str) -> str | None:
             src = (db.query(LedgerEvent)
                    .filter(LedgerEvent.hash == digest_ref).first())
             if src is not None:
@@ -1222,7 +1227,7 @@ def verify_proof(run_id: str, seq: int, db=None) -> dict:
 
 # ---------------------------------------------------------- chain verify --
 
-def verify_events(events: list, *, extra_refs: Optional[Iterable[str]] = None) -> dict:
+def verify_events(events: list, *, extra_refs: Iterable[str] | None = None) -> dict:
     """Walk a chain of plain dicts. Pure, so it verifies a live run and an
     offline export with the same code.
 
@@ -1239,7 +1244,7 @@ def verify_events(events: list, *, extra_refs: Optional[Iterable[str]] = None) -
     event_hashes = {e.get("hash") for e in events if is_hash(e.get("hash") or "")}
     known = set(extra_refs or ())
 
-    def resolves(digest_ref: str) -> Optional[str]:
+    def resolves(digest_ref: str) -> str | None:
         if digest_ref in event_hashes:
             return "event"
         return "known_ref" if digest_ref in known else None
@@ -1350,11 +1355,11 @@ def verify_chain(run_id: str, db=None) -> dict:
 
 # ------------------------------------------------------------------ claims --
 
-def emit_claim(run_id: str, text: str, citations: Optional[list] = None,
+def emit_claim(run_id: str, text: str, citations: list | None = None,
                *, actor: str = "unknown", actor_type: str = "agent",
-               verifier: Optional[str] = None,
-               grounding: Optional[dict] = None,
-               input_refs: Optional[list] = None) -> dict:
+               verifier: str | None = None,
+               grounding: dict | None = None,
+               input_refs: list | None = None) -> dict:
     """Record a claim and its grounding state as a first-class, content-addressed
     row -- the anchor for both verification and contamination tracing."""
     g = grounding or verify_grounding(text, citations or [], [])
@@ -1399,7 +1404,7 @@ def emit_claim(run_id: str, text: str, citations: Optional[list] = None,
 def verify_claim(run_id: str, claim_hash_value: str, verdict: str, *,
                  method: str = "reviewer", note: str = "",
                  actor: str = "verifier", actor_type: str = "agent",
-                 citations: Optional[list] = None) -> str:
+                 citations: list | None = None) -> str:
     """Attach a verification verdict to a claim. ``unsupported`` is a
     ``block``-severity event, so it is impossible to miss on the timeline."""
     if verdict not in CLAIM_VERDICTS:
@@ -1425,13 +1430,13 @@ def verify_claim(run_id: str, claim_hash_value: str, verdict: str, *,
                   input_refs=[claim_hash_value])
 
 
-def _seq_of(db, run_id: str, event_hash: str) -> Optional[int]:
+def _seq_of(db, run_id: str, event_hash: str) -> int | None:
     row = db.query(LedgerEvent).filter(
         LedgerEvent.run_id == run_id, LedgerEvent.hash == event_hash).first()
     return row.seq if row else None
 
 
-def claim_text(run_id: str, claim_hash_value: str) -> Optional[str]:
+def claim_text(run_id: str, claim_hash_value: str) -> str | None:
     db = SessionLocal()
     try:
         row = (db.query(LedgerClaim)
@@ -1533,7 +1538,7 @@ def contamination(run_id: str, ref: str, *, max_depth: int = 12) -> dict:
 
 def request_approval(run_id: str, kind: str, subject_hash: str, *,
                      summary: str = "", requested_by: str = "system",
-                     input_refs: Optional[list] = None) -> int:
+                     input_refs: list | None = None) -> int:
     h = append(run_id, "approval.request", requested_by, actor_type="system",
                intent="approval_request", verdict="hold", severity="warn",
                data={"kind": kind, "subject": subject_hash, "summary": summary},
@@ -1559,7 +1564,7 @@ def decide_approval(approval_id: int, decision: str, *, decided_by: str,
         row = db.get(LedgerApproval, approval_id)
         if row is None:
             raise KeyError(f"no approval {approval_id}")
-        row.decision, row.decided_by, row.decided_at = decision, decided_by, datetime.now(timezone.utc)
+        row.decision, row.decided_by, row.decided_at = decision, decided_by, datetime.now(UTC)
         row.note = note
         h = append(row.run_id, f"approval.{decision}", decided_by,
                    actor_type="human", intent=f"approval_{decision}",
@@ -1576,7 +1581,7 @@ def decide_approval(approval_id: int, decision: str, *, decided_by: str,
         db.close()
 
 
-def pending_approval(run_id: str, subject_hash: str) -> Optional[LedgerApproval]:
+def pending_approval(run_id: str, subject_hash: str) -> LedgerApproval | None:
     db = SessionLocal()
     try:
         return (db.query(LedgerApproval)
@@ -1695,9 +1700,9 @@ def detect_drift(run_id: str) -> dict:
 
 # ---------------------------------------------------------------- timeline --
 
-def timeline(run_id: str, *, kinds: Optional[list] = None,
-             actor_types: Optional[list] = None, actors: Optional[list] = None,
-             verdict: Optional[str] = None, min_severity: Optional[str] = None,
+def timeline(run_id: str, *, kinds: list | None = None,
+             actor_types: list | None = None, actors: list | None = None,
+             verdict: str | None = None, min_severity: str | None = None,
              since_seq: int = 0, limit: int = 500, offset: int = 0,
              include_data: bool = True, db=None) -> dict:
     """Ordered, filterable view of a run. ``min_severity`` is what a
@@ -1881,8 +1886,8 @@ class RunCtx:
     verdict onto the event, and -- when something was wrong -- also emits a
     ``gate.check`` so violations are impossible to scroll past."""
 
-    def __init__(self, run_id: str, mandate: Optional[Mandate] = None,
-                 label: Optional[str] = None):
+    def __init__(self, run_id: str, mandate: Mandate | None = None,
+                 label: str | None = None):
         self.run_id = run_id
         self.mandate = mandate or Mandate()
         self.label = label
@@ -1890,11 +1895,11 @@ class RunCtx:
 
     # -- plumbing ---------------------------------------------------------
     def _event(self, kind: str, actor: str, *, actor_type: str = "system",
-               intent: Optional[str] = None, data: Optional[dict] = None,
-               input_refs: Optional[list] = None,
-               tool: Optional[str] = None, domain: Optional[str] = None,
-               verdict: Optional[str] = None, severity: Optional[str] = None,
-               proof: Optional[dict] = None) -> str:
+               intent: str | None = None, data: dict | None = None,
+               input_refs: list | None = None,
+               tool: str | None = None, domain: str | None = None,
+               verdict: str | None = None, severity: str | None = None,
+               proof: dict | None = None) -> str:
         """Append one event under this run's mandate.
 
         ``verdict``/``severity`` are only supplied by callers that *are* the
@@ -1926,10 +1931,10 @@ class RunCtx:
 
     # -- recorders --------------------------------------------------------
     def llm(self, model: str, prompt: str, output: str, *,
-            intent: Optional[str] = None, latency_ms: int = 0,
-            tokens_in: int = 0, tokens_out: int = 0, actor: Optional[str] = None,
-            input_refs: Optional[list] = None, error: str = "",
-            gateway: Optional[dict] = None) -> str:
+            intent: str | None = None, latency_ms: int = 0,
+            tokens_in: int = 0, tokens_out: int = 0, actor: str | None = None,
+            input_refs: list | None = None, error: str = "",
+            gateway: dict | None = None) -> str:
         """An LLM call is the single most important thing to record: it is where
         text is invented. Prompt and output are stored hashed by default so the
         record proves *what ran* without durably copying the prompt."""
@@ -1957,7 +1962,7 @@ class RunCtx:
         return h
 
     def step(self, stage: str, message: str, detail: Any = None, *,
-             intent: Optional[str] = None, actor: Optional[str] = None) -> str:
+             intent: str | None = None, actor: str | None = None) -> str:
         """A named phase of work ("planning round 2", "kept 6 artifacts").
 
         This is the spine of *how* a run unfolded, as opposed to ``llm.call``
@@ -1970,8 +1975,8 @@ class RunCtx:
                                  "detail": detail})
 
     def mcp(self, server: str, tool: str, args: dict, output: Any, *,
-            ok: bool = True, latency_ms: int = 0, intent: Optional[str] = None,
-            input_refs: Optional[list] = None, error: str = "") -> str:
+            ok: bool = True, latency_ms: int = 0, intent: str | None = None,
+            input_refs: list | None = None, error: str = "") -> str:
         full = f"{server}.{tool}" if server else tool
         data = {"server": server, "tool": full, "args_hash": digest(args),
                 "args": args if CAPTURE_PAYLOADS else None, "output": output,
@@ -1980,9 +1985,9 @@ class RunCtx:
                            data=data, input_refs=input_refs, tool=full)
 
     def hop(self, sender: str, recipient: str, intent: str, payload: Any,
-            output: Any = None, *, task_id: Optional[str] = None,
+            output: Any = None, *, task_id: str | None = None,
             protocol: str = "a2a/1.0", latency_ms: int = 0,
-            input_refs: Optional[list] = None) -> str:
+            input_refs: list | None = None) -> str:
         """One A2A envelope crossing the bus, in both directions, as a single
         chained event so the handoff is the unit of audit rather than two
         disconnected messages."""
@@ -1993,7 +1998,7 @@ class RunCtx:
                            input_refs=input_refs)
 
     def human(self, actor: str, action: str, detail: Any = None, *,
-              input_refs: Optional[list] = None) -> str:
+              input_refs: list | None = None) -> str:
         return self._event("human.action", actor, actor_type="human",
                            intent=action, data={"action": action, "detail": detail},
                            input_refs=input_refs)
@@ -2014,18 +2019,18 @@ class RunCtx:
 
     def _emit_gate(self, intent: str, subject: dict, *,
                    verdict: str = "block", severity: str = "block",
-                   input_refs: Optional[list] = None) -> str:
+                   input_refs: list | None = None) -> str:
         """Append a ``gate.check`` without ``_event``'s auto-emit, so a
         deliberate gate decision yields exactly one event rather than two."""
         return append(self.run_id, "gate.check", "ledger", actor_type="system",
                       intent=intent, verdict=verdict, severity=severity,
                       data=subject, input_refs=input_refs, checked=False)
 
-    def claim(self, text: str, citations: Optional[list] = None,
+    def claim(self, text: str, citations: list | None = None,
               sources: Any = None, *, actor: str = "unknown",
               actor_type: str = "agent",
-              input_refs: Optional[list] = None,
-              grounding: Optional[dict] = None) -> dict:
+              input_refs: list | None = None,
+              grounding: dict | None = None) -> dict:
         """Record a claim, grounding it unless the caller already did.
 
         ``grounding`` lets a producer that verified the claim some other way
@@ -2069,7 +2074,7 @@ class RunCtx:
         try:
             run = db.get(LedgerRun, self.run_id)
             if run is not None:
-                run.status, run.closed_at = status, datetime.now(timezone.utc)
+                run.status, run.closed_at = status, datetime.now(UTC)
                 db.commit()
         finally:
             db.close()
@@ -2086,8 +2091,8 @@ def _seq_of_db(run_id: str, event_hash: str) -> int:
 
 
 @contextmanager
-def session(session_id: str, *, label: Optional[str] = None,
-            client_key: Optional[str] = None):
+def session(session_id: str, *, label: str | None = None,
+            client_key: str | None = None):
     """Make a session current for everything downstream.
 
     The session outlives any single run, so this is the context a request
@@ -2103,8 +2108,8 @@ def session(session_id: str, *, label: Optional[str] = None,
 
 
 @contextmanager
-def run(run_id: str, mandate: Optional[Mandate] = None, *,
-        label: Optional[str] = None):
+def run(run_id: str, mandate: Mandate | None = None, *,
+        label: str | None = None):
     """Open a run and make it current for everything downstream in this
     context -- including background threads that copy the context.
 
@@ -2155,7 +2160,7 @@ def _has_event(run_id: str, kind: str) -> bool:
         db.close()
 
 
-def _stored_mandate(run_id: str) -> Optional[Mandate]:
+def _stored_mandate(run_id: str) -> Mandate | None:
     """The mandate already on the run, if any.
 
     Adopting it matters for auditability: reopening a run must evaluate actions
@@ -2174,8 +2179,8 @@ def _stored_mandate(run_id: str) -> Optional[Mandate]:
 
 
 @contextmanager
-def scope(run_id: str, mandate: Optional[Mandate] = None, *,
-          label: Optional[str] = None, close: bool = False):
+def scope(run_id: str, mandate: Mandate | None = None, *,
+          label: str | None = None, close: bool = False):
     """Adopt an existing run id as the current audit context.
 
     Differs from ``run`` in the two ways instrumentation on a shared choke point
@@ -2203,11 +2208,11 @@ def scope(run_id: str, mandate: Optional[Mandate] = None, *,
         _current_mandate.reset(t_pol)
 
 
-def record_claim(text: str, citations: Optional[list] = None,
+def record_claim(text: str, citations: list | None = None,
                  sources: Any = None, *, actor: str = "unknown",
                  actor_type: str = "agent",
-                 input_refs: Optional[list] = None,
-                 grounding: Optional[dict] = None) -> Optional[dict]:
+                 input_refs: list | None = None,
+                 grounding: dict | None = None) -> dict | None:
     """Register a claim on the open run, grounded against ``sources``.
 
     No-ops without an open run, so domain code can call this unconditionally
@@ -2254,8 +2259,8 @@ def audit_drops(limit: int = 100, db=None) -> list:
             db.close()
 
 
-def _record_drop(recorder: str, exc: Exception, run_id: Optional[str],
-                 actor: Optional[str], detail: Any) -> None:
+def _record_drop(recorder: str, exc: Exception, run_id: str | None,
+                 actor: str | None, detail: Any) -> None:
     """Persist one dropped audit record. Never raises.
 
     Best-effort by construction: when the drop was caused by the database being
@@ -2300,7 +2305,7 @@ def _safe(recorder: str, fn, *args, **kwargs):
         return None
 
 
-def _actor_of(args) -> Optional[str]:
+def _actor_of(args) -> str | None:
     """Best-effort actor for a dead-letter row, without raising on odd args."""
     for a in args:
         if isinstance(a, str) and a and len(a) < 120:
@@ -2323,7 +2328,7 @@ def _safe_detail(obj) -> Any:
     return f"<{type(obj).__name__}>"
 
 
-def record_llm_call(model: str, prompt: str, output: str, **kwargs) -> Optional[str]:
+def record_llm_call(model: str, prompt: str, output: str, **kwargs) -> str | None:
     """No-op unless a run is open. Called from ``llm.chat`` so every model call
     anywhere in the app lands on the timeline without threading a context
     object through call sites."""
@@ -2335,7 +2340,7 @@ def record_llm_call(model: str, prompt: str, output: str, **kwargs) -> Optional[
 
 
 def record_agent_step(stage: str, message: str, detail: Any = None,
-                      **kwargs) -> Optional[str]:
+                      **kwargs) -> str | None:
     """No-op unless a run is open. Mirrors an agent's own progress feed onto the
     chain, so the audit trail shows the shape of the work and not only the model
     calls that happened along the way."""
@@ -2346,9 +2351,9 @@ def record_agent_step(stage: str, message: str, detail: Any = None,
     return _safe("step", RunCtx(run_id, mandate).step, stage, message, detail, **kwargs)
 
 
-def record_internal_event(kind: str, actor: str, *, data: Optional[dict] = None,
+def record_internal_event(kind: str, actor: str, *, data: dict | None = None,
                           verdict: str = "pass", severity: str = "info",
-                          input_refs: Optional[list] = None) -> Optional[str]:
+                          input_refs: list | None = None) -> str | None:
     """Fail-open append for the app's own bookkeeping.
 
     The other ``record_*`` wrappers mirror a specific actor's work. This one is
@@ -2369,7 +2374,7 @@ def record_internal_event(kind: str, actor: str, *, data: Optional[dict] = None,
                  severity=severity, input_refs=input_refs)
 
 
-def record_mcp_call(server: str, tool: str, args: dict, output: Any, **kwargs) -> Optional[str]:
+def record_mcp_call(server: str, tool: str, args: dict, output: Any, **kwargs) -> str | None:
     run_id = current_run()
     if not run_id:
         return None
@@ -2377,7 +2382,7 @@ def record_mcp_call(server: str, tool: str, args: dict, output: Any, **kwargs) -
     return _safe("mcp", RunCtx(run_id, mandate).mcp, server, tool, args, output, **kwargs)
 
 
-def record_human_action(actor: str, action: str, detail: Any = None) -> Optional[str]:
+def record_human_action(actor: str, action: str, detail: Any = None) -> str | None:
     """Record a human action. Needs a *run* to append to; with only a session
     open the action is dropped, because a session row is a spine, not a
     timeline. ``session_action`` is the call site for those."""
@@ -2388,7 +2393,7 @@ def record_human_action(actor: str, action: str, detail: Any = None) -> Optional
     return _safe("human", RunCtx(run_id, mandate).human, actor, action, detail)
 
 
-def record_human(actor: str, action: str, detail: Any = None) -> Optional[str]:
+def record_human(actor: str, action: str, detail: Any = None) -> str | None:
     """Record a human action wherever it belongs, and never raise.
 
     Dispatch order matters: an open *run* is the more specific place for the
@@ -2405,7 +2410,7 @@ def record_human(actor: str, action: str, detail: Any = None) -> Optional[str]:
     return _safe("human_dispatch", _do)
 
 
-def record_session_action(actor: str, action: str, detail: Any = None) -> Optional[str]:
+def record_session_action(actor: str, action: str, detail: Any = None) -> str | None:
     """A human action that belongs to the sitting rather than to one run --
     switching investigation, starting an assessment, changing a preference.
 

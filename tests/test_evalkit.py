@@ -8,14 +8,15 @@ import os
 import tempfile
 import unittest
 
-
 # Pin the database before app.database is imported: a module that omits
 # this can inherit data/akm.db and write test rows into the live store.
 os.environ["AKM_DATABASE_URL"] = os.environ.get("AKM_TEST_DB") or (
     "sqlite:///" + os.path.join(tempfile.mkdtemp(prefix="akm-evalkit-"), "test.db"))
 
-from app import database  # noqa: E402
-from app import evalkit  # noqa: E402
+from app import (
+    database,  # noqa: E402
+    evalkit,  # noqa: E402
+)
 from app import security as sec  # noqa: E402
 from app import threatpack as tp  # noqa: E402
 from app.database import SessionLocal  # noqa: E402
@@ -254,6 +255,7 @@ class TestEvalEndpoints(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         from fastapi.testclient import TestClient
+
         from app import main as main_mod
         cls.client = TestClient(main_mod.app)
 

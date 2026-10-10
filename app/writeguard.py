@@ -52,6 +52,7 @@ import os
 import re
 import time
 
+from . import claims
 from . import llm
 
 # A sentence shorter than this is a heading or a fragment, not an assertion.
@@ -71,7 +72,7 @@ _STOP = {
     "them", "then", "than", "there", "their", "these", "those", "been", "being",
     "would", "could", "should", "must", "may", "might", "also", "such", "each",
     "some", "more", "most", "other", "over", "under", "between", "because",
-    "however", "therefore", "thus", "while", "where", "which", "does", "do",
+    "however", "therefore", "thus", "while", "where", "do",
     "did", "if", "as", "at", "by", "in", "is", "it", "on", "or", "an", "be",
     "we", "our", "us", "one", "two", "use", "used", "using", "make", "made",
     "get", "got", "new", "way", "ways", "e.g", "i.e",
@@ -325,8 +326,8 @@ def _contradiction_pass(answer: dict, sections: list) -> list[dict]:
             for s in dropped:
                 findings.append({"section": "summary", "sentence": s[:200],
                                  "reason": "self_contradiction",
-                                 "detail": f"praises a control the answer "
-                                           f"lists as missing"})
+                                 "detail": "praises a control the answer "
+                                           "lists as missing"})
     for sec in sections:
         body = sec.get("body") or ""
         if not body:
@@ -404,8 +405,15 @@ def _rewrite_section(question: str, section: dict, bad: list, pages: list) -> di
     body = r.get("body") if isinstance(r, dict) else None
     if not isinstance(body, str) or not body.strip():
         return None
-    return {"body": body.strip(),
-            "removed": [str(x)[:200] for x in (r.get("removed") or [])][:8]}
+    # The rewrite is a model output like any other, so it passes the same
+    # atomic-claim gate as the rest of the pipeline: a sentence the rewrite
+    # invented while "removing" unsupported ones is dropped rather than trusted.
+    # Conservative here -- a weak-but-present sentence is kept, because deleting
+    # correct paraphrases is the failure mode the audit already documents.
+    guarded = claims.guard_free_text(body.strip(), pages, keep_weak=True)
+    return {"body": guarded["text"].strip() or body.strip(),
+            "removed": [str(x)[:200] for x in (r.get("removed") or [])][:8],
+            "guard_dropped": guarded["dropped"]}
 
 
 def _judge_drift(question: str, candidates: list, pages: list) -> dict:
