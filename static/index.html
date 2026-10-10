@@ -502,6 +502,12 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .sugg-chip.kind-deepen:before { content: '↧ '; color: var(--text2); }
 .sugg-chip.kind-open:before { content: '? '; color: var(--text2); }
 .sugg-chip.kind-graph:before { content: '⛁ '; color: var(--text2); }
+/* generated follow-ups: model-proposed, verified against the answer before
+   shown. The ✦ marks provenance, not quality -- a generated question is new,
+   not necessarily better. */
+.sugg-chip.sugg-generated { border-style: dashed; }
+.sugg-chip.sugg-generated:before { content: '✦ '; color: var(--accent); }
+.sugg-chip.sugg-more { border-style: dotted; color: var(--text2); }
 /* investigation-level suggestion lenses: security-first ordering */
 .sugg-chip.kind-exploit:before { content: '⚠ '; color: #e5534b; }
 .sugg-chip.kind-cve:before { content: '⛨ '; color: #e5534b; }
@@ -1022,6 +1028,16 @@ body.pane-sec-top-collapsed .sec-topbar { padding: 5px 20px; }
 body.pane-sec-top-collapsed .sec-topbar h2 { font-size: 12.5px; }
 body.pane-sec-top-collapsed .sec-topbar-sub { display: none; }
 .overlay-section p { overflow-wrap: anywhere; }
+.tst-scores { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; margin-top: 4px; }
+.tst-score { background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px; }
+.tst-score-v { font-size: 15px; font-weight: 800; line-height: 1.2; }
+.tst-score-k { font-size: 10px; color: var(--text2); text-transform: uppercase; letter-spacing: 0.4px; }
+.tst-method { font-size: 10.5px; color: var(--text2); margin-top: 6px; }
+.tst-turns { display: flex; flex-direction: column; gap: 8px; max-height: 460px; overflow-y: auto; padding-right: 6px; }
+.tst-turn { border-left: 3px solid var(--accent); background: var(--bg2); border-radius: 0 8px 8px 0; padding: 8px 12px; }
+.tst-speaker { font-size: 11px; font-weight: 700; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.tst-ts { font-size: 10px; font-weight: 400; color: var(--text2); font-variant-numeric: tabular-nums; }
+.tst-text { font-size: 12.5px; line-height: 1.6; margin-top: 4px; white-space: pre-wrap; overflow-wrap: anywhere; }
 </style>
 </head>
 <body>
@@ -3147,6 +3163,41 @@ function focusNode(id) {
   openDetailOverlay(id);
 }
 
+function tstFmtTs(s) {
+  if (s === null || s === undefined) return '';
+  s = Math.max(0, Math.floor(s));
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+  const mm = (h ? String(m).padStart(2, '0') : String(m)) + ':' + String(sec).padStart(2, '0');
+  return h ? h + ':' + mm : mm;
+}
+
+function tstSpeakerColor(name) {
+  const pal = ['var(--accent)', 'var(--teal)', 'var(--orange)', 'var(--green)', 'var(--red)', 'var(--purple)'];
+  let h = 0;
+  for (const c of String(name || '')) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  return pal[h % pal.length];
+}
+
+function tstScoreCells(scores) {
+  const defs = [['credibility', 'Credibility'], ['influence', 'Influence'], ['ethics', 'Ethics'], ['policy', 'Policy'], ['agi', 'AGI'], ['overall', 'Overall']];
+  return defs.filter(([k]) => scores[k] !== undefined && scores[k] !== null).map(([k, label]) => {
+    const v = Number(scores[k]);
+    const col = v >= 0.7 ? 'var(--green)' : v >= 0.4 ? 'var(--orange)' : 'var(--text2)';
+    return `<div class="tst-score"><div class="tst-score-v" style="color:${col}">${v.toFixed(2)}</div><div class="tst-score-k">${label}</div></div>`;
+  }).join('');
+}
+
+function renderTestimonyTranscript(detail) {
+  const t = detail.transcript;
+  if (!t || !t.segments || !t.segments.length) return '';
+  const turns = t.segments.map(s => {
+    const ts = tstFmtTs(s.start_s);
+    return `<div class="tst-turn"><div class="tst-speaker"><span style="color:${tstSpeakerColor(s.speaker)}">${escHtml(s.speaker || 'UNKNOWN')}</span>${ts ? `<span class="tst-ts">${ts}${s.end_s ? ' – ' + tstFmtTs(s.end_s) : ''}</span>` : ''}</div><div class="tst-text">${escHtml(s.text || '')}</div></div>`;
+  }).join('');
+  return `<div class="overlay-section"><h4><i class="fas fa-comments"></i> Diarized transcript (${t.segments.length} segments${t.format && t.format !== 'empty' ? ' · ' + escHtml(t.format) : ''})</h4><div class="tst-turns">${turns}</div></div>`;
+}
+
+
 async function openDetailOverlay(id) {
   overlayOpen = true;
   document.getElementById('detailOverlay').classList.add('visible');
@@ -3190,6 +3241,9 @@ async function openDetailOverlay(id) {
       </div>`;
 
     let html = '';
+    if (detail.scores && detail.scores.overall !== undefined && detail.scores.overall !== null) {
+      html += `<div class="overlay-section"><h4><i class="fas fa-gauge-high"></i> Testimony scores</h4><div class="tst-scores">${tstScoreCells(detail.scores)}</div><div class="tst-method">Heuristic ${escHtml(detail.scores.method || 'v1')} — first-person account weighting, not a verdict. Corroboration and influence shift when graph edges change; re-score from the artifact menu.</div></div>`;
+    }
     if (detail.relevance_reason) {
       html += `<div class="overlay-section"><h4><i class="fas fa-robot"></i> Why collected</h4><p style="font-style:italic;">“${detail.relevance_reason}”</p></div>`;
     }
@@ -3209,6 +3263,7 @@ async function openDetailOverlay(id) {
       html += `<div class="overlay-section"><h4><i class="fas fa-file-alt"></i> Full Summary</h4>` +
         (isSynthesis ? renderMiniMarkdown(detail.content) : `<p style="font-size:12px;white-space:pre-wrap;">${detail.content}</p>`) + '</div>';
     }
+    html += renderTestimonyTranscript(detail);
     if (detail.tags) {
       html += `<div class="overlay-section"><h4><i class="fas fa-tags"></i> Tags</h4><div>${detail.tags.split(',').map(t => `<span class="tag">${t.trim()}</span>`).join('')}</div></div>`;
     }
@@ -4691,16 +4746,18 @@ function gradeFlash(g) {
 
 /* ---------- suggestions / quiz / bookmarks (#9, #10) ---------- */
 
-async function renderSuggestions(exp) {
+async function renderSuggestions(exp, generate) {
   // The per-explanation strip lives inside the rendered answer, not in the
   // explainer form: both used to be id="suggStrip", so getElementById always
   // returned the form's copy and follow-up chips were painted in the wrong
   // panel (and wiped by the next investigation render).
   const strip = document.getElementById('expSuggStrip');
   if (!strip || exp.status !== 'done') return;
+  strip.dataset.expId = exp.id;
   let data = null;
   try {
-    const res = await fetch(`${API}/explanations/${exp.id}/suggestions`);
+    const res = await fetch(`${API}/explanations/${exp.id}/suggestions` +
+      (generate ? '?generate=true' : ''));
     data = await res.json();
   } catch (e) { return; }
   const items = (data.items || []).filter(it => it.text);
@@ -4708,25 +4765,49 @@ async function renderSuggestions(exp) {
   strip.style.display = 'flex';
   strip.innerHTML =
     `<span style="font-size:11px;color:var(--text2);align-self:center;">Next questions:</span>` +
-    items.map(it => `<button class="sugg-chip kind-${escHtml(it.kind)}" title="${escHtml(it.kind)}"
-      onclick="useSuggestion(this.textContent.trim())">${escHtml(it.text)}</button>`).join('');
+    items.map(it => `<button class="sugg-chip kind-${escHtml(it.kind)}${it.origin === 'generated' ? ' sugg-generated' : ''}" title="${escHtml(it.origin === 'generated' ? 'generated follow-up, verified against the answer' : it.kind)}"
+      onclick="useSuggestion(this.textContent.trim())">${escHtml(it.text)}</button>`).join('') +
+    (generate ? '' : `<button class="sugg-chip sugg-more" title="Ask the model for genuinely new follow-ups, verified before shown" onclick="renderSuggestionsGenerated(document.getElementById('expSuggStrip').dataset.expId)">+ suggest more</button>`);
+}
+
+// The "+ suggest more" chip re-renders with generation on. The id is
+// threaded through a data attribute rather than read from a global, so a
+// mid-flight investigation switch cannot paint generated questions onto the
+// wrong answer.
+async function renderSuggestionsGenerated(expId) {
+  try {
+    const res = await fetch(`${API}/explanations/${expId}/suggestions?generate=true`);
+    const data = await res.json();
+    const strip = document.getElementById('expSuggStrip');
+    if (!strip) return;
+    const items = (data.items || []).filter(it => it.text);
+    if (!items.length) return;
+    strip.style.display = 'flex';
+    strip.innerHTML =
+      `<span style="font-size:11px;color:var(--text2);align-self:center;">Next questions:</span>` +
+      items.map(it => `<button class="sugg-chip kind-${escHtml(it.kind)}${it.origin === 'generated' ? ' sugg-generated' : ''}" title="${escHtml(it.origin === 'generated' ? 'generated follow-up, verified against the answer' : it.kind)}"
+        onclick="useSuggestion(this.textContent.trim())">${escHtml(it.text)}</button>`).join('');
+  } catch (e) { return; }
 }
 
 /* ---------- proactive, per-investigation suggestions ---------- */
 
 let invSuggItems = [];
+let invSuggGenerated = false;
 
-async function renderInvSuggestions() {
+async function renderInvSuggestions(generate) {
   const strip = document.getElementById('suggStrip');
   if (!strip) return;
   strip.style.display = 'none';
   strip.innerHTML = '';
   invSuggItems = [];
+  if (!generate) invSuggGenerated = false;
   if (!currentInv) return;
   const invId = currentInv;
   let data = null;
   try {
-    const res = await fetch(`${API}/investigations/${invId}/suggestions?limit=14`);
+    const res = await fetch(`${API}/investigations/${invId}/suggestions?limit=14` +
+      (generate ? '&generate=true' : ''));
     if (!res.ok) return;
     data = await res.json();
   } catch (e) { return; }
@@ -4746,8 +4827,9 @@ function paintInvSuggestions(expand) {
   const rest = invSuggItems.length - shown.length;
   strip.innerHTML =
     `<span class="sugg-lens" style="align-self:center;" title="Built from this investigation's CVEs, threat assessment and sources — security questions first">Suggested explanations</span>` +
-    shown.map(it => `<button class="sugg-chip kind-${escHtml(it.kind)}" title="${escHtml(it.why || it.lens)}"
+    shown.map(it => `<button class="sugg-chip kind-${escHtml(it.kind)}${it.origin === 'generated' ? ' sugg-generated' : ''}" title="${escHtml(it.origin === 'generated' ? 'generated follow-up, verified against the investigation' : (it.why || it.lens))}"
       onclick="useInvSuggestion(this.textContent.trim())">${escHtml(it.text)}</button>`).join('') +
+    (!invSuggGenerated ? `<button class="sugg-chip sugg-more" title="Ask the model for genuinely new questions, verified before shown" onclick="renderInvSuggestions(true);invSuggGenerated=true;">+ suggest more</button>` : '') +
     (rest > 0 && !expand
       ? `<button class="sugg-more" onclick="paintInvSuggestions(true)">+${rest} more</button>`
       : (expand ? `<button class="sugg-more" onclick="paintInvSuggestions(false)">show less</button>` : ''));

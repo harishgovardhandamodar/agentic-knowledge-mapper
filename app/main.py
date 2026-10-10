@@ -253,8 +253,13 @@ class ArtifactCreate(BaseModel):
     artifact_type: str = "news"
     url: str | None = None
     description: str | None = None
+    content: str | None = None
     author: str | None = None
     tags: str | None = None
+
+
+class TranscriptUpdate(BaseModel):
+    text: str
 
 
 class ReviewUpdate(BaseModel):
@@ -843,12 +848,67 @@ def create_artifact(inv_id: int, data: ArtifactCreate, db: Session = Depends(get
         raise HTTPException(404, "Investigation not found")
     a = Artifact(investigation_id=inv_id, title=data.title[:500],
                  artifact_type=data.artifact_type, url=data.url,
-                 description=data.description, author=data.author, tags=data.tags,
+                 description=data.description, content=data.content,
+                 author=data.author, tags=data.tags,
                  review="accepted", origin="manual")
     db.add(a)
     db.commit()
     db.refresh(a)
     return _artifact_json(a)
+
+
+def _score_artifact_testimony(db: Session, a: Artifact) -> dict:
+    from .testimony import parse_transcript, score_testimony
+    raw = None
+    try:
+        stored = json.loads(getattr(a, "transcript_json", None) or "{}")
+        raw = stored.get("raw")
+    except Exception:
+        raw = None
+    parsed = parse_transcript(raw or a.content)
+    in_rels = db.query(Relationship).filter(Relationship.target_id == a.id).all()
+    n_corr = sum(1 for r in in_rels if (r.relationship_type or "") in
+                 ("corroborates", "supports", "confirms", "testifies_on"))
+    n_out = db.query(Relationship).filter(Relationship.source_id == a.id).count()
+    scores = score_testimony(
+        {"author": a.author, "tags": a.tags, "description": a.description,
+         "url": a.url, "relevance": a.relevance, "n_outbound": n_out},
+        parsed.get("segments", []),
+        n_corroborating=n_corr, n_inbound=len(in_rels))
+    scores["speakers"] = parsed.get("speakers", [])
+    scores["segment_count"] = parsed.get("segment_count", 0)
+    scores["format"] = parsed.get("format", "empty")
+    a.scores_json = json.dumps(scores)
+    db.commit()
+    return scores
+
+
+@app.post("/api/artifacts/{artifact_id}/transcript")
+def set_artifact_transcript(artifact_id: int, data: TranscriptUpdate,
+                            db: Session = Depends(get_db)):
+    a = db.query(Artifact).filter(Artifact.id == artifact_id).first()
+    if not a:
+        raise HTTPException(404, "Artifact not found")
+    from .testimony import parse_transcript
+    parsed = parse_transcript(data.text)
+    a.transcript_json = json.dumps({"raw": data.text[:200000],
+                                    "segments": parsed["segments"],
+                                    "speakers": parsed["speakers"],
+                                    "format": parsed["format"],
+                                    "segment_count": parsed["segment_count"]})
+    db.commit()
+    scores = _score_artifact_testimony(db, a)
+    return {"id": a.id, "format": parsed["format"],
+            "segment_count": parsed["segment_count"],
+            "speakers": parsed["speakers"], "scores": scores}
+
+
+@app.post("/api/artifacts/{artifact_id}/score-testimony")
+def rescore_artifact_testimony(artifact_id: int, db: Session = Depends(get_db)):
+    a = db.query(Artifact).filter(Artifact.id == artifact_id).first()
+    if not a:
+        raise HTTPException(404, "Artifact not found")
+    return {"id": a.id, "scores": _score_artifact_testimony(db, a)}
 
 
 @app.patch("/api/artifacts/{artifact_id}")
@@ -995,6 +1055,20 @@ def get_artifact(artifact_id: int, db: Session = Depends(get_db)):
     # for many rows and stays light, but the overlay and the manager summary
     # view both read detail.content -- omitting it stranded them empty.
     result["content"] = a.content
+    try:
+        result["scores"] = json.loads(getattr(a, "scores_json", None) or "{}") or None
+    except Exception:
+        result["scores"] = None
+    try:
+        stored = json.loads(getattr(a, "transcript_json", None) or "{}")
+        result["transcript"] = {
+            "segments": stored.get("segments", []),
+            "speakers": stored.get("speakers", []),
+            "format": stored.get("format", "empty"),
+            "segment_count": stored.get("segment_count", 0),
+        }
+    except Exception:
+        result["transcript"] = None
     result["relationships"] = [
         {"id": r.Relationship.id, "direction": "outgoing",
          "target_id": r.Relationship.target_id, "target_title": r.Artifact.title,
@@ -1298,15 +1372,17 @@ def investigate_explainer_gaps(exp_id: int, db: Session = Depends(get_db)):
 
 
 @app.get("/api/explanations/{exp_id}/suggestions")
-def explanation_suggestions(exp_id: int, db: Session = Depends(get_db)):
+def explanation_suggestions(exp_id: int, db: Session = Depends(get_db),
+                            generate: bool = Query(False)):
     e = db.query(Explanation).filter(Explanation.id == exp_id).first()
     if not e:
         raise HTTPException(404, "Explanation not found")
-    return {"items": _question_suggestions(e, db=db)}
+    return {"items": _question_suggestions(e, db=db, generate=generate)}
 
 
 @app.get("/api/investigations/{inv_id}/suggestions")
-def investigation_suggestions(inv_id: int, limit: int = 14, db: Session = Depends(get_db)):
+def investigation_suggestions(inv_id: int, limit: int = 14, db: Session = Depends(get_db),
+                              generate: bool = Query(False)):
     """Proactive, security-first explanation prompts for an investigation.
 
     Scoped to the investigation rather than to one explanation so the panel is
@@ -1316,7 +1392,7 @@ def investigation_suggestions(inv_id: int, limit: int = 14, db: Session = Depend
     inv = db.query(Investigation).filter(Investigation.id == inv_id).first()
     if not inv:
         raise HTTPException(404, "Investigation not found")
-    return {"items": investigation_suggestions_fn(db, inv_id, limit=max(1, min(limit, 30)))}
+    return {"items": investigation_suggestions_fn(db, inv_id, limit=max(1, min(limit, 30)), generate=generate)}
 
 
 @app.post("/api/explanations/{exp_id}/quiz")

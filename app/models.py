@@ -61,7 +61,7 @@ class Artifact(Base):
     investigation_id = Column(Integer, ForeignKey("investigations.id", ondelete="CASCADE"),
                               nullable=False, index=True)
     title = Column(String(500), nullable=False)
-    artifact_type = Column(String(50), nullable=False, default="news")  # news|paper|essay|research|tweet|interview|book|projection
+    artifact_type = Column(String(50), nullable=False, default="news")  # news|paper|essay|research|tweet|interview|testimony|book|projection
     url = Column(String(1000), nullable=True)
     description = Column(Text, nullable=True)
     content = Column(Text, nullable=True)
@@ -70,6 +70,8 @@ class Artifact(Base):
     date_published = Column(DateTime, nullable=True)
     tags = Column(String(500), nullable=True)
     sentiment = Column(Float, nullable=True)
+    transcript_json = Column(Text, nullable=True)
+    scores_json = Column(Text, nullable=True)
     relevance = Column(Float, nullable=True)  # 0..1 agent score
     relevance_reason = Column(String(500), nullable=True)
     review = Column(String(20), nullable=False, default="pending")  # pending|accepted|rejected

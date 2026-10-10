@@ -76,6 +76,8 @@ _MIGRATIONS = [
     # payload. Additive only, so an investigation collected before the KB keeps
     # every artifact and relationship it already had (stable_key stays NULL).
     ("artifacts", "stable_key", "VARCHAR(200)"),
+    ("artifacts", "transcript_json", "TEXT"),
+    ("artifacts", "scores_json", "TEXT"),
     ("artifacts", "node_meta", "TEXT"),
     ("artifacts", "assessment_id", "INTEGER"),
     ("relationships", "payload_json", "TEXT"),

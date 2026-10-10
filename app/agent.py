@@ -400,7 +400,7 @@ def _analyze_batch(inv: Investigation, batch: list, existing: list,
     """LLM relevance + attribute extraction for up to ANALYZE_BATCH candidates."""
     sys = ("You are a research analyst. Judge candidates against the brief. "
            "Reply with JSON only: a list with one object per candidate.")
-    type_list = ("news|paper|essay|research|tweet|interview|book"
+    type_list = ("news|paper|essay|research|tweet|interview|testimony|book"
                  + ("|adversarial_paper|model_card|benchmark|cve_advisory|"
                     "weights_release|known_issue" if model_subject else ""))
     vendor_note = ""

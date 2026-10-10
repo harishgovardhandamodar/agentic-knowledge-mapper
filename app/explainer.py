@@ -2597,7 +2597,111 @@ def _tok_plus(s: str) -> set:
 
 
 
-def _question_suggestions(exp: Explanation, db=None) -> list:
+def _generated_followups(question: str, answer_text: str, *,
+                       context_terms: list | None = None,
+                       asked: list | None = None,
+                       n: int = 4) -> dict:
+    """LLM-generated follow-up questions, grounded and verified.
+
+    Retrieval ranks what already exists; it cannot ask what nobody wrote
+    down. This generates genuinely new questions conditioned on the answer --
+    then treats the model's output the way the engine treats everything else:
+    as a claim to verify, not an answer to trust.
+
+    Each candidate must reference entities or topics present in the supplied
+    context (the answer plus investigation vocabulary). A question about
+    something in neither is dropped with the reason recorded, because a
+    suggested question the corpus cannot answer wastes a research round --
+    worse than no suggestion at all.
+
+    Fail-open by contract: an unreachable gateway, a malformed reply, or an
+    empty generation returns no candidates (never raises), and the caller
+    falls back to the retrieval path. ``origin`` marks every returned item
+    as "generated" so the UI can say what it is.
+    """
+    out: dict = {"items": [], "dropped": 0, "generated": False}
+    try:
+        from . import llm as _llm
+    except Exception:
+        return out
+    context_terms = [str(t) for t in (context_terms or []) if str(t or "").strip()]
+    asked_blobs = [" ".join(sorted(_tok(str(q or "")))) for q in (asked or [])]
+    ctx = "\n".join(f"- {t}" for t in context_terms[:40])
+    sys_p = (
+        "You propose follow-up research questions. Reply with STRICT JSON only: "
+        '{"questions": ["...", ...]}. Rules: each question must be answerable '
+        "from the answer or context below -- name its entities, do not "
+        "introduce new ones. Prefer specific over general: a question naming "
+        "a concrete mechanism, artifact or number beats 'tell me more'. "
+        f"Propose at most {max(1, n)}."
+    )
+    user_p = (
+        f"Original question: {(question or '')[:500]}\n\n"
+        f"Answer summary:\n{(answer_text or '')[:2500]}\n\n"
+        "Investigation vocabulary (entities you may reference):\n"
+        f"{ctx or '- (none)'}\n\n"
+        '{"questions": [...]}'
+    )
+    try:
+        data = _llm.chat_json(
+            [{"role": "system", "content": sys_p},
+             {"role": "user", "content": user_p}],
+            temperature=0.7, max_tokens=600)
+    except Exception:
+        return out
+    raw = []
+    if isinstance(data, dict):
+        raw = data.get("questions") or []
+    elif isinstance(data, list):
+        raw = data
+    if not isinstance(raw, list):
+        return out
+    out["generated"] = True
+    vocab = _tok(f"{question or ''} {answer_text or ''} "
+                 + " ".join(context_terms))
+    seen = set()
+    for item in raw:
+        text = " ".join(str(item or "").split())[:300]
+        if len(text) < 12:
+            out["dropped"] += 1
+            continue
+        tw = _tok(text)
+        if not tw:
+            out["dropped"] += 1
+            continue
+        key = " ".join(sorted(tw))
+        if key in seen:
+            out["dropped"] += 1
+            continue
+        # Grounding: at least a third of the question's terms must come from
+        # the answer or the investigation vocabulary.
+        if _overlap(set(tw), set(vocab)) < 0.33:
+            out["dropped"] += 1
+            continue
+        # Novelty: not a rephrasing of something already asked.
+        if any(_overlap(set(tw), set(a.split())) >= 0.6 for a in asked_blobs if a):
+            out["dropped"] += 1
+            continue
+        seen.add(key)
+        out["items"].append({"text": text, "kind": "generated",
+                             "origin": "generated"})
+        if len(out["items"]) >= max(1, n):
+            break
+    return out
+
+
+def _question_suggestions(exp: Explanation, db=None, *,
+                        generate: bool = False) -> list:
+    """Suggested next questions: retrieved by overlap, optionally generated.
+
+    The retrieval path below is deterministic and offline. With
+    ``generate=True`` an LLM proposes genuinely new follow-ups conditioned on
+    the answer, each verified against the answer and investigation vocabulary
+    before it is offered -- see :func:`_generated_followups`. Generation never
+    replaces retrieval: generated items lead, retrieved items back them, and a
+    failed generation degrades to retrieval alone rather than failing the
+    endpoint.
+    """
     """Suggested next questions for an explanation, ranked by intent overlap.
 
     Candidates come from the run trace (follow-ups, missing topics, gaps)
@@ -2698,6 +2802,45 @@ def _question_suggestions(exp: Explanation, db=None) -> list:
     )
     out = [{"text": text, "kind": kind} for _, _, text, kind in ranked]
 
+    if generate:
+        # Generated questions lead: they are the only ones that can ask what
+        # nobody wrote down. Retrieved items back them, so a failed or empty
+        # generation simply leaves the retrieval list untouched.
+        try:
+            ans = json.loads(exp.answer or "{}") if exp.answer else {}
+        except Exception:
+            ans = {}
+        summary = ""
+        if isinstance(ans, dict):
+            parts = [ans.get("summary") or ""]
+            for sec in (ans.get("sections") or [])[:4]:
+                if isinstance(sec, dict):
+                    parts.append(f"{sec.get('heading') or ''}: "
+                                 f"{str(sec.get('body') or '')[:400]}")
+            for kp in (ans.get("key_points") or [])[:6]:
+                parts.append(str(kp))
+            summary = "\n".join(p for p in parts if p)[:2500]
+        ctx_terms: list[str] = []
+        asked_qs: list[str] = []
+        if db is not None:
+            try:
+                arts = db.query(Artifact).filter(
+                    Artifact.investigation_id == exp.investigation_id).all()
+                for a in arts[:30]:
+                    ctx_terms.extend(_tok(f"{a.title or ''} {a.tags or ''}"))
+                asked_qs = [e.question or "" for e in db.query(Explanation).filter(
+                    Explanation.investigation_id == exp.investigation_id).all()]
+            except Exception:
+                pass
+        gen = _generated_followups(exp.question or "", summary,
+                                   context_terms=sorted(set(ctx_terms))[:60],
+                                   asked=asked_qs, n=4)
+        if gen["items"]:
+            have = {it["text"].lower() for it in out}
+            out = [it for it in gen["items"]
+                   if it["text"].lower() not in have] + out
+            out = out[:SUGGEST_CAP]
+
     if len(out) < SUGGEST_FILL_MIN:
         try:
             ans = json.loads(exp.answer or "{}")
@@ -2777,7 +2920,16 @@ def _artifact_haystack(a: Artifact) -> str:
     return " ".join([a.title or "", a.description or "", (a.content or "")[:900]])
 
 
-def investigation_suggestions(db, inv_id: int, limit: int = 14) -> list:
+def investigation_suggestions(db, inv_id: int, limit: int = 14, *,
+                            generate: bool = False) -> list:
+    """Proactive explanation prompts: retrieved by lens, optionally generated.
+
+    With ``generate=True`` an LLM proposes questions conditioned on the
+    investigation brief and its top artifacts, each verified against the
+    investigation vocabulary before it is offered. Generated items lead for
+    the same reason they do per-explanation: templates can only ask what the
+    template author thought of.
+    """
     """Proactive explanation prompts for an investigation, security first.
 
     Deterministic and offline: every prompt is derived from rows this
@@ -2992,7 +3144,34 @@ def investigation_suggestions(db, inv_id: int, limit: int = 14) -> list:
             "no threat assessment yet", 85)
 
     items.sort(key=lambda it: (-it["weight"], it["text"]))
-    return items[:limit]
+    items = items[:limit]
+    if generate:
+        brief = " ".join([inv.title or "", inv.keywords or "",
+                          inv.description or ""])
+        vocab = sorted(set(_tok(brief)))
+        try:
+            arts = db.query(Artifact).filter(
+                Artifact.investigation_id == inv_id).all()
+            for a in arts[:30]:
+                vocab.extend(_tok(f"{a.title or ''} {a.tags or ''}"))
+        except Exception:
+            pass
+        asked = []
+        try:
+            asked = [e.question or "" for e in db.query(Explanation).filter(
+                Explanation.investigation_id == inv_id).all()]
+        except Exception:
+            pass
+        gen = _generated_followups(
+            brief[:500], brief[:1500],
+            context_terms=sorted(set(vocab))[:60], asked=asked, n=4)
+        if gen["items"]:
+            have = {it["text"].lower() for it in items}
+            items = ([{**it, "lens": "generated", "weight": 100}
+                      for it in gen["items"]
+                      if it["text"].lower() not in have]
+                     + items)[:limit]
+    return items
 
 
 def _quiz_from_answer(exp: Explanation) -> dict:
