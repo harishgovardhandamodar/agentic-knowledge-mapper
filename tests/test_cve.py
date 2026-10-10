@@ -77,7 +77,8 @@ def _nvd_keyword_payload():
         "cve": {
             "id": "CVE-2025-32711",
             "descriptions": [{"lang": "en",
-                              "value": "EchoLeak disclosure in logs"}],
+                              "value": ("EchoLeak disclosure in OpenSSL logs, "
+                                        "exposing sensitive content")}],
             "metrics": {"cvssMetricV31": [{"cvssData": {
                 "baseScore": 7.5,
                 "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N"}}]},
@@ -273,6 +274,27 @@ class TestSubjectExtraction(unittest.TestCase):
         s = cve_mod.extract_subjects(title="the model and the api")
         self.assertEqual(s["products"], [])
 
+    def test_sentence_case_generic_is_not_a_product(self):
+        # Regression: "Temporal graph networks for fraud detection" produced
+        # products ["Temporal", "GNN"], firing "Temporal CVE" at NVD and
+        # attaching temporal.io workflow-engine CVEs to a graph-network
+        # investigation. A capitalized common word is not a proper noun.
+        s = cve_mod.extract_subjects(
+            title="Temporal graph networks for fraud detection",
+            keywords="temporal, graph neural networks",
+            description="Research on temporal GNN architectures")
+        self.assertEqual(s["products"], [])
+        queries = [q["query"] for q in cve_mod.build_known_issue_queries(s)]
+        self.assertFalse(any("Temporal CVE" in q for q in queries))
+        self.assertFalse(any("GNN CVE" in q for q in queries))
+
+    def test_explicit_and_vendor_products_survive(self):
+        s = cve_mod.extract_subjects(title="Redis cache poisoning",
+                                     product_name="Redis")
+        self.assertIn("Redis", s["products"])
+        s = cve_mod.extract_subjects(title="OpenSSL advisory review")
+        self.assertIn("OpenSSL", s["products"])
+
     def test_build_queries_emits_the_expected_shapes(self):
         s = {"vendors": ["OpenSSL"], "products": ["OpenSSL"],
              "packages": ["npm:foo"], "cve_hints": ["CVE-2025-32711"]}
@@ -282,6 +304,72 @@ class TestSubjectExtraction(unittest.TestCase):
         self.assertIn("advisory_vendor", shapes)
         self.assertIn("ghsa", shapes)
         self.assertIn("cve_hint", shapes)
+
+
+class TestRelevanceGate(unittest.TestCase):
+    """The bidirectional check: NVD returns whatever mentions the word."""
+
+    def test_unrelated_vendor_cve_is_filtered_with_a_reason(self):
+        v = cve_mod._relevance_verdict(
+            "Temporal Technologies server allows authenticated log injection",
+            {"products": [], "vendors": [],
+             "keywords": ["temporal", "graph", "fraud", "gnn"]})
+        self.assertFalse(v["relevant"])
+        self.assertIn("reason", v)
+
+    def test_subject_mentioning_cve_survives(self):
+        v = cve_mod._relevance_verdict(
+            "OpenSSL log disclosure exposes sensitive content",
+            {"products": ["OpenSSL"], "vendors": ["OpenSSL"], "keywords": []})
+        self.assertTrue(v["relevant"])
+        self.assertIn("OpenSSL", v["matched"])
+
+    def test_two_keyword_hits_suffice_without_a_product(self):
+        v = cve_mod._relevance_verdict(
+            "graph database fraud scoring bypass",
+            {"products": [], "vendors": [],
+             "keywords": ["graph", "fraud", "temporal"]})
+        self.assertTrue(v["relevant"])
+
+    def test_collect_reports_filtered_cves(self):
+        from unittest import mock
+        db = SessionLocal()
+        try:
+            # OpenSSL fires real queries; the NVD return mentions only
+            # Temporal, so the gate drops it with a reason instead of
+            # attaching a workflow-engine CVE to this investigation.
+            inv_id = _investigation(db, "OpenSSL temporal review")
+            payload = {"vulnerabilities": [{
+                "cve": {
+                    "id": "CVE-2024-00001",
+                    "descriptions": [{"lang": "en",
+                                      "value": "Temporal workflow server issue"}],
+                    "metrics": {}, "vulnStatus": "Analyzed",
+                    "published": "2024-01-01T00:00:00.000"}}]}
+            with mock.patch.object(cve_mod, "FETCH_GAP_S", 0):
+                out = cve_mod.collect_known_issues(
+                    db, inv_id, nvd_client=_Client(payload),
+                    search_fn=lambda q: [])
+            self.assertEqual(out["cves"], [])
+            self.assertEqual(len(out["filtered_cves"]), 1)
+            self.assertEqual(out["filtered_cves"][0]["cve_id"],
+                             "CVE-2024-00001")
+        finally:
+            db.close()
+
+    def test_lone_generic_word_does_not_attach_a_threat(self):
+        self.assertEqual(
+            cve_mod.map_cve_to_threats("the prompt was processed normally"), [])
+        self.assertEqual(
+            cve_mod.map_cve_to_threats("training completed successfully"), [])
+
+    def test_specific_phrase_still_attaches(self):
+        self.assertIn("T05", cve_mod.map_cve_to_threats(
+            "prompt injection bypassed the system prompt"))
+        scored = cve_mod.map_cve_to_threats_scored(
+            "prompt injection bypassed the system prompt")
+        self.assertTrue(any(r["threat_id"] == "T05" and r["matched_phrases"]
+                            for r in scored))
 
 
 class TestKnownIssuesCollect(unittest.TestCase):

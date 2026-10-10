@@ -423,11 +423,32 @@ def extract_subjects(*, title: str = "", keywords: str = "",
     products: list[str] = []
     if product_name:
         products.append(product_name.strip())
+    # A capitalized token is not a product. Sentence case ("Temporal graph
+    # networks...") and generic technical terms ("GNN") would otherwise each
+    # fire "{word} CVE" at NVD, and NVD answers a keyword query with whatever
+    # mentions the word -- e.g. temporal.io CVEs attached to a
+    # temporal-graph-network investigation. A single token becomes a product
+    # only when it is a known vendor or was named explicitly as the product;
+    # everything else stays a keyword, which can still inform advisory search
+    # but never mints a product-shaped CVE query.
+    lowered_blob = f" {blob.lower()} "
     for tok in re.findall(r"\b[A-Z][A-Za-z0-9+.-]{1,49}\b", blob):
         low = tok.lower()
         if low in _SUBJECT_STOPWORDS or len(low) < 3:
             continue
         if low in {p.lower() for p in products}:
+            continue
+        if low in KNOWN_VENDORS:
+            pass  # a real vendor name is always a product
+        elif lowered_blob.count(f" {low} ") > 1:
+            # Appears lowercase more than once: a common word wearing sentence
+            # case, not a proper noun. "Temporal" in "temporal graph networks
+            # for fraud detection, temporal GNN architectures" is the case
+            # this branch exists to catch.
+            continue
+        else:
+            # Single generic token with no vendor standing: not a product.
+            # It remains available as a keyword below.
             continue
         products.append(tok)
         if len(products) >= 5:
@@ -545,15 +566,96 @@ def extract_ghsa(*texts) -> list:
     return seen
 
 
+def _relevance_verdict(cve_text: str, subjects: dict) -> dict:
+    """Does this CVE mention the investigation's subject back?
+
+    A keyword query is one-directional: NVD returns whatever mentions the
+    word. Without a check in the other direction, "Temporal CVE" attaches
+    temporal.io workflow-engine CVEs to a temporal-graph-network investigation
+    and nothing ever says otherwise. This scores the return against the
+    subjects that produced the query:
+
+    * a product or vendor token present -> relevant, with the token named;
+    * else two or more distinct keyword tokens present -> relevant;
+    * else not relevant, with the reason stated.
+
+    Returns ``{"relevant": bool, "matched": [...], "reason": str}``. Callers
+    report the drops rather than silently discarding them: a filtered CVE is
+    a decision, and decisions belong in the result.
+    """
+    text = f" {str(cve_text or '').lower()} "
+    norm = text.replace("-", " ").replace("/", " ")
+    matched: list[str] = []
+    for token in list(subjects.get("products") or []) + list(
+            subjects.get("vendors") or []):
+        tok = str(token or "").strip().lower()
+        if len(tok) >= 3 and f" {tok} " in norm:
+            matched.append(str(token))
+    # Multi-word products match on any distinctive word: the full vendor name
+    # need not appear whole for the return to be about it.
+    if not matched:
+        for token in list(subjects.get("products") or []) + list(
+                subjects.get("vendors") or []):
+            words = [w for w in re.findall(r"[a-z0-9]{4,}", str(token).lower())
+                     if w not in _SUBJECT_STOPWORDS]
+            hit = [w for w in words if f" {w} " in norm]
+            if hit:
+                matched.append(f"{token} (via {hit[0]})")
+                break
+    if matched:
+        return {"relevant": True, "matched": sorted(set(matched)),
+                "reason": f"mentions {', '.join(sorted(set(matched)))}"}
+    kw_hits = sorted({
+        str(k).lower() for k in (subjects.get("keywords") or [])
+        if len(str(k)) >= 4 and f" {str(k).lower()} " in norm})
+    if len(kw_hits) >= 2:
+        return {"relevant": True, "matched": kw_hits,
+                "reason": f"shares vocabulary: {', '.join(kw_hits[:4])}"}
+    return {"relevant": False, "matched": kw_hits,
+            "reason": ("does not mention the subject back: no product/vendor "
+                       "token and fewer than two keyword hits")}
+
+
 def map_cve_to_threats(text: str) -> list:
     """Light keyword → threat-id mapping for known-issue text.
 
     A hint, not a verdict: keyword hits never force applicability. The caller
     decides whether the evidence supports the link.
+
+    Scored, not binary: a single generic word ("prompt", "training") appears
+    in nearly every LLM-related CVE description and proves nothing on its own.
+    A threat attaches only on two or more distinct matched phrases, or on one
+    multi-word phrase ("prompt injection", "data retention") that is specific
+    enough to mean something by itself.
     """
     t = str(text or "").lower()
-    return sorted({tid for tid, kws in _THREAT_KEYWORDS.items()
-                   if any(k in t for k in kws)})
+    out = []
+    for tid, kws in _THREAT_KEYWORDS.items():
+        hits = sorted({k for k in kws if k in t})
+        if len(hits) >= 2 or any(" " in h or "-" in h for h in hits):
+            out.append(tid)
+    return sorted(out)
+
+
+def map_cve_to_threats_scored(text: str) -> list[dict]:
+    """The same mapping with the evidence shown, for display and audit.
+
+    Returns ``{"threat_id", "matched_phrases", "basis"}`` per threat so a
+    reader can see *why* a CVE was linked -- "prompt injection" is a reason,
+    a lone "prompt" is not, and the two must not look the same.
+    """
+    t = str(text or "").lower()
+    out = []
+    for tid, kws in _THREAT_KEYWORDS.items():
+        hits = sorted({k for k in kws if k in t})
+        if not hits:
+            continue
+        specific = [h for h in hits if " " in h or "-" in h]
+        if len(hits) >= 2 or specific:
+            out.append({"threat_id": tid, "matched_phrases": hits,
+                        "basis": ("multi-phrase" if len(hits) >= 2
+                                  else "specific phrase")})
+    return sorted(out, key=lambda r: r["threat_id"])
 
 
 def _default_advisory_search(query: str, max_results: int = 6) -> list:
@@ -709,12 +811,16 @@ def collect_known_issues(db, investigation_id: int, *,
     if not queries:
         return {"skipped": True, "reason": "no_subject",
                 "subjects": subjects, "queries": [],
-                "cves": [], "issues": [], "degraded_sources": []}
+                "cves": [], "issues": [], "filtered_cves": [],
+                "degraded_sources": []}
 
     degraded: list[str] = []
     cve_hits: list = []
     issue_hits: list = []
     seen_cve: set[str] = set()
+    # Returns that fail the bidirectional check: reported, never silently
+    # dropped. Each entry names the CVE and why it did not survive.
+    filtered: list = []
 
     search = search_fn or _default_advisory_search
     for q in queries:
@@ -732,7 +838,15 @@ def collect_known_issues(db, investigation_id: int, *,
                 cid = meta.get("cve_id")
                 if cid and cid not in seen_cve:
                     seen_cve.add(cid)
-                    cve_hits.append(meta)
+                    verdict = _relevance_verdict(
+                        f"{meta.get('title') or ''} "
+                        f"{meta.get('description') or ''}", subjects)
+                    if verdict["relevant"]:
+                        meta["relevance"] = verdict
+                        cve_hits.append(meta)
+                    else:
+                        filtered.append({"cve_id": cid,
+                                         "reason": verdict["reason"]})
         except Exception:
             degraded.append("nvd_keyword")
         time.sleep(FETCH_GAP_S)
@@ -747,10 +861,15 @@ def collect_known_issues(db, investigation_id: int, *,
                     for cid in found:
                         if cid not in seen_cve:
                             seen_cve.add(cid)
+                            # A CVE id found in an advisory is an explicit
+                            # reference, not a keyword guess: it survives
+                            # without a relevance check, but carries where it
+                            # came from so the reader can judge it.
                             cve_hits.append({
                                 "cve_id": cid, "title": cid,
                                 "description": text[:1200],
                                 "source_url": hit.get("url") or "",
+                                "found_via": "explicit reference",
                             })
                 elif hit.get("url"):
                     issue_hits.append({
@@ -774,6 +893,7 @@ def collect_known_issues(db, investigation_id: int, *,
         "issues": upserted["issues"],
         "duplicate_cves": upserted["duplicate_cves"],
         "duplicate_issues": upserted["duplicate_issues"],
+        "filtered_cves": filtered,
         "degraded_sources": sorted(set(degraded)),
         "note": ("Best-effort: a degraded source is recorded, never fatal. "
                  "Assigned CVEs are stored canonically and deduped; issues "
