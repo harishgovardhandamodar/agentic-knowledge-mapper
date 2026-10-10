@@ -3330,6 +3330,24 @@ class ExperimentBuildRequest(BaseModel):
     hypothesis_ids: list[str] | None = []
 
 
+class PreregisterRequest(BaseModel):
+    """A protocol to freeze before an experiment runs."""
+    method_type: str | None = None
+    title: str | None = None
+    rationale: str | None = None
+    targets: dict | None = None
+    n_trials: int | None = 30
+    alpha: float | None = 0.05
+
+
+class ExperimentResultRequest(BaseModel):
+    """A completed experiment's tally, scored with an exact interval."""
+    method_type: str | None = None
+    successes: int = 0
+    trials: int = 0
+    alpha: float | None = 0.05
+
+
 @app.post("/api/security/assessments/{assessment_id}/experiments/build")
 def build_experiments(assessment_id: int, data: ExperimentBuildRequest,
                       request: Request, db: Session = Depends(get_db)):
@@ -3682,6 +3700,65 @@ def manager_links(db: Session = Depends(get_db)):
     return manager_mod.manager_links(db)
 
 
+@app.get("/api/security/assessments/{assessment_id}/scenarios")
+def get_assessment_scenarios(assessment_id: int,
+                             db: Session = Depends(get_db)):
+    """Attack-path scenarios derived from this assessment's own rows.
+
+    Distinct from the threat table: these are *compositions* the per-row
+    scoring cannot produce -- chains where each link scores acceptably but the
+    path does not, and rows already pinned at the residual floor. Every
+    scenario names the catalogue rows and control ids it came from.
+    """
+    rec = _assessment_or_404(assessment_id, db)
+    scoring = _load_json_safe(getattr(rec, "scoring_json", None))
+    from . import scenarios as _sc
+    return _sc.scenarios(scoring)
+
+
+@app.post("/api/security/assessments/{assessment_id}/experiments/{experiment_id}/preregister")
+def preregister_experiment(assessment_id: int, experiment_id: str,
+                           data: PreregisterRequest,
+                           db: Session = Depends(get_db)):
+    """Freeze an experiment's protocol before it runs.
+
+    The point is the *pre* in pre-registration: the decision rule, the sample
+    size and the interval are fixed now, so the result cannot be read
+    selectively afterwards. The response includes what the interval would be
+    if every trial came back clean, because "0 of 30, so it holds" is the claim
+    this endpoint exists to stop.
+    """
+    _assessment_or_404(assessment_id, db)
+    from . import experiments as _e
+    experiment = {
+        "id": experiment_id,
+        "title": data.title or experiment_id,
+        "method_type": data.method_type or "doc_audit",
+        "rationale": data.rationale or "",
+        "targets": data.targets or {},
+    }
+    return _e.preregister(experiment, n_trials=data.n_trials or 30,
+                          alpha=data.alpha if data.alpha is not None else 0.05)
+
+
+@app.post("/api/security/assessments/{assessment_id}/experiments/{experiment_id}/result")
+def record_experiment_result(assessment_id: int, experiment_id: str,
+                             data: ExperimentResultRequest,
+                             db: Session = Depends(get_db)):
+    """Score a completed experiment with an exact interval.
+
+    Returns the rate *and* the interval, plus whether the sample was large
+    enough to support any conclusion. A wide interval is reported as
+    inconclusive rather than as a passing result.
+    """
+    _assessment_or_404(assessment_id, db)
+    from . import experiments as _e
+    return _e.score_result({"id": experiment_id,
+                            "method_type": data.method_type or "doc_audit"},
+                           successes=data.successes, trials=data.trials,
+                           alpha=data.alpha if data.alpha is not None else 0.05)
+
+
 @app.get("/api/security/assessments/{assessment_id}/markdown")
 def get_security_markdown(assessment_id: int, db: Session = Depends(get_db)):
     from fastapi.responses import PlainTextResponse
@@ -3715,6 +3792,9 @@ def get_research_report(assessment_id: int,
             "fingerprint": getattr(rec, "threat_pack_fingerprint", None)}
     analysis = _assessment_analysis(rec, scoring, ev, ctl, pack)
     from . import benchmarks as B
+    from . import scenarios as SC
+    derived = SC.scenarios(scoring)
+    analysis["scenarios"] = derived
     report_md = B.render_research_report(
         assessment=scoring, analysis=analysis, meta={
             "id": rec.id, "product_name": rec.product_name,

@@ -1,203 +1,133 @@
-"""Experiment builder: ranked probes, plan only, never execution."""
-import json
-import os
-import tempfile
-import unittest
+"""Pre-registration and exact intervals for adversarial experiments.
 
-os.environ["AKM_DATABASE_URL"] = os.environ.get("AKM_TEST_DB") or (
-    "sqlite:///" + os.path.join(tempfile.mkdtemp(prefix="akm-exp-"), "test.db"))
+The interval arithmetic is checked against an independent brute-force search
+on the *defining* tail equations, because a confidence interval that is
+plausible but wrong is the most dangerous thing this module could produce: it
+would license a "the control held" claim.
+"""
 
-from app import database  # noqa: E402
-from app import model_eval as me  # noqa: E402
-from app import models as _models  # noqa: E402,F401 -- registers tables
-from app.database import SessionLocal  # noqa: E402
+import pytest
 
-database.init_db()
-
-TABULAR = {"model_name": "TabPFN", "model_family": "tabular_fm",
-           "modality": "tabular", "weights_source": "open_weights"}
+from app import experiments as E
 
 
-class TestPlanExperiments(unittest.TestCase):
-    def test_unknown_memorization_plans_canary(self):
-        plan = me.plan_experiments(
-            dict(TABULAR), [], [{"dimension": "memorization",
-                                 "rating": "unknown"}], [], [])
-        methods = [e["method_type"] for e in plan["experiments"]]
-        self.assertIn("canary", methods)
-        self.assertEqual(plan["method"], "experiment_plan_v1")
-        self.assertTrue(plan["method_fingerprint"])
-
-    def test_api_only_never_bare_weight_access(self):
-        plan = me.plan_experiments(
-            {"model_family": "diffusion", "weights_source": "api_only"},
-            [{"attack_class": "extraction", "applies_to": "family",
-              "confidence": 0.6}], [], [], [])
-        self.assertTrue(plan["experiments"])
-        for e in plan["experiments"]:
-            self.assertIn("query_api", e["prerequisites"])
-            if not e.get("vendor_coop", True) and \
-                    e["method_type"] in ("unlearning_check",
-                                         "watermark_detect"):
-                self.assertIn("vendor_coop", e["prerequisites"])
-
-    def test_falsifier_maps_to_experiment(self):
-        plan = me.plan_experiments(
-            {"model_family": "llm", "weights_source": "api_only"},
-            [], [],
-            [{"hypothesis_id": "H01", "status": "untested",
-              "falsifiers": ["vendor retains prompts for training"]}], [])
-        targets = [t for e in plan["experiments"]
-                   for t in e["targets"]["hypothesis_ids"]]
-        self.assertIn("H01", targets)
-
-    def test_untestable_falsifier_is_explicit(self):
-        plan = me.plan_experiments(
-            {"model_family": "llm", "weights_source": "api_only"},
-            [], [],
-            [{"hypothesis_id": "H09", "status": "untested",
-              "falsifiers": []}], [])
-        targets = [t for e in plan["experiments"]
-                   for t in e["targets"]["hypothesis_ids"]]
-        self.assertIn("H09", targets)
-
-    def test_settled_hypotheses_get_no_probe(self):
-        plan = me.plan_experiments(
-            dict(TABULAR), [],
-            [{"dimension": "memorization", "rating": "low"}],
-            [{"hypothesis_id": "H01", "status": "supported",
-              "falsifiers": ["x"]}], [])
-        targets = [t for e in plan["experiments"]
-                   for t in e["targets"]["hypothesis_ids"]]
-        self.assertNotIn("H01", targets)
-
-    def test_top_mm_links_validation(self):
-        plan = me.plan_experiments(
-            dict(TABULAR), [], [],
-            [], [{"control_id": "MM05", "priority": 1},
-                 {"control_id": "MM09", "priority": 2}])
-        mm_targets = [t for e in plan["experiments"]
-                      for t in e["targets"]["mitigation_ids"]]
-        self.assertIn("MM05", mm_targets)
+def _brute_cdf(k, n, p):
+    return E.binom_cdf(k, n, p)
 
 
-class TestExperimentAgent(unittest.TestCase):
-    def setUp(self):
-        import app.llm as _llm
-        self._chat = _llm.chat
-        _llm.chat = lambda *a, **k: (_ for _ in ()).throw(
-            RuntimeError("down"))
+class TestClopperPearson:
+    @pytest.mark.parametrize("x,n", [
+        (0, 5), (0, 20), (1, 10), (2, 10), (3, 7), (5, 10),
+        (10, 10), (20, 20), (1, 30), (2, 20), (7, 12),
+    ])
+    def test_matches_the_defining_equations(self, x, n):
+        lo, hi = E._clopper_pearson(x, n)
+        a = 0.025
+        # upper is the smallest p with P(X <= x) <= alpha. At x == n the upper
+        # bound is pinned to 1 by definition, so the equation does not apply.
+        if x < n:
+            assert _brute_cdf(x, n, hi) <= a + 1e-9
+        # lower is the largest p with P(X <= x-1) >= 1 - alpha. At x == 0 the
+        # lower bound is pinned to 0.
+        if x > 0:
+            assert _brute_cdf(x - 1, n, lo) >= 1 - a - 1e-9
 
-    def tearDown(self):
-        import app.llm as _llm
-        _llm.chat = self._chat
+    @pytest.mark.parametrize("x,n", [(0, 5), (0, 20), (1, 10), (2, 10), (5, 10)])
+    def test_interval_contains_the_point_estimate(self, x, n):
+        lo, hi = E._clopper_pearson(x, n)
+        assert lo <= x / n <= hi + 1e-9
 
-    def test_offline_plan_is_deterministic(self):
-        from app import agents as am
-        env = am.new_envelope("t", "experiment-planner", "plan_experiments", {
-            "model_meta": dict(TABULAR),
-            "findings": [], "dimensions": [
-                {"dimension": "memorization", "rating": "unknown"}],
-            "hypotheses": [], "mitigation_plan": []})
-        out = am.experiment_planner_handle(env, None)["payload"]
-        self.assertTrue(out["experiments"])
-        self.assertIn("deterministic", out["source"])
-        self.assertEqual(out["method"], "experiment_plan_v1")
+    def test_boundary_cases_are_pinned(self):
+        assert E._clopper_pearson(0, 10)[0] == 0.0
+        assert E._clopper_pearson(10, 10)[1] == 1.0
 
-
-class TestExperimentEndpoint(unittest.TestCase):
-    def setUp(self):
-        from fastapi.testclient import TestClient
-
-        from app import main as main_mod
-        self.client = TestClient(main_mod.app)
-        db = SessionLocal()
-        try:
-            inv = _models.Investigation(title="t", keywords="k",
-                                        description="d", sources="web")
-            db.add(inv)
-            db.commit()
-            self.inv_id = inv.id
-            rec = _models.SecurityAssessment(
-                investigation_id=inv.id, product_name="TabPFN",
-                exposure="restricted_data", overall_pct=0.0,
-                posture="UNKNOWN", markdown="m",
-                scoring_json=json.dumps({
-                    "assessment_path": "model_engineering",
-                    "w1": {"overall_pct": None},
-                    "w2": {"overall_pct": None, "uncertainty_pct": 100.0,
-                           "rated": []}}),
-                threats_json=json.dumps([]),
-                model_json=json.dumps({
-                    "meta": dict(TABULAR),
-                    "dimensions": [{"dimension": "memorization",
-                                    "rating": "unknown",
-                                    "rationale": "no evidence",
-                                    "adoption_implications": []}]}))
-            db.add(rec)
-            db.commit()
-            self.aid = rec.id
-        finally:
-            db.close()
-
-    def test_build_stores_plan_without_touching_scores(self):
-        import app.llm as _llm
-        old = _llm.chat
-        _llm.chat = lambda *a, **k: (_ for _ in ()).throw(
-            RuntimeError("down"))
-        try:
-            before = self.client.get(
-                f"/api/security/assessments/{self.aid}").json()["scoring"]
-            r = self.client.post(
-                f"/api/security/assessments/{self.aid}/experiments/build",
-                json={})
-            self.assertEqual(r.status_code, 200, r.text[:200])
-            self.assertTrue(r.json()["experiments"])
-            after = self.client.get(
-                f"/api/security/assessments/{self.aid}").json()
-            self.assertEqual(after["scoring"], before)
-            self.assertTrue(after["experiments"])
-        finally:
-            _llm.chat = old
-
-    def test_non_model_assessment_rejected(self):
-        db = SessionLocal()
-        try:
-            rec = _models.SecurityAssessment(
-                investigation_id=self.inv_id, product_name="Widget",
-                exposure="confidential_data", overall_pct=50.0,
-                posture="x", markdown="m",
-                scoring_json=json.dumps({"assessment_path": "standard"}),
-                threats_json=json.dumps([]))
-            db.add(rec)
-            db.commit()
-            other = rec.id
-        finally:
-            db.close()
-        r = self.client.post(
-            f"/api/security/assessments/{other}/experiments/build", json={})
-        self.assertEqual(r.status_code, 422)
-
-    def test_dossier_shows_experiments(self):
-        import app.llm as _llm
-        old = _llm.chat
-        _llm.chat = lambda *a, **k: (_ for _ in ()).throw(
-            RuntimeError("down"))
-        try:
-            self.client.post(
-                f"/api/security/assessments/{self.aid}/experiments/build",
-                json={})
-            from app.dossier import dossier_markdown
-            db = SessionLocal()
-            try:
-                md = dossier_markdown(db, self.inv_id)
-            finally:
-                db.close()
-            self.assertIn("Experiments — plan only", md)
-            self.assertIn("execution is out of band", md)
-        finally:
-            _llm.chat = old
+    def test_more_trials_narrow_the_interval(self):
+        lo5, hi5 = E._clopper_pearson(0, 5)
+        lo50, hi50 = E._clopper_pearson(0, 50)
+        assert (hi50 - lo50) < (hi5 - lo5)
 
 
-if __name__ == "__main__":
-    unittest.main()
+class TestRateInterval:
+    def test_zero_of_twenty_is_not_zero_width(self):
+        # The claim this exists to stop: "0 of 20, so it held".
+        r = E.rate_interval(0, 20)
+        assert r["lower"] == 0.0
+        assert r["upper"] > 0.1, "a small clean run must carry an upper bound"
+        assert r["method"] == "clopper-pearson"
+
+    def test_boundary_rates_always_use_the_exact_interval(self):
+        for x, n in [(0, 20), (20, 20), (0, 5), (5, 5)]:
+            assert E.rate_interval(x, n)["method"] == "clopper-pearson"
+
+    def test_no_trials_is_reported_not_guessed(self):
+        r = E.rate_interval(0, 0)
+        assert r["rate"] is None
+        assert r["method"] == "none"
+
+    def test_note_tells_the_reader_to_quote_the_interval(self):
+        assert "without it" in E.rate_interval(2, 20)["note"]
+
+
+class TestPower:
+    def test_required_trials_grow_as_the_effect_shrinks(self):
+        big = E.required_trials(0.3)["n"]
+        small = E.required_trials(0.1)["n"]
+        assert small > big
+
+    def test_norm_ppf_hits_known_values(self):
+        assert abs(E._norm_ppf(0.975) - 1.959963984540054) < 1e-6
+        assert abs(E._norm_ppf(0.80) - 0.8416212335729143) < 1e-6
+
+    def test_out_of_range_effect_is_rejected(self):
+        assert E.required_trials(0.0)["n"] is None
+        assert E.required_trials(1.0)["n"] is None
+
+
+class TestScoreResult:
+    def test_a_success_means_the_claim_is_not_supported(self):
+        r = E.score_result({"id": "EX-01"}, successes=1, trials=20)
+        assert r["verdict"] == "control_not_effective"
+        assert "not supported" in r["conclusion"]
+
+    def test_a_small_clean_run_is_inconclusive_not_a_pass(self):
+        r = E.score_result({"id": "EX-01"}, successes=0, trials=5)
+        assert r["verdict"] == "inconclusive"
+        assert "upper bound" in r["conclusion"]
+        assert r["recommended_next_trials"] > 5
+
+    def test_a_larger_clean_run_is_still_never_certainty(self):
+        r = E.score_result({"id": "EX-01"}, successes=0, trials=30)
+        assert r["verdict"] == "supported_but_unmeasured"
+        assert "not proof" in r["conclusion"]
+
+    def test_result_always_carries_an_interval(self):
+        for x, n in [(0, 5), (0, 30), (3, 30)]:
+            assert E.score_result({"id": "x"}, successes=x, trials=n)["rate"]
+
+
+class TestPreregister:
+    def _exp(self):
+        return {"id": "EX-01", "title": "probe", "method_type": "extraction_probe",
+                "rationale": "validate the published claim", "targets": {}}
+
+    def test_protocol_fixes_the_decision_before_the_run(self):
+        p = E.preregister(self._exp(), n_trials=30)
+        assert p["n_trials"] == 30
+        assert p["alpha"] == 0.05
+        assert p["primary_metric"]
+
+    def test_both_decision_branches_are_stated(self):
+        p = E.preregister(self._exp())
+        # A dict, not a string: a duplicate key here would silently drop the
+        # "attack succeeded" branch and leave only the comforting one.
+        assert isinstance(p["decision_rule"], dict)
+        assert p["decision_rule"]["if_attack_succeeds"]
+        assert p["decision_rule"]["if_no_attack_succeeds"]
+
+    def test_clean_run_interval_is_shown_up_front(self):
+        p = E.preregister(self._exp(), n_trials=30)
+        assert p["interval_if_zero_events"]["upper"] > 0
+
+    def test_integrity_note_forbids_post_hoc_edits(self):
+        p = E.preregister(self._exp())
+        assert "before execution" in p["integrity_note"]

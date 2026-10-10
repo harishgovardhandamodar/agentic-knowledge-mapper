@@ -597,6 +597,43 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 @media (max-width: 820px) { #designPane.visible { grid-template-columns: 1fr; grid-template-rows: auto 1fr; } .design-rail { border-right: none; border-bottom: 1px solid var(--border); max-height: 34vh; } .design-topbar { flex-wrap: wrap; } }
 .sec-card { background: var(--bg2); border: 1px solid var(--border); border-radius: 10px; padding: 16px 18px; margin-bottom: 14px; }
 
+
+/* ---- derived scenarios ------------------------------------------------
+   The threat table scores each risk on its own. This shows the paths that
+   per-row scoring cannot produce: chains where both legs look acceptable but
+   the composition does not, and rows the residual floor has already pinned.
+   Every entry names the rows and controls it came from.
+--------------------------------------------------------------------------- */
+async function secRenderScenarios(data) {
+  const host = document.getElementById('secScenarios');
+  if (!host || !secAssessmentId) return;
+  let d;
+  try {
+    d = await (await fetch(`${API}/security/assessments/${secAssessmentId}/scenarios`)).json();
+  } catch (e) { host.hidden = true; return; }
+  const list = (d && d.scenarios) || [];
+  if (!list.length) { host.hidden = true; return; }
+  host.hidden = false;
+  const by = d.stats.by_origin || {};
+  const label = { control_gap_chain: 'uncovered chains', residual_amplifier: 'rows at the floor', cross_cutting_gap: 'programme gaps' };
+  let h = '<div class="sec-cal-note"><b>' + list.length + ' derived scenarios</b> — ' +
+    Object.entries(by).map(([k, v]) => `${v} ${label[k] || k}`).join(', ') +
+    '. These come from composing this row\'s own threats and controls; they are not visible row by row.</div>';
+  const top = list.slice(0, 6);
+  h += '<ul class="sec-cal-list">';
+  for (const sc of top) {
+    const cov = sc.coverage_of_exploit != null ? Math.round(sc.coverage_of_exploit) + '% covered' : '';
+    h += `<li><div class="sec-cal-s-title">` +
+      `<span class="sec-cal-origin">${(label[sc.origin] || sc.origin)}</span> ` +
+      sc.title + (cov ? ` <span class="sec-cal-meta">· ${cov}</span>` : '') + '</div>' +
+      (sc.uncovered_by && sc.uncovered_by.length ? `<div class="sec-cal-chips">${sc.uncovered_by.slice(0, 6).map(x => `<span class="std-chip mono">${x}</span>`).join('')}</div>` : '') +
+      `<div class="sec-cal-meta">${sc.why || ''}</div></li>`;
+  }
+  h += '</ul>';
+  if (list.length > top.length) h += `<div class="std-note">+${list.length - top.length} more</div>`;
+  host.innerHTML = h;
+}
+
 /* ---- calibration panel -------------------------------------------------
    Sits directly above the score so the "this is ordinal" caveat is read at
    the same moment as the number it qualifies. Amber left rule, not red: this
@@ -611,6 +648,14 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .sec-cal-stats i { margin-right: 4px; color: var(--amber, #f59e0b); }
 .sec-cal-stats b { color: var(--text); font-variant-numeric: tabular-nums; }
 .sec-cal-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 4px; }
+/* derived-scenario list */
+.sec-cal-list { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.sec-cal-list li { border-left: 2px solid var(--border); padding-left: 9px; }
+.sec-cal-s-title { font-size: 12px; line-height: 1.45; }
+.sec-cal-origin { display: inline-block; font-size: 10px; text-transform: uppercase; letter-spacing: .04em;
+  color: var(--text2); margin-right: 5px; }
+.sec-cal-meta { color: var(--text2); font-size: 11px; }
+
 .sec-card h3 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text2); margin-bottom: 10px; font-weight: 600; }
 .sec-card h4 { font-size: 13px; margin: 12px 0 6px; }
 .sec-card p, .sec-card li { font-size: 12.5px; line-height: 1.6; }
@@ -1391,6 +1436,7 @@ body.pane-sec-top-collapsed .sec-topbar-sub { display: none; }
             <div id="secControls" class="sec-ctl-list">Loading control catalogue…</div>
           </div>
           <div id="secCalibration" class="sec-calibration" hidden></div>
+          <div id="secScenarios" class="sec-calibration" hidden></div>
           <div id="secResult"><div class="sec-card"><p style="color:var(--text2)">Pick an investigation, configure the product and exposure, then run the agent. The report includes an executive summary, illustrated data-flow / threat-path / workflow diagrams, a full threat &amp; risk register, a Known Exploits section grounded in this app's graph, and Markdown + PDF export.</p></div></div>
         </div>
       </div>
@@ -7838,6 +7884,8 @@ function renderSecurityReport(data) {
     secUpdateCtlCount();
   }
   secRenderCalibration(data);
+  secRenderScenarios(data);
+  secRenderScenarios(data);
   secRunWhatIf();
   secEnsureMermaid(el);
 }

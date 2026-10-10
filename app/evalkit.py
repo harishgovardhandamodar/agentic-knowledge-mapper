@@ -1264,6 +1264,34 @@ def engine_invariants() -> list[dict[str, Any]]:
     out.append({"name": "scoring-result-honours-its-contract",
                 "ok": not contract,
                 "detail": {"violations": contract}})
+
+    # Derived scenarios must be reproducible and self-explaining: a scenario
+    # that cannot name its ingredients is a story.
+    from . import scenarios as SC
+    _sc_inh = _inherent("confidential_data")
+    _scored = sec.score_assessment("confidential_data", _sc_inh,
+                                   active_controls=["C01", "C02", "C03"])
+    _sc_a = SC.scenarios(_scored)
+    _sc_b = SC.scenarios(_scored)
+    out.append({"name": "scenario-derivation-is-deterministic-and-traced",
+                "ok": [s["id"] for s in _sc_a["scenarios"]]
+                == [s["id"] for s in _sc_b["scenarios"]]
+                and all(s.get("why") for s in _sc_a["scenarios"]),
+                "detail": _sc_a["stats"]})
+
+    # The experiment statistics must not manufacture certainty. A clean run of
+    # a realistic size must carry a non-trivial upper bound, and the interval
+    # must satisfy the tail equations it claims to.
+    from . import experiments as EX
+    _ri = EX.rate_interval(0, 20)
+    out.append({"name": "clean-run-keeps-its-uncertainty",
+                "ok": _ri["lower"] == 0.0 and _ri["upper"] > 0.1
+                and _ri["method"] == "clopper-pearson",
+                "detail": {"zero_of_20": [_ri["lower"], _ri["upper"]]}})
+    _incon = EX.score_result({"id": "EX-01"}, successes=0, trials=5)
+    out.append({"name": "underpowered-experiment-is-inconclusive",
+                "ok": _incon["verdict"] == "inconclusive",
+                "detail": {"verdict": _incon["verdict"]}})
     return out
 
 

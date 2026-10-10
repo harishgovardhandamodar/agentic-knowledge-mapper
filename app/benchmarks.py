@@ -592,6 +592,21 @@ def research_report_sections(*, assessment: dict[str, Any],
         sections.append({"key": "sensitivity",
                          "title": "Model sensitivity (ablation)",
                          "lines": lines})
+    scen = (analysis.get("scenarios") or {})
+    if scen.get("scenarios"):
+        chains = [s for s in scen["scenarios"]
+                  if s.get("origin") == "control_gap_chain"]
+        amps = [s for s in scen["scenarios"]
+                if s.get("origin") == "residual_amplifier"]
+        lines = [
+            f"{len(scen['scenarios'])} derived from this row's own threats and "
+            f"controls ({len(chains)} uncovered chains, {len(amps)} at the "
+            f"residual floor).",
+        ]
+        lines += [f"{s['title']} — {s['why']}"
+                  for s in (chains or amps)[:3]]
+        sections.append({"key": "scenarios",
+                         "title": "Derived scenarios", "lines": lines})
     return sections
 
 
