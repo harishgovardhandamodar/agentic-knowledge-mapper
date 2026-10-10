@@ -1,4 +1,10 @@
 services:
+  # Backend API + the Fluid GUI. The fluid-build stage of the Dockerfile
+  # compiles fluid/ (Next.js 15) into a static export and ships it at
+  # static/fluid/; FastAPI serves it same-origin at /fluid/ on this port, so
+  # the GUI's relative /api calls need no proxy or CORS config.
+  #   GUI   -> http://localhost:8204/fluid/
+  #   API   -> http://localhost:8204/api/...
   mapper:
     build: .
     container_name: agentic-knowledge-mapper
@@ -7,11 +13,11 @@ services:
     environment:
       # LLM inference routes to the fox-services gateway over Tailscale. All
       # nodes are on the tailnet, so MagicDNS names are used rather than a LAN
-      # IP that only resolves on one segment: axiom-1 (the 2x RTX 5080 peer)
+      # IP that only resolves on one segment: axiom (the 2x RTX 5080 peer)
       # is primary, axiom-dgx (this host) the fallback. The chain is only
-      # walked when the primary raises, so a healthy axiom-1 always serves.
+      # walked when the primary raises, so a healthy axiom always serves.
       # Direct web fetches go through the local broker's OpenShell sandbox.
-      - LLM_BASE_URL=${LLM_BASE_URL:-http://axiom-1.tailb61a66.ts.net:8210/v1}
+      - LLM_BASE_URL=${LLM_BASE_URL:-http://axiom.tailb61a66.ts.net:8210/v1}
       - LLM_FALLBACK_URL=${LLM_FALLBACK_URL:-http://axiom-dgx.tailb61a66.ts.net:8210/v1}
       - LLM_MODEL=${LLM_MODEL:-qwen3.8:27b}
       - LLM_FALLBACK_MODEL=${LLM_FALLBACK_MODEL:-qwen3.8:27b}
@@ -26,6 +32,13 @@ services:
       - akm_data:/app/data
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    healthcheck:
+      # /api/health is the same endpoint the GUI's top-bar indicator polls.
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8204/api/health')\" || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
     restart: unless-stopped
 
   # 3rd tab ("AI Standards & Regulations"): static build of

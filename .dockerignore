@@ -1,5 +1,18 @@
+# Build context for the mapper image. The fluid-build stage needs fluid/ (and
+# its lockfile) to run `next build`, but must NOT receive the host's installed
+# deps or previous build output — those are recreated inside the stage and would
+# otherwise clobber `npm ci`.
 *
 !requirements.txt
 !app/
 !static/
 !design/
+!fluid/
+
+# Never ship host-installed frontend artifacts or a stale local export into the
+# image; the fluid-build stage regenerates all of them.
+fluid/node_modules
+fluid/.next
+fluid/out
+fluid/build
+static/fluid

@@ -1,3 +1,15 @@
+# Fluid UI build: the parallel Next.js GUI (fluid/) is statically exported and
+# served by FastAPI at /fluid. Built in a node stage so the runtime image stays
+# slim and python-only.
+FROM node:22-slim AS fluid-build
+WORKDIR /build
+COPY fluid/package.json fluid/package-lock.json* ./fluid/
+RUN cd fluid && (npm ci --no-audit --no-fund || npm install --no-audit --no-fund)
+COPY fluid/ ./fluid/
+# `next build` exports to fluid/out, then scripts/export-to-static.mjs copies it
+# to ../static/fluid, i.e. /build/static/fluid.
+RUN cd fluid && npm run build
+
 FROM python:3.12-slim
 
 WORKDIR /app
@@ -17,6 +29,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY . .
+
+# Fluid UI assets from the node stage (overrides anything checked in).
+COPY --from=fluid-build /build/static/fluid /app/static/fluid
 
 # Pinned mermaid renderer, vendored so PDF export needs no network.
 ADD https://cdn.jsdelivr.net/npm/mermaid@10.9.4/dist/mermaid.min.js \

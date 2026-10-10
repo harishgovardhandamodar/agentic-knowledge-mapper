@@ -1,0 +1,102 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * Dark-first research theme (brief §2). Tokens are HSL triplets so Tailwind's
+ * hsl(var(--x)) mapping can apply opacity. Light mode is a first-class,
+ * equally-careful counterpart, not an afterthought.
+ */
+@layer base {
+  :root {
+    --background: 210 40% 98%;
+    --foreground: 222 47% 11%;
+    --card: 0 0% 100%;
+    --card-foreground: 222 47% 11%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 47% 11%;
+    --primary: 199 89% 48%;
+    --primary-foreground: 210 40% 98%;
+    --secondary: 210 40% 96%;
+    --secondary-foreground: 222 47% 11%;
+    --muted: 210 40% 96%;
+    --muted-foreground: 215 16% 47%;
+    --accent: 210 40% 96%;
+    --accent-foreground: 222 47% 11%;
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 214 32% 91%;
+    --input: 214 32% 91%;
+    --ring: 199 89% 48%;
+    --radius: 0.5rem;
+
+    --severity-critical: 350 84% 45%;
+    --severity-high: 24 90% 48%;
+    --severity-medium: 43 90% 45%;
+    --severity-low: 199 80% 45%;
+    --severity-info: 215 16% 47%;
+
+    --evidence-direct: 152 60% 40%;
+    --evidence-family: 199 80% 45%;
+    --evidence-modality: 43 80% 45%;
+    --evidence-absent: 215 16% 55%;
+    --evidence-contradicts: 350 84% 50%;
+
+    --font-sans: 'Inter';
+    --font-mono: 'JetBrains Mono';
+  }
+
+  .dark {
+    --background: 222 47% 7%;
+    --foreground: 210 40% 96%;
+    --card: 222 44% 10%;
+    --card-foreground: 210 40% 96%;
+    --popover: 222 44% 10%;
+    --popover-foreground: 210 40% 96%;
+    --primary: 199 89% 55%;
+    --primary-foreground: 222 47% 8%;
+    --secondary: 217 33% 17%;
+    --secondary-foreground: 210 40% 96%;
+    --muted: 217 33% 15%;
+    --muted-foreground: 215 20% 65%;
+    --accent: 217 33% 18%;
+    --accent-foreground: 210 40% 96%;
+    --destructive: 0 72% 55%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 217 33% 20%;
+    --input: 217 33% 22%;
+    --ring: 199 89% 55%;
+
+    --severity-critical: 350 84% 60%;
+    --severity-high: 24 90% 58%;
+    --severity-medium: 43 90% 58%;
+    --severity-low: 199 80% 60%;
+    --severity-info: 215 20% 65%;
+
+    --evidence-direct: 152 55% 52%;
+    --evidence-family: 199 80% 60%;
+    --evidence-modality: 43 80% 58%;
+    --evidence-absent: 215 16% 55%;
+    --evidence-contradicts: 350 84% 62%;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings: 'cv11', 'ss01';
+    text-rendering: optimizeLegibility;
+  }
+
+  /* Tabular numerals everywhere a number is compared down a column (§2). */
+  .tabular {
+    font-variant-numeric: tabular-nums;
+    font-family: var(--font-mono), ui-monospace, monospace;
+  }
+}
