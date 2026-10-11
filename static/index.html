@@ -3439,8 +3439,8 @@ async function loadArtifacts() {
       open: g.open, count: g.items.length, unit: '', icon: g.icon, tone: g.tone,
       hint: g.title === 'Needs review' ? 'relevance drives order' : undefined,
     })).join('');
-}
   loadCouncilRecord();
+}
 
 /* ---------- council record: logs, actions, decisions, hypotheses ----
    The artifacts tab shows what the investigation *collected*. This shows what
@@ -5305,6 +5305,7 @@ function switchView(view) {
   if (view === 'audit') loadAuditRuns();
   if (view === 'collection') loadCollection();
   if (view === 'cves') loadCvesView();
+  if (view === 'artifacts' && typeof loadArtifacts === 'function' && currentInv) loadArtifacts();
 }
 
 
