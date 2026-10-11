@@ -764,6 +764,22 @@ td.std-threat .std-name { font-weight: 600; display: block; font-size: 11.5px; }
 .fold.open > .fold-head .fold-caret { transform: rotate(90deg); }
 .fold-title { font-weight: 600; font-size: 12.5px; flex: 1; min-width: 0; }
 .fold-title .fold-hint { font-weight: 400; color: var(--text2); }
+/* council record in the artifacts view: the deliberation, not the collection */
+#councilRecord { margin-bottom: 10px; }
+#councilRecord:empty { display: none; }
+.council-sec { margin: 8px 0 12px; }
+.council-sec-h { font-size: 12px; font-weight: 700; margin-bottom: 5px; }
+.council-sec-h i { margin-right: 5px; color: var(--text2); }
+.council-log-head { margin: 6px 0 3px; font-size: 12px; }
+.council-hops { margin: 2px 0 6px 18px; padding: 0; font-size: 11.5px; line-height: 1.6; }
+.council-hops li::marker { color: var(--text2); }
+.council-list { margin: 2px 0 4px 18px; padding: 0; font-size: 11.5px; line-height: 1.6; }
+.council-claims { list-style: none; margin: 4px 0; padding: 0; display: flex; flex-direction: column; gap: 7px; }
+.council-claim { border-left: 2px solid var(--border); padding-left: 9px; font-size: 11.5px; line-height: 1.55; }
+.council-claim.contested { border-left-color: var(--amber, #f59e0b); }
+.council-dim { color: var(--text2); font-size: 11px; }
+.council-obj { color: var(--text2); font-size: 11px; margin-top: 2px; }
+.council-obj b { color: var(--text); }
 .fold-count { font-size: 11px; color: var(--text2); background: var(--bg3); border-radius: 9px; padding: 1px 8px; flex: none; }
 .fold.tone-bad .fold-title { color: var(--red); }
 .fold.tone-warn .fold-title { color: var(--orange); }
@@ -1217,6 +1233,7 @@ body.pane-sec-top-collapsed .sec-topbar-sub { display: none; }
           <button class="btn btn-ghost btn-sm" onclick="foldSetAll('#artList', true)" title="Open every group"><i class="fas fa-angle-double-down"></i></button>
           <button class="btn btn-ghost btn-sm" onclick="foldSetAll('#artList', false)" title="Collapse every group"><i class="fas fa-angle-double-up"></i></button>
         </div>
+        <div id="councilRecord"></div>
         <div id="artList"></div>
       </div>
       <div class="view" id="collectionView">
@@ -3422,6 +3439,127 @@ async function loadArtifacts() {
       open: g.open, count: g.items.length, unit: '', icon: g.icon, tone: g.tone,
       hint: g.title === 'Needs review' ? 'relevance drives order' : undefined,
     })).join('');
+}
+  loadCouncilRecord();
+
+/* ---------- council record: logs, actions, decisions, hypotheses ----
+   The artifacts tab shows what the investigation *collected*. This shows what
+   the council *did*: the A2A deliberation log, what humans changed, which
+   verdicts stand, and the generated claims with their seats and objections.
+   Rendered from GET /investigations/{id}/council-record, which reads stored
+   rows only -- a record that recomputed would be a different review.
+
+   Pinned above the artifact groups and open by default: the whole point is
+   that a reader who stops at "fifteen confident claims" without seeing the
+   objections, the abstentions and the unexamined classes is reading half a
+   review.
+-------------------------------------------------------------------------- */
+async function loadCouncilRecord() {
+  const host = document.getElementById('councilRecord');
+  if (!host || !currentInv) { if (host) { host.innerHTML = ''; } return; }
+  let rec = null;
+  try {
+    const res = await fetch(`${API}/investigations/${currentInv}/council-record`);
+    if (!res.ok) return;
+    rec = await res.json();
+  } catch (e) { return; }
+  const nHyp = (rec.hypotheses || []).reduce((n, h) => n + (h.claims || []).length, 0);
+  const nLogs = (rec.logs || []).reduce((n, l) => n + (l.hops || []).length, 0);
+  if (!nHyp && !nLogs && !(rec.actions || []).length) { host.innerHTML = ''; return; }
+  host.innerHTML = foldSection(`council:${currentInv}:record`,
+    'Council record — logs, actions, decisions, hypotheses',
+    councilRecordHtml(rec), {
+      open: true, count: nHyp, unit: nHyp === 1 ? 'claim' : 'claims',
+      icon: 'fa-scale-balanced', tone: '',
+      hint: 'who proposed, who objected, what nobody reached',
+    });
+}
+
+function councilRecordHtml(rec) {
+  let h = '';
+  // ---- logs: the deliberation, hop by hop ----
+  const logs = (rec.logs || []).filter(l => (l.hops || []).length);
+  if (logs.length) {
+    h += `<div class="council-sec"><div class="council-sec-h"><i class="fas fa-list-ul"></i> Logs — the deliberation</div>`;
+    logs.forEach(l => {
+      h += `<div class="council-log-head"><span class="tag">#${l.assessment_id} ${escHtml(l.path)}</span> <b>${escHtml(l.product || '')}</b>` +
+        (l.task_id ? ` <span class="council-dim">${escHtml(l.task_id)}</span>` : '') + `</div>`;
+      h += `<ol class="council-hops">` + l.hops.map(hop =>
+        `<li><b>${escHtml(hop.agent)}</b> <span class="council-dim">${escHtml(hop.intent)}</span>` +
+        (hop.note ? ` — ${escHtml(hop.note)}` : '') +
+        (hop.at ? ` <span class="council-dim">${escHtml(hop.at)}</span>` : '') + `</li>`
+      ).join('') + `</ol>`;
+    });
+    const runs = (rec.runs || []).filter(r => r.status && r.status !== 'done');
+    if (runs.length) {
+      h += `<div class="council-dim">Still running: ` +
+        runs.map(r => `#${r.id} ${escHtml(r.trigger || '')} (${escHtml(r.status)})`).join(' · ') + `</div>`;
+    }
+    h += `</div>`;
+  }
+  // ---- actions: what humans changed ----
+  const acts = (rec.actions || []).filter(a => a.kind !== 'artifact_reviews');
+  const rev = (rec.actions || []).find(a => a.kind === 'artifact_reviews');
+  if (acts.length || (rev && rev.accepted_or_rejected)) {
+    h += `<div class="council-sec"><div class="council-sec-h"><i class="fas fa-hand"></i> Actions — what humans did</div><ul class="council-list">`;
+    acts.forEach(a => {
+      if (a.kind === 'register_edit') {
+        h += `<li>Register edit on #${a.assessment_id}: <b>${escHtml(a.hypothesis_id || '')}</b> → ${escHtml(a.status || '')}` +
+          ((a.falsifiers || []).length ? ` (${(a.falsifiers || []).length} falsifier(s))` : '') + `</li>`;
+      } else if (a.kind === 'assurance_decision') {
+        h += `<li>Assurance verdict on #${a.assessment_id}: <b>${escHtml(a.decision || '')}</b> by ${escHtml(a.actor || '?')}` +
+          (a.note ? ` — “${escHtml(a.note)}”` : '') + `</li>`;
+      } else if (a.kind === 'assessment_requested') {
+        h += `<li>Assessment requested by ${escHtml(a.actor || '?')}: ${escHtml(a.detail || '')}</li>`;
+      }
+    });
+    if (rev && rev.accepted_or_rejected) {
+      h += `<li>${rev.accepted_or_rejected} artifact(s) accepted or rejected</li>`;
+    }
+    h += `</ul></div>`;
+  }
+  // ---- decisions: the verdicts that stand ----
+  const decs = (rec.decisions || []).filter(d => d.assurance_decision);
+  if (decs.length) {
+    h += `<div class="council-sec"><div class="council-sec-h"><i class="fas fa-gavel"></i> Decisions — the verdicts that stand</div><ul class="council-list">`;
+    decs.forEach(d => {
+      h += `<li><span class="tag">#${d.assessment_id}</span> <b>${escHtml(d.assurance_decision)}</b>` +
+        (d.decided_by ? ` by ${escHtml(d.decided_by)}` : '') +
+        (d.decided_at ? ` <span class="council-dim">${escHtml(d.decided_at)}</span>` : '') +
+        (d.note ? ` — “${escHtml(d.note)}”` : '') +
+        (d.expires_at ? ` <span class="council-dim">(expires ${escHtml(d.expires_at)})</span>` : '') + `</li>`;
+    });
+    h += `</ul></div>`;
+  }
+  // ---- hypotheses: the generated claims, with seats and objections ----
+  (rec.hypotheses || []).forEach(hyp => {
+    const claims = hyp.claims || [];
+    if (!claims.length) return;
+    const council = hyp.council || {};
+    const panel = council.panel || {};
+    const contested = claims.filter(c => (c.council || {}).challenges
+      && c.council.challenges.length).length;
+    h += `<div class="council-sec"><div class="council-sec-h"><i class="fas fa-flask"></i> Hypotheses — assessment #${hyp.assessment_id}` +
+      (hyp.confidence != null ? ` <span class="council-dim">confidence ${Math.round(hyp.confidence)}/100</span>` : '') +
+      ` <span class="council-dim">${claims.length} claims, ${contested} contested, ${panel.n_seats || '?'} seats</span></div>`;
+    h += `<ul class="council-claims">` + claims.map(c => {
+      const cc = c.council || {};
+      const audit = cc.falsifier_audit || {};
+      const chs = cc.challenges || [];
+      return `<li class="council-claim${chs.length ? ' contested' : ''}">` +
+        `<div><b>${escHtml(c.hypothesis_id || c.id || '')}</b> ${escHtml(c.claim || '')}</div>` +
+        `<div class="council-dim">confidence ${Math.round(Number(c.confidence || 0))}/100 · stakes ${escHtml(c.impact)}/5 · ` +
+        (cc.seat ? `seat <b>${escHtml(cc.seat)}</b> · ` : '') +
+        `refutation test ${escHtml(audit.grade || 'ungraded')}` +
+        (c.status && c.status !== 'untested' ? ` · status <b>${escHtml(c.status)}</b>` : '') + `</div>` +
+        (c.falsifier ? `<div>Refuted by: ${escHtml(c.falsifier)}</div>` : '') +
+        (chs.length ? `<div class="council-obj">Objected to by ` +
+          chs.map(ch => `<b>${escHtml(ch.seat || '')}</b> (${escHtml((ch.ground || '').replace(/_/g, ' '))})`).join('; ') +
+          `. No objection is recorded as the review's reach, not the claim's safety.</div>` : '') +
+        `</li>`;
+    }).join('') + `</ul></div>`;
+  });
+  return h || '<div class="council-dim">No council activity recorded yet.</div>';
 }
 
 function artifactCardHtml(a) {

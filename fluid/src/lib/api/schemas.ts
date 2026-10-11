@@ -182,6 +182,120 @@ export type ThreatRow = z.infer<typeof zThreatRow>;
  * fields the shell and the three primitives need are pinned; the rest rides
  * through untouched.
  */
+/**
+ * The council's paper trail for one investigation: logs, actions, decisions
+ * and generated hypotheses.
+ *
+ * Every section reads stored rows, never recomputation. A record that
+ * recomputed would be a different review from the one whose scores sit beside
+ * it — and on an investigation with no hypothesis assessment the hypotheses
+ * section is empty rather than invented.
+ */
+export const zCouncilRecord = z
+  .object({
+    investigation_id: z.number(),
+    logs: z
+      .array(
+        z
+          .object({
+            assessment_id: z.number(),
+            path: z.string(),
+            product: z.string().nullable().optional(),
+            task_id: z.string().optional(),
+            hops: z
+              .array(
+                z.object({
+                  agent: z.string(),
+                  intent: z.string(),
+                  at: z.string().optional(),
+                  note: z.string().optional(),
+                }),
+              )
+              .optional(),
+          })
+          .passthrough(),
+      )
+      .optional(),
+    runs: z
+      .array(
+        z
+          .object({
+            id: z.number(),
+            status: z.string(),
+            trigger: z.string().optional(),
+            started_at: z.string().nullable().optional(),
+            finished_at: z.string().nullable().optional(),
+            error: z.string().nullable().optional(),
+          })
+          .passthrough(),
+      )
+      .optional(),
+    actions: z.array(z.object({ kind: z.string() }).passthrough()).optional(),
+    decisions: z
+      .array(
+        z
+          .object({
+            assessment_id: z.number(),
+            product: z.string().nullable().optional(),
+            assurance_decision: z.string().nullable().optional(),
+            decided_by: z.string().nullable().optional(),
+            decided_at: z.string().nullable().optional(),
+            note: z.string().nullable().optional(),
+            expires_at: z.string().nullable().optional(),
+          })
+          .passthrough(),
+      )
+      .optional(),
+    hypotheses: z
+      .array(
+        z
+          .object({
+            assessment_id: z.number(),
+            confidence: z.number().nullable().optional(),
+            claims: z
+              .array(
+                z
+                  .object({
+                    hypothesis_id: z.string().optional(),
+                    id: z.string().optional(),
+                    claim: z.string().optional(),
+                    falsifier: z.string().optional(),
+                    confidence: z.number().nullable().optional(),
+                    impact: z.number().nullable().optional(),
+                    status: z.string().optional(),
+                    council: z
+                      .object({
+                        seat: z.string().optional(),
+                        attack_classes: z.array(z.string()).optional(),
+                        falsifier_audit: z
+                          .object({ grade: z.string().optional() })
+                          .passthrough()
+                          .optional(),
+                        challenges: z
+                          .array(
+                            z.object({
+                              seat: z.string().optional(),
+                              ground: z.string().optional(),
+                              why: z.string().optional(),
+                            }),
+                          )
+                          .optional(),
+                      })
+                      .passthrough()
+                      .optional(),
+                  })
+                  .passthrough(),
+              )
+              .optional(),
+            council: z.object({}).passthrough().optional(),
+          })
+          .passthrough(),
+      )
+      .optional(),
+  })
+  .passthrough();
+export type CouncilRecord = z.infer<typeof zCouncilRecord>;
+
 /** One attack class in the council's coverage report. */
 const zAttackClass = z
   .object({

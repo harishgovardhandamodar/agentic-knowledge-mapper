@@ -12,6 +12,7 @@ import {
   zAssessmentAnalysis,
   zAssessmentList,
   zControlCatalog,
+  zCouncilRecord,
   zEvalReport,
   zHealth,
   zInvestigation,
@@ -20,6 +21,7 @@ import {
   zThreatPack,
   type Assessment,
   type AssessmentAnalysis,
+  type CouncilRecord,
   type EvalReport,
   type Experiment,
   type Investigation,
@@ -45,6 +47,8 @@ export const qk = {
   gaps: (invId: number) => [...qk.all, 'research-gaps', invId] as const,
   experiments: (assessmentId: number) =>
     [...qk.all, 'experiments', assessmentId] as const,
+  councilRecord: (invId: number) =>
+    [...qk.all, 'council-record', invId] as const,
 };
 
 export function useHealth() {
@@ -90,6 +94,21 @@ export function useAssessments(
       if (Array.isArray(data)) return data;
       return data.items ?? data.assessments ?? [];
     },
+  });
+}
+
+export function useCouncilRecord(
+  invId: number | null | undefined,
+): ReturnType<typeof useQuery<CouncilRecord>> {
+  return useQuery<CouncilRecord>({
+    queryKey: qk.councilRecord(invId ?? -1),
+    enabled: typeof invId === 'number' && invId > 0,
+    queryFn: () =>
+      getParsed(
+        zCouncilRecord,
+        `/investigations/${invId}/council-record`,
+        { lenient: true },
+      ),
   });
 }
 

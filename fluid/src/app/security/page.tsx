@@ -2,7 +2,8 @@
 
 import Link from 'next/link';
 import { ArrowRight } from 'lucide-react';
-import { useAssessments } from '@/lib/api/queries';
+import { useAssessments, useCouncilRecord } from '@/lib/api/queries';
+import { CouncilRecordView } from '@/components/council-record';
 import { useUi } from '@/lib/stores/ui';
 import { PageHeader } from '@/components/shell/page-header';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -14,6 +15,8 @@ import { StatusBadge } from '@/components/ui/status-badge';
 export default function SecurityPage() {
   const { investigationId } = useUi();
   const { data, isLoading, isError } = useAssessments(investigationId);
+  const { data: councilRecord, isLoading: isCouncilLoading } =
+    useCouncilRecord(investigationId);
 
   return (
     <div>
@@ -44,6 +47,12 @@ export default function SecurityPage() {
           No assessments for this investigation yet.
         </p>
       )}
+
+      {/* The deliberation behind the assessments below: logs, actions,
+          decisions and the generated claims with their seats and
+          objections. Sits above the list because the coverage gaps it
+          reports qualify every assessment it follows. */}
+      <CouncilRecordView record={councilRecord} isLoading={isCouncilLoading} />
 
       <div className="flex flex-col gap-3">
         {(data ?? []).map((a) => {

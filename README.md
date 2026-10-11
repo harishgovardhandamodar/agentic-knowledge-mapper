@@ -50,6 +50,109 @@ component of a risk-management system:
 
 Full design: [design/assurance.md](design/assurance.md).
 
+## What's new — a council drafts the hypotheses
+
+Flow 3 used to be a single drafting call at temperature 0.1, scored by
+arithmetic over the rows it cited. That returns the model's *modal* view of AI
+security — the consensus of the training corpus: memorization, jailbreak, RAG
+poisoning. Not wrong, but the part of the field every paper already covers, so
+the claim set re-derived the literature instead of testing anything. It is now
+a panel of **six seats** (`app/council.py`): privacy engineering, adversarial
+ML, AI supply chain, alignment/preference data, and ML systems each own a slice
+of the attack taxonomy, and each declares **the weakness it is known to have** —
+a panel that publishes its blind spots is auditable, one that claims completeness
+is not. The sixth seat, **measurement science**, owns no attack class and exists
+only to attack the other five's proposals.
+
+Four defects this fixes, each pinned by a test:
+
+- **Claims are merged, never substituted.** The old code replaced its
+  deterministic rules with the model's output on success, so a *working* gateway
+  produced strictly fewer claims than a broken one. The seats' claims are the
+  floor, not the fallback — a council that needs a gateway disappears exactly
+  when the evidence is thinnest.
+- **A refutation test is graded, not merely checked for being non-empty.**
+  "Review the deployment" settles nothing and used to score identically to
+  "request 20 rows back verbatim". Three decidable questions: does the test name
+  an observation, does it name a threshold, is it only abstract. Grade, score
+  and reason are all recorded, so a downgrade can be argued with.
+- **Stakes are capped by the attack classes a claim actually traces to.** The
+  drafter could previously grade itself 5/5 on evidence the catalogue says is
+  3/5, and the number went straight into the score.
+- **Silence is no longer a pass.** `peer_scrutiny` (20%) is a new scored
+  dimension: a claim no seat objected to scores **zero**, and — unlike every
+  other dimension, which defaults to the neutral 40 — it does not fall back to
+  that baseline. Unattacked is not unrefutable.
+
+Coverage is reported as **two lists, never one**: `unexamined` (stored evidence
+exists, no seat turned it into a claim) and `not_in_corpus` (the corpus says
+nothing about that class). Collapsing them would let "nobody looked" read as
+"there is nothing there". Both UIs render the panel with the gaps at the same
+visual weight as the claims, and the report prints the panel and its blind
+spots above them.
+
+The method string moves to `hypothesis-council-v2`; the weights still sum to 1.
+
+### Before / after, measured on real evidence
+
+`run_council_compare.py` loads the pre-council `app/agents.py` **and**
+`app/security.py` from git as standalone modules and runs both eras over the
+same stored rows. Loading the old *scorer* as well as the old *drafter*
+matters: scoring the old claims with the new scorer charges "before" for a
+`peer_scrutiny` dimension that did not exist when it ran, and that reads as a
+defect of the old drafting rather than a property of the new scoring. Each era
+is measured on its own arithmetic.
+
+```bash
+python3 run_council_live.py  data/council-live.db      # drive the manager end to end
+python3 run_council_report.py 1 data/council-live.db   # render the comparison
+```
+
+| Measure | 2+1 rows: before | 2+1 rows: after | 6+10 rows: before | 6+10 rows: after |
+|---|---|---|---|---|
+| Claims drafted | 1 | **7** | 4 | **15** |
+| Attack classes reached | 0 | **5** | 0 | **9** |
+| Reviewer seats filing claims | 0 | **4** | 0 | **5** |
+| Claims contested by a non-author | 0 | **7** | 0 | **15** |
+| Claims with a refutable test | 100% | 100% | 100% | 100% |
+| Scoring method | `hypothesis-synthesis-v1` | `hypothesis-council-v2` | `hypothesis-synthesis-v1` | `hypothesis-council-v2` |
+| Confidence aggregate | 24.5 | 39.3 | 65.0 | **36.4** |
+
+**The confidences move in opposite directions and both movements are correct.**
+On the thin evidence base the council out-produces the monologist. On the rich
+one it produces nearly four times the claims and scores them *lower* — because
+every claim is contested and `evidence_support` falls from 67.5 to 31.5. A claim
+nobody attacked used to score as well-evidenced. More claims plus a lower score
+is the council working: it is harder to satisfy, and the difficulty is visible.
+
+On the thin set, "before" produced exactly one claim — the *gap marker*,
+`the two prior assessments produced no overlapping signal to test`. That is the
+flow saying it had nothing to cross-reference. It is not a hypothesis.
+
+### What the council made of a real question
+
+Run through the manager live — a temporal graph neural network feeding an
+autoregressive autoencoder that generates synthetic SWIFT financial messages
+for a consortium holding uneven shares of the corpus:
+
+| Claim | Seat | Refuted by |
+|---|---|---|
+| verbatim training records can be recovered through the serving surface by an ordinary querying user | privacy-cryptography | request 20 distinctive spans back verbatim; if none returns verbatim, the claim does not hold |
+| an attacker who can query the model can determine whether a specific person's record was in its training data | privacy-cryptography | membership probe on 30 records, half in-scope; if the confirmation rate does not differ above 20 points, the claim does not hold |
+| the model reproduces training-sequence content on request | privacy-cryptography **+** alignment-safety | sample 20 rows the model was demonstrably trained on; if every row is paraphrased or declined, the claim does not hold |
+| behaviour implanted in training data persists across restarts | adversarial-ml **+** supply-chain | run the held-out behavioural suite; if refusals and outputs are stable across it, the claim does not hold |
+| small input perturbations flip decisions often enough to matter at serving scale | adversarial-ml | measure the flip rate under the named perturbation at 20 trials; if it stays below 5 percent, the claim does not hold |
+
+Seven claims, five distinct — two pairs converged across seats, which is the
+thing a panel knows that one voice cannot. Four seats filed, all seven claims
+were contested, and the report named **7 of 10
+attack classes as never mentioned by the corpus** — `theft`, `injection`,
+`cascade`, `evasion`, `inversion`, `poisoning`, `alignment_data_leakage` — as
+*unmeasured, not absent*. The consortium question (whether a major-share holder
+can use the synthetic data to reconstruct a minority holder's sample) is a
+membership-inference and attribute-inversion problem, and the report is blunt
+that neither was examined.
+
 ## Documentation (design, with diagrams)
 
 **Start with [design/](design/README.md)** — the whole system drawn: context,
@@ -189,6 +292,24 @@ Artifacts flagged off-brief by drift detection stay here with a **drift** pill �
 flagged, dimmed, never silently deleted.
 
 ![Collected artifacts with collection timeline and filters](docs/screenshots/14-artifacts-collection.png)
+
+Pinned above the artifact groups is the **Council record** — what the council
+*did*, as opposed to what the investigation collected. Four sections, all read
+from `GET /investigations/{id}/council-record` (stored rows only; a record that
+recomputed would be a different review):
+
+- **Logs** — the A2A deliberation, hop by hop: which seat spoke, with what
+  intent, what it concluded. For a hypothesis-path assessment this is the
+  review itself: analyst drafted, verifier objected, reporter wrote.
+- **Actions** — what humans changed: assessment requests, register edits
+  (claim status or falsifier changes), assurance verdicts, artifact reviews.
+- **Decisions** — the assurance verdicts that stand on each assessment (accept
+  / guardrails / reject / exception, who decided, when, why, expiry).
+- **Hypotheses** — the generated claims with their seats, refutation-test
+  grades, objections raised by non-author seats, and the falsifier that would
+  settle each one.
+
+The Fluid security page carries the same record above the assessment list.
 
 ### Known issues
 
@@ -353,6 +474,25 @@ data, how sound it is, how exposed and how governed (weighted dimensions,
 W1 adversarial coverage + W2 adoption risk + W3 mitigation, adversarial
 misuse, or hypothesis confidence). Model scores never pretend controls reduce
 them in v1: residual equals inherent.
+
+**Hypothesis synthesis is scored by a council, and it is a confidence, not a
+risk.** `hypothesis-council-v2` weights five dimensions: `evidence_support`
+(0.35), `cross_flow_corroboration` (0.20), `peer_scrutiny` (0.20),
+`testability` (0.15) and `impact_if_true` (0.10). Two of those are new, and
+their defaults are deliberately unlike the rest:
+
+- `peer_scrutiny` measures whether a reviewer who did **not** propose a claim
+  tried to break it, and defaults to **0 rather than the neutral 40**. A
+  measured zero must survive to the aggregate — a claim no seat examined has to
+  drag the score down, or a single-minded panel would score as highly as a
+  genuinely contested one.
+- `testability` is graded on whether the refutation test names an observation
+  and a threshold, not on whether a falsifier string exists.
+
+`evidence_support` is net of what the council objected to, and `impact_if_true`
+is capped by the attack classes the claim traces to, so a drafter cannot grade
+its own homework into the score. The aggregate is written to `confidence_pct`,
+never to a risk field, and the posture string says so in the payload.
 
 **The assurance overlay decides how much to believe.** A control counts toward
 the **verified** residual only when an accepted primary artifact names it; the
@@ -584,6 +724,8 @@ an action are provable afterwards:
 | POST | `/api/security/classify-subject` | Is this a model subject, and which question does the wording imply? (drives the mode selector) |
 | GET | `/api/investigations/{id}/security/assessments` | Assessment history |
 | GET | `/api/security/assessments/{id}`, `…/markdown`, `…/pdf` | Report / exports |
+| GET | `/api/investigations/{id}/council-record` | The council's paper trail: A2A deliberation logs, human actions, standing assurance decisions, and the hypothesis registers with their panels — stored rows only, so the record is the review that happened |
+| GET | `/api/security/assessments/{id}/hypotheses` | The claim register. A hypothesis-path row also returns a `council` block: the seats with their remits and declared blind spots, the attack-class coverage split into `unexamined` (evidence exists, no seat claimed it) and `not_in_corpus` (the corpus is silent), the objection grounds, and how many claims were contested vs drew no objection. Each claim carries its own `council` block too — the objections against it, its refutation-test grade, its author seat, and any other seat that converged on it |
 | POST | `/api/security/runs/{id}/approval` | Grant or deny a parked run (≠ the requester) |
 | GET | `/api/security/assessments/{id}/assurance` | Stored assurance verdict + decision state |
 | GET | `/api/security/assessments/{id}/vendor-questionnaire` | Architecture answers that would unblock each threat |

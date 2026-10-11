@@ -3482,11 +3482,168 @@ def _hypothesis_rec(assessment_id: int, db: Session):
 @app.get("/api/security/assessments/{assessment_id}/hypotheses")
 def get_hypothesis_register(assessment_id: int,
                             db: Session = Depends(get_db)):
-    """The claim register: scored claims overlaid with builder edits."""
+    """The claim register: scored claims overlaid with builder edits.
+
+    Carries the panel beside the claims. Each claim already holds its own
+    ``council`` block (the objections raised against it, its refutation-test
+    grade, its author seat), but a register that lists claims without saying
+    who sat on the review, or which attack classes no seat reached, is half a
+    review: the reader sees fifteen confident claims and no way to tell that
+    seven of the ten attack classes were never examined.
+
+    Read from the stored trace rather than recomputed, so the panel shown is
+    the panel that actually produced these claims and not a fresh one that
+    might disagree with the scores beside it.
+    """
     from . import dossier as _dossier
+    rec = _hypothesis_rec(assessment_id, db)
+    try:
+        council = (json.loads(rec.a2a_trace_json or "{}") or {}).get("council") or {}
+    except (json.JSONDecodeError, AttributeError, TypeError):
+        council = {}
     return {"assessment_id": assessment_id,
-            "claims": _dossier.hypothesis_register(
-                _hypothesis_rec(assessment_id, db))}
+            "claims": _dossier.hypothesis_register(rec),
+            "council": council}
+
+
+@app.get("/api/investigations/{inv_id}/council-record")
+def investigation_council_record(inv_id: int, db: Session = Depends(get_db)):
+    """The council's paper trail for one investigation: logs, actions,
+    decisions and generated hypotheses.
+
+    Four sections, each read from stored rows rather than recomputed, so the
+    record describes the review that actually happened:
+
+    * ``logs`` — the A2A trace of every security assessment on this
+      investigation: which seat (agent) spoke, with what intent, and what it
+      concluded. For a hypothesis-path row this is the deliberation itself:
+      analyst drafted, verifier objected, reporter wrote.
+    * ``actions`` — what humans did: approval grants/denials, artifact review
+      decisions, hypothesis-register edits (status or falsifier changes), and
+      evidence-collection runs launched from a claim.
+    * ``decisions`` — the assurance verdicts stored on each assessment row
+      (accept / guardrails / reject / exception, who decided, when, why), plus
+      the current status of every hypothesis claim.
+    * ``hypotheses`` — the claim registers of the hypothesis-path assessments,
+      each with its council block (seats, objections, coverage).
+
+    An investigation with no hypothesis assessment still gets the record; the
+    hypotheses section is empty and says so, which is the honest answer.
+    """
+    from . import dossier as _dossier
+    inv = db.query(Investigation).filter(Investigation.id == inv_id).first()
+    if not inv:
+        raise HTTPException(404, "Investigation not found")
+
+    # ---- logs: A2A traces + run history ---------------------------------
+    assessments = (db.query(SecurityAssessment)
+                   .filter(SecurityAssessment.investigation_id == inv_id)
+                   .order_by(SecurityAssessment.id).all())
+    logs = []
+    for _rec in assessments:
+        try:
+            scoring = json.loads(_rec.scoring_json or "{}") or {}
+        except (json.JSONDecodeError, AttributeError, TypeError):
+            scoring = {}
+        try:
+            trace = json.loads(_rec.a2a_trace_json or "{}") or {}
+        except (json.JSONDecodeError, AttributeError, TypeError):
+            trace = {}
+        logs.append({
+            "assessment_id": _rec.id,
+            "path": scoring.get("assessment_path") or "standard",
+            "product": _rec.product_name,
+            "task_id": trace.get("task_id", ""),
+            "hops": [{"agent": h.get("agent", ""), "intent": h.get("intent", ""),
+                      "at": h.get("at", ""), "note": h.get("note", "")}
+                     for h in (trace.get("trace") or [])
+                     if isinstance(h, dict)],
+        })
+    run_rows = (db.query(AgentRun)
+                .filter(AgentRun.investigation_id == inv_id)
+                .order_by(AgentRun.id).all())
+    runs = [{"id": r.id, "status": r.status, "trigger": r.trigger or "manual",
+             "started_at": _dt(r.started_at), "finished_at": _dt(r.finished_at),
+             "error": (r.error or "")[:300] if r.error else None}
+            for r in run_rows]
+
+    # ---- actions: what humans changed ------------------------------------
+    actions = []
+    for _rec in assessments:
+        if _rec.requested_by:
+            actions.append({"kind": "assessment_requested",
+                            "assessment_id": _rec.id,
+                            "actor": _rec.requested_by, "detail": _rec.product_name})
+        try:
+            stored = json.loads(_rec.hypothesis_json or "{}") or {}
+        except (json.JSONDecodeError, AttributeError, TypeError):
+            stored = {}
+        for c in stored.get("claims") or []:
+            if not isinstance(c, dict):
+                continue
+            if c.get("status") not in (None, "untested") or c.get("falsifiers"):
+                actions.append({
+                    "kind": "register_edit",
+                    "assessment_id": _rec.id,
+                    "hypothesis_id": c.get("hypothesis_id") or c.get("id"),
+                    "status": c.get("status", "untested"),
+                    "falsifiers": c.get("falsifiers") or []})
+        if _rec.assurance_decision:
+            actions.append({"kind": "assurance_decision",
+                            "assessment_id": _rec.id,
+                            "decision": _rec.assurance_decision,
+                            "actor": _rec.assurance_decided_by,
+                            "at": _dt(_rec.assurance_decided_at),
+                            "note": (_rec.assurance_decision_note or "")[:300]})
+    reviewed = (db.query(Artifact)
+                .filter(Artifact.investigation_id == inv_id,
+                        Artifact.review.in_(("accepted", "rejected")))
+                .count())
+    actions.append({"kind": "artifact_reviews",
+                    "accepted_or_rejected": reviewed})
+
+    # ---- decisions: assurance verdicts + claim states ---------------------
+    decisions = []
+    for _rec in assessments:
+        decisions.append({
+            "assessment_id": _rec.id,
+            "product": _rec.product_name,
+            "assurance_decision": _rec.assurance_decision,
+            "decided_by": _rec.assurance_decided_by,
+            "decided_at": _dt(_rec.assurance_decided_at),
+            "note": (_rec.assurance_decision_note or "")[:500]
+                    if _rec.assurance_decision_note else None,
+            "expires_at": _dt(_rec.assurance_decision_expires_at),
+        })
+
+    # ---- hypotheses: registers + panels -----------------------------------
+    hypotheses = []
+    for _rec in assessments:
+        try:
+            scoring = json.loads(_rec.scoring_json or "{}") or {}
+        except (json.JSONDecodeError, AttributeError, TypeError):
+            scoring = {}
+        if scoring.get("assessment_path") != "model_hypothesis":
+            continue
+        try:
+            council = (json.loads(_rec.a2a_trace_json or "{}")
+                       or {}).get("council") or {}
+        except (json.JSONDecodeError, AttributeError, TypeError):
+            council = {}
+        try:
+            sconf = (json.loads(_rec.scoring_json or "{}") or {}).get("confidence_pct")
+        except (json.JSONDecodeError, AttributeError, TypeError):
+            sconf = None
+        hypotheses.append({
+            "assessment_id": _rec.id,
+            "confidence": sconf,
+            "claims": _dossier.hypothesis_register(_rec),
+            "council": council,
+        })
+
+    return {"investigation_id": inv_id, "logs": logs, "runs": runs,
+            "actions": actions, "decisions": decisions,
+            "hypotheses": hypotheses}
 
 
 class HypothesisPatchRequest(BaseModel):

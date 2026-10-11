@@ -128,6 +128,88 @@ class TestBuilderApi(unittest.TestCase):
         self.assertEqual({c["hypothesis_id"] for c in claims}, {"H01", "H02"})
         self.assertTrue(all(c["status"] == "untested" for c in claims))
 
+    def test_register_says_it_when_there_is_no_council(self):
+        # A register that lists claims without saying who sat on the review
+        # is half a review. Legacy rows have no panel, and the honest answer
+        # is an absent one -- not a recomputed panel that may disagree with
+        # the scores printed beside it.
+        r = self.client.get(f"/api/security/assessments/{self.aid}/hypotheses")
+        self.assertEqual(r.json()["council"], {})
+
+    def test_council_record_assembles_logs_actions_decisions_hypotheses(self):
+        # The artifacts tab's council record: four sections from stored rows.
+        # A section that recomputes would be a different review; this one
+        # reads what is there, which is why a fresh fixture has logs and
+        # decisions but empty hypotheses-side edits.
+        from app.models import SecurityAssessment as SAModel
+        db = SessionLocal()
+        try:
+            rec = db.query(SAModel).filter(SAModel.id == self.aid).first()
+            rec.a2a_trace_json = json.dumps({
+                "task_id": "hyp-x",
+                "trace": [{"agent": "hypothesis-analyst",
+                           "intent": "hypotheses_drafted",
+                           "at": "2026-01-01", "note": "2 claims drafted"}],
+                "council": {"panel": {"n_seats": 6}}})
+            rec.assurance_decision = "accept"
+            rec.assurance_decided_by = "reviewer"
+            db.commit()
+        finally:
+            db.close()
+        r = self.client.get(
+            f"/api/investigations/{self.inv_id}/council-record")
+        self.assertEqual(r.status_code, 200, r.text[:200])
+        body = r.json()
+        self.assertEqual(body["investigation_id"], self.inv_id)
+        hyp_logs = [l for l in body["logs"]
+                    if l["path"] == "model_hypothesis"]
+        self.assertEqual(len(hyp_logs), 1)
+        self.assertEqual(hyp_logs[0]["hops"][0]["agent"],
+                         "hypothesis-analyst")
+        dec = [d for d in body["decisions"]
+               if d["assessment_id"] == self.aid]
+        self.assertEqual(dec[0]["assurance_decision"], "accept")
+        acts = {a["kind"] for a in body["actions"]}
+        self.assertIn("assurance_decision", acts)
+        self.assertEqual(len(body["hypotheses"]), 1)
+        self.assertEqual(
+            {c["hypothesis_id"] for c in body["hypotheses"][0]["claims"]},
+            {"H01", "H02"})
+
+    def test_council_record_on_empty_investigation_is_honest(self):
+        db = SessionLocal()
+        try:
+            empty = _inv(db, title="nothing yet")
+        finally:
+            db.close()
+        r = self.client.get(f"/api/investigations/{empty}/council-record")
+        self.assertEqual(r.status_code, 200, r.text[:200])
+        body = r.json()
+        self.assertEqual(body["logs"], [])
+        self.assertEqual(body["hypotheses"], [])
+
+    def test_council_record_404_on_unknown_investigation(self):
+        r = self.client.get("/api/investigations/999999/council-record")
+        self.assertEqual(r.status_code, 404)
+
+    def test_register_carries_the_stored_panel(self):
+        from app.models import SecurityAssessment as SAModel
+        db = SessionLocal()
+        try:
+            rec = db.query(SAModel).filter(SAModel.id == self.aid).first()
+            rec.a2a_trace_json = json.dumps({
+                "task_id": "hyp-x", "trace": [],
+                "council": {"panel": {"n_seats": 6}, "contested": 2,
+                            "coverage": {"coverage_pct": 100.0}}})
+            db.commit()
+        finally:
+            db.close()
+        r = self.client.get(f"/api/security/assessments/{self.aid}/hypotheses")
+        council = r.json()["council"]
+        self.assertEqual(council["panel"]["n_seats"], 6)
+        self.assertEqual(council["contested"], 2)
+        self.assertEqual(council["coverage"]["coverage_pct"], 100.0)
+
     def test_patch_status_and_falsifiers(self):
         r = self.client.patch(
             f"/api/security/assessments/{self.aid}/hypotheses",
