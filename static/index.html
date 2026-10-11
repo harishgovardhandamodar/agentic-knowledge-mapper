@@ -3168,10 +3168,27 @@ function renderGraph() {
     edges: { smooth: { type: 'continuous' } },
     physics: { enabled: true, solver: 'forceAtlas2Based',
       forceAtlas2Based: { gravitationalConstant: -40, centralGravity: 0.005, springLength: 180, springConstant: 0.02, damping: 0.4 },
-      stabilization: false },
+      stabilization: { enabled: true, iterations: 250, updateInterval: 25 } },
     interaction: { hover: true, tooltipDelay: 200, hideEdgesOnDrag: true },
   });
   renderGraphLegend();
+  // Freeze the force layout once it settles. forceAtlas2 with stabilization
+  // disabled ran forever on the main thread -- on a few hundred edges that is
+  // a constant CPU burn that makes every tab feel sluggish, since it shares
+  // the thread with all rendering. The solver is unchanged so settled
+  // positions are identical; only the endless drift stops. The timeout is the
+  // fallback for graphs that oscillate and never converge. Dragging still
+  // works with physics off.
+  network.once('stabilizationIterationsDone', () => {
+    try { network.setOptions({ physics: { enabled: false } }); } catch (e) {}
+  });
+  setTimeout(() => {
+    try {
+      const opts = network.getOptions ? network.getOptions() : null;
+      const on = !opts || !opts.physics || opts.physics.enabled !== false;
+      if (on) network.setOptions({ physics: { enabled: false } });
+    } catch (e) {}
+  }, 12000);
   network.on('click', params => {
     if (!params.nodes.length) return;
     const c = params.nodes[0];

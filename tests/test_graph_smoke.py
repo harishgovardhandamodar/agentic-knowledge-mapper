@@ -32,6 +32,20 @@ class GraphSmokeCase(unittest.TestCase):
             f"graph smoke did not pass:\n{r.stdout}\n{r.stderr}")
         self.assertIn("PASS", r.stdout)
 
+    def test_force_layout_freezes_after_settling(self):
+        # forceAtlas2 with stabilization disabled runs forever on the main
+        # thread; on a few hundred edges that is a constant CPU burn that
+        # makes every tab feel sluggish. The layout must settle and then
+        # freeze: stabilization enabled, a handler that disables physics when
+        # iterations finish, and a timeout fallback for oscillating graphs.
+        html = open(os.path.join(HERE, "..", "static", "index.html")).read()
+        main_graph = html[html.index("network = new vis.Network"):]
+        main_graph = main_graph[:main_graph.index("function renderGraphLegend")]
+        self.assertNotIn("stabilization: false", main_graph)
+        self.assertIn("stabilization: { enabled: true", main_graph)
+        self.assertIn("stabilizationIterationsDone", main_graph)
+        self.assertIn("physics: { enabled: false }", main_graph)
+
 
 if __name__ == "__main__":
     unittest.main()
