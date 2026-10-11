@@ -288,6 +288,33 @@ export const zCouncilRecord = z
               )
               .optional(),
             council: z.object({}).passthrough().optional(),
+            analytics: z
+              .object({
+                n_claims: z.number(),
+                mean_confidence: z.number().nullable().optional(),
+                n_contested: z.number().optional(),
+                n_uncontested: z.number().optional(),
+                n_blocking: z.number().optional(),
+                pct_contested: z.number().optional(),
+                grounds: z.record(z.string(), z.number()).optional(),
+                by_seat: z
+                  .record(
+                    z.string(),
+                    z.object({
+                      filed: z.number(),
+                      contested: z.number(),
+                    }),
+                  )
+                  .optional(),
+                reviewing: z.record(z.string(), z.number()).optional(),
+                statuses: z.record(z.string(), z.number()).optional(),
+                coverage_pct: z.number().nullable().optional(),
+                n_covered: z.number().optional(),
+                n_unexamined: z.number().optional(),
+                unexamined_classes: z.array(z.string()).optional(),
+              })
+              .passthrough()
+              .optional(),
           })
           .passthrough(),
       )

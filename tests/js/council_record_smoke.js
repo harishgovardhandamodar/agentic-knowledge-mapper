@@ -88,6 +88,14 @@ const RECORD = {
         },
       ],
       council: { panel: { n_seats: 6 }, contested: 1 },
+      analytics: {
+        n_claims: 2, mean_confidence: 51.5, n_contested: 1,
+        n_uncontested: 1, n_blocking: 0, pct_contested: 50.0,
+        grounds: { single_flow: 1 }, by_seat: {}, reviewing: {},
+        statuses: {}, impacts: {}, coverage_pct: 50.0,
+        n_covered: 1, n_unexamined: 1, n_not_in_corpus: 0,
+        unexamined_classes: ['poisoning'], n_seats: 6,
+      },
     },
   ],
 };
@@ -147,6 +155,9 @@ async function main() {
   assert(host.includes('privacy-cryptography'), 'author seat not rendered');
   assert(host.includes('measurement-science'), 'objection not rendered');
   assert(host.includes('Vendor logs everything'), 'council-less claim H02 dropped instead of rendered');
+  assert(host.includes('mean confidence'), 'analytics strip missing');
+  assert(host.includes('single flow'), 'grounds bars missing');
+  assert(host.includes('poisoning'), 'coverage matrix missing the unexamined class');
   show('sections', 'logs + actions + decisions + hypotheses');
 
   // 3. Sparse record: logs only, no hypotheses, no decisions. Must render the

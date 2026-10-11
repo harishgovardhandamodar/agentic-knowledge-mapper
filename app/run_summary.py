@@ -166,6 +166,96 @@ def _hypotheses_section(rec) -> list[str]:
     return out
 
 
+def _council_section(db, inv_id: int) -> list[str]:
+    """The council review across ALL assessments of one investigation.
+
+    A model investigation holds three assessments (internals, misuse,
+    hypothesis synthesis); reporting only the latest row's path hides two of
+    them. This section names every flow, then renders the hypothesis
+    assessment(s) the way the council reported them: panel, analytics,
+    coverage, claims with seats and objections, and standing decisions.
+
+    Everything reads stored rows. A flow that never ran is absent, not
+    zeroed -- a missing assessment is a gap in the run, and the report says
+    which flows are missing rather than implying they scored nothing.
+    """
+    from . import council as _council
+    recs = (db.query(SecurityAssessment)
+            .filter(SecurityAssessment.investigation_id == inv_id)
+            .order_by(SecurityAssessment.id).all())
+    if not recs:
+        return []
+    out: list[str] = []
+
+    # The flows that ran, in order. Each row names its own path so a reader
+    # can see at a glance whether the synthesis read two priors or ran alone.
+    out.append("| # | Flow | Score |")
+    out.append("|---|---|---|")
+    for r in recs:
+        scoring = _loads(getattr(r, "scoring_json", None), {}) or {}
+        path = scoring.get("assessment_path") or "standard"
+        if path == "model_hypothesis":
+            score = scoring.get("confidence_pct")
+            label = f"{_f(score)}/100 confidence"
+        else:
+            score = r.overall_pct
+            label = f"{_f(score)}"
+        out.append(f"| {r.id} | `{path}` | {label} |")
+    out.append("")
+
+    for r in recs:
+        scoring = _loads(getattr(r, "scoring_json", None), {}) or {}
+        if scoring.get("assessment_path") != "model_hypothesis":
+            continue
+        claims = _dossier.hypothesis_register(r)
+        council = (_loads(getattr(r, "a2a_trace_json", None), {}) or {}
+                   ).get("council") or {}
+        panel = council.get("panel") or {}
+        an = _council.run_analytics(claims, council.get("coverage"),
+                                    panel)
+        out.append(f"### Assessment #{r.id} — hypothesis synthesis "
+                   f"({an['n_claims']} claims, "
+                   f"{an['n_contested']} contested)")
+        out.append("")
+        seats = ", ".join(f"{s_} ({st['filed']} filed)"
+                          for s_, st in sorted(an["by_seat"].items())
+                          if st["filed"]) or "none filed"
+        cov = an["coverage_pct"]
+        cov_str = f"{cov}%" if cov is not None else "—"
+        unex = ", ".join(f"`{c}`" for c in an["unexamined_classes"]) or "none"
+        out.append(f"Seats filing claims: {seats}. Coverage {cov_str} of the "
+                   f"classes the corpus speaks to; unexamined: {unex}.")
+        out.append("")
+        if an["grounds"]:
+            out.append("Objections concentrated on: " +
+                       ", ".join(f"{g} ({n})"
+                                 for g, n in an["grounds"].items()) + ".")
+            out.append("")
+        out.append("| ID | Claim | Seat | Conf | Status | Objections | Refuted by |")
+        out.append("|---|---|---|---|---|---|---|")
+        for c in claims:
+            cc = c.get("council") or {}
+            chs = cc.get("challenges") or []
+            grounds = "; ".join(sorted({str(ch.get("ground") or "")
+                                        for ch in chs if isinstance(ch, dict)}))
+            out.append(
+                f"| {c.get('hypothesis_id') or c.get('id') or '?'} | "
+                f"{str(c.get('claim') or '')[:72]} | "
+                f"{cc.get('seat') or '—'} | "
+                f"{_f(c.get('confidence'))} | "
+                f"{c.get('status') or 'untested'} | "
+                f"{grounds or '—'} | "
+                f"{str(c.get('falsifier') or '')[:60]} |")
+        out.append("")
+        if r.assurance_decision:
+            by = f" by {r.assurance_decided_by}" if r.assurance_decided_by else ""
+            why = (f" — {r.assurance_decision_note}"
+                   if r.assurance_decision_note else "")
+            out.append(f"Standing decision: **{r.assurance_decision}**{by}{why}.")
+            out.append("")
+    return out
+
+
 def _diagrams_for(rec) -> list[dict[str, str]]:
     return _dossier._assessment_diagrams(rec)
 
@@ -235,6 +325,7 @@ def _inv_section(db, inv_id: int) -> dict[str, Any]:
         "findings": _findings_section(rec) if rec is not None else [],
         "experiments": _experiments_section(rec) if rec is not None else [],
         "hypotheses": _hypotheses_section(rec) if rec is not None else [],
+        "council": _council_section(db, inv_id),
         "diagrams": diagrams,
         "artifacts": _artifacts_for(db, inv_id),
     }
@@ -276,6 +367,7 @@ def investigation_report(db, inv_id: int) -> dict[str, Any]:
     _sec("Findings", sec["findings"])
     _sec("Experiments", sec["experiments"])
     _sec("Hypotheses", sec["hypotheses"])
+    _sec("Council review", sec["council"])
     _sec("Diagrams", _diagrams_section(sec["diagrams"]))
     _sec("Collected artifacts", _artifacts_section(sec["artifacts"]))
     markdown = "\n".join(L).strip() + "\n"
@@ -358,6 +450,11 @@ def manager_run_report(db, run_id: int) -> dict[str, Any]:
             A("**Hypotheses**")
             A("")
             A("\n".join(s["hypotheses"]))
+            A("")
+        if s.get("council"):
+            A("**Council review**")
+            A("")
+            A("\n".join(s["council"]))
             A("")
 
     all_diagrams: list[dict[str, str]] = []

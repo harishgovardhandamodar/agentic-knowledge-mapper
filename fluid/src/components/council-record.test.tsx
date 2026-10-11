@@ -46,6 +46,19 @@ const RECORD = {
         },
       ],
       council: {},
+      analytics: {
+        n_claims: 1,
+        mean_confidence: 62,
+        n_contested: 1,
+        n_uncontested: 0,
+        n_blocking: 0,
+        pct_contested: 100,
+        grounds: { single_flow: 1 },
+        coverage_pct: 50,
+        n_covered: 1,
+        n_unexamined: 1,
+        unexamined_classes: ['poisoning'],
+      },
     },
   ],
 } as unknown as CouncilRecord;
@@ -75,6 +88,14 @@ describe('CouncilRecordView', () => {
     const text = document.body.textContent ?? '';
     expect(text).toMatch(/accept/);
     expect(text).toMatch(/reviewer/);
+  });
+
+  it('shows the analytics strip: counts first, grounds as bars', () => {
+    render(<CouncilRecordView record={RECORD} />);
+    const text = document.body.textContent ?? '';
+    // Counts before the list: contested share and the concentrated ground.
+    expect(text).toMatch(/1 contested/);
+    expect(text).toMatch(/single flow/);
   });
 
   it('shows the generated claim with its seat, grade and objection', () => {

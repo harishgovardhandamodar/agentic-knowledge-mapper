@@ -30,6 +30,8 @@ os.environ["AKM_DATABASE_URL"] = os.environ.get("AKM_TEST_DB") or (
 from app import council as C  # noqa: E402
 from app import database  # noqa: E402
 from app import security as sec  # noqa: E402
+from app.database import SessionLocal  # noqa: E402
+from app.models import Investigation, SecurityAssessment  # noqa: E402
 
 database.init_db()
 
@@ -309,6 +311,130 @@ class TestScoringIntegration(unittest.TestCase):
         self.assertGreater(weights["evidence_support"],
                            max(w for k, w in weights.items()
                                if k != "evidence_support"))
+
+
+class TestRunAnalytics(unittest.TestCase):
+    """The figures a reader needs before the claim list, derived not sampled."""
+
+    def _claims(self):
+        return [
+            {"id": "H01", "confidence": 62.0, "impact": 4,
+             "status": "untested", "peer_reviewed": True,
+             "council": {"seat": "privacy-cryptography",
+                         "challenges": [
+                             {"seat": "measurement-science",
+                              "ground": "single_flow", "weight": 0.5},
+                             {"seat": "adversarial-ml",
+                              "ground": "impact_unsupported", "weight": 1.0}]}},
+            {"id": "H02", "confidence": 41.0, "impact": 3,
+             "status": "supported", "peer_reviewed": False,
+             "council": {"seat": "ml-systems", "challenges": []}},
+        ]
+
+    def _coverage(self):
+        return {"coverage_pct": 50.0,
+                "covered": [{"class": "extraction"}],
+                "unexamined": [{"class": "poisoning"}],
+                "not_in_corpus": []}
+
+    def test_counts_and_means(self):
+        a = C.run_analytics(self._claims(), self._coverage(), {"n_seats": 6})
+        self.assertEqual(a["n_claims"], 2)
+        self.assertEqual(a["n_contested"], 1)
+        self.assertEqual(a["n_uncontested"], 1)
+        self.assertEqual(a["n_blocking"], 1)
+        self.assertEqual(a["mean_confidence"], 51.5)
+        self.assertEqual(a["pct_contested"], 50.0)
+
+    def test_grounds_are_ranked_commonest_first(self):
+        a = C.run_analytics(self._claims(), self._coverage())
+        self.assertEqual(list(a["grounds"]),
+                         ["impact_unsupported", "single_flow"])
+
+    def test_seats_show_filed_and_reviewing_separately(self):
+        # Filing a claim and reviewing one are different jobs; a seat that
+        # only objected must appear as a reviewer, never as silent.
+        a = C.run_analytics(self._claims(), self._coverage())
+        self.assertEqual(a["by_seat"]["privacy-cryptography"]["filed"], 1)
+        self.assertIn("measurement-science", a["reviewing"])
+        self.assertNotIn("measurement-science",
+                         [s_ for s_, st in a["by_seat"].items() if st["filed"]])
+
+    def test_coverage_lists_stay_split(self):
+        a = C.run_analytics(self._claims(), self._coverage())
+        self.assertEqual(a["n_covered"], 1)
+        self.assertEqual(a["n_unexamined"], 1)
+        self.assertEqual(a["unexamined_classes"], ["poisoning"])
+
+    def test_empty_input_is_an_empty_report_not_a_crash(self):
+        a = C.run_analytics([], {})
+        self.assertEqual(a["n_claims"], 0)
+        self.assertIsNone(a["mean_confidence"])
+        self.assertEqual(a["grounds"], {})
+
+
+class TestCouncilReportSection(unittest.TestCase):
+    """The run summary must show every flow, not just the latest row."""
+
+    def test_all_flows_named_and_hypothesis_rendered(self):
+        from app import run_summary as RS
+        db = SessionLocal()
+        try:
+            inv = Investigation(title="t", keywords="k", description="d",
+                                sources="web")
+            db.add(inv)
+            db.commit()
+            for path, score in (("model", 30.0), ("model_hypothesis", 44.0)):
+                db.add(SecurityAssessment(
+                    investigation_id=inv.id, product_name="W",
+                    exposure="confidential_data", overall_pct=score,
+                    posture="p", markdown="m",
+                    scoring_json=json.dumps({
+                        "assessment_path": path,
+                        "confidence_pct": score} if path == "model_hypothesis"
+                        else {"assessment_path": path}),
+                    threats_json=json.dumps(
+                        [{"hypothesis_id": "H01", "claim": "c",
+                          "confidence": 60.0, "impact": 4,
+                          "status": "contested",
+                          "falsifier": "f",
+                          "council": {"seat": "privacy-cryptography",
+                                      "challenges": [
+                                          {"seat": "x", "ground": "single_flow",
+                                           "weight": 0.5}]}}]
+                        if path == "model_hypothesis" else []),
+                    a2a_trace_json=json.dumps({
+                        "task_id": "hyp-x", "trace": [],
+                        "council": {"panel": {"n_seats": 6},
+                                    "coverage": {"coverage_pct": 100.0,
+                                                 "covered": [], "unexamined": [],
+                                                 "not_in_corpus": []}}}),
+                    threat_pack_version="2.1.0",
+                    threat_pack_fingerprint="x"))
+            db.commit()
+            lines = RS._council_section(db, inv.id)
+            md = "\n".join(lines)
+        finally:
+            db.close()
+        # Both flows named: the synthesis never hides the priors it read.
+        self.assertIn("`model`", md)
+        self.assertIn("`model_hypothesis`", md)
+        self.assertIn("H01", md)
+        self.assertIn("privacy-cryptography", md)
+        self.assertIn("single_flow", md)
+
+    def test_no_assessments_is_no_section_not_an_error(self):
+        from app import run_summary as RS
+        db = SessionLocal()
+        try:
+            inv = Investigation(title="empty", keywords="k",
+                                description="d", sources="web")
+            db.add(inv)
+            db.commit()
+            lines = RS._council_section(db, inv.id)
+        finally:
+            db.close()
+        self.assertEqual(lines, [])
 
 
 if __name__ == "__main__":

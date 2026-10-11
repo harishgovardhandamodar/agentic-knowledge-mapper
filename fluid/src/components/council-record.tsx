@@ -157,7 +157,11 @@ export function CouncilRecordView({
           </Section>
         )}
 
-        {(record.hypotheses ?? []).map((h) => (
+        {(record.hypotheses ?? []).map((h) => {
+          const an = h.analytics;
+          const grounds = an?.grounds ? Object.entries(an.grounds) : [];
+          const maxGround = Math.max(0, ...grounds.map(([, n]) => n));
+          return (
           <Section
             key={h.assessment_id}
             icon={<FlaskConical className="size-4" />}
@@ -212,8 +216,47 @@ export function CouncilRecordView({
                 );
               })}
             </ul>
+            {an && (
+              <div className="mt-3 grid grid-cols-2 gap-2 border-t pt-3 text-xs text-muted-foreground sm:grid-cols-4">
+                <span>
+                  <b className="tabular text-foreground">{an.n_claims}</b> claims
+                </span>
+                {an.mean_confidence != null && (
+                  <span>
+                    mean confidence{' '}
+                    <b className="tabular text-foreground">{Math.round(an.mean_confidence)}/100</b>
+                  </span>
+                )}
+                <span>
+                  <b className="tabular text-foreground">{an.n_contested ?? 0}</b> contested
+                  {an.pct_contested != null ? ` (${an.pct_contested}%)` : ''}
+                </span>
+                {(an.n_blocking ?? 0) > 0 && (
+                  <span>
+                    <b className="tabular text-foreground">{an.n_blocking}</b> blocking
+                  </span>
+                )}
+              </div>
+            )}
+            {grounds.length > 0 && (
+              <div className="mt-2 flex max-w-xl flex-col gap-1">
+                {grounds.map(([g, n]) => (
+                  <div key={g} className="grid grid-cols-[150px_1fr_24px] items-center gap-2 text-[11px]">
+                    <span className="truncate text-muted-foreground">{g.replace(/_/g, ' ')}</span>
+                    <span className="block h-2 rounded bg-muted">
+                      <span
+                        className="block h-2 rounded bg-amber-500"
+                        style={{ width: `${maxGround ? Math.round((100 * n) / maxGround) : 0}%` }}
+                      />
+                    </span>
+                    <b className="text-right tabular-nums">{n}</b>
+                  </div>
+                ))}
+              </div>
+            )}
           </Section>
-        ))}
+          );
+        })}
       </CardContent>
     </Card>
   );

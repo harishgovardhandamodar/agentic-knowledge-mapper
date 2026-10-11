@@ -780,6 +780,17 @@ td.std-threat .std-name { font-weight: 600; display: block; font-size: 11.5px; }
 .council-dim { color: var(--text2); font-size: 11px; }
 .council-obj { color: var(--text2); font-size: 11px; margin-top: 2px; }
 .council-obj b { color: var(--text); }
+/* council analytics strip: counts first, bars for objections, chips for gaps */
+.council-stats { display: flex; flex-wrap: wrap; gap: 14px; font-size: 11.5px; color: var(--text2); margin: 6px 0; }
+.council-stats b { color: var(--text); font-variant-numeric: tabular-nums; }
+.council-stats i { margin-right: 4px; color: var(--amber, #f59e0b); }
+.council-bars { display: flex; flex-direction: column; gap: 3px; margin: 6px 0; max-width: 520px; }
+.council-bar-row { display: grid; grid-template-columns: 150px 1fr 24px; align-items: center; gap: 8px; font-size: 11px; }
+.council-bar-label { color: var(--text2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.council-bar-track { background: var(--bg3); border-radius: 3px; height: 8px; display: block; }
+.council-bar-fill { background: var(--amber, #f59e0b); border-radius: 3px; height: 8px; display: block; }
+.council-bar-row b { text-align: right; font-variant-numeric: tabular-nums; }
+.council-cov { margin: 6px 0; font-size: 11.5px; line-height: 2; }
 .fold-count { font-size: 11px; color: var(--text2); background: var(--bg3); border-radius: 9px; padding: 1px 8px; flex: none; }
 .fold.tone-bad .fold-title { color: var(--red); }
 .fold.tone-warn .fold-title { color: var(--orange); }
@@ -3532,10 +3543,54 @@ function councilRecordHtml(rec) {
     h += `</ul></div>`;
   }
   // ---- hypotheses: the generated claims, with seats and objections ----
+  // Each entry opens with its analytics strip: the figures a reader needs
+  // *before* the list -- how many claims survived scrutiny, where the
+  // objections concentrated, and how much of the attack surface nobody
+  // examined. The strip is derived server-side from the stored claims, so it
+  // describes the same review the scores beside it do.
   (rec.hypotheses || []).forEach(hyp => {
+    const an = hyp.analytics || {};
+    const council = hyp.council || {};
+    const cov = council.coverage || {};
+    if (an.n_claims != null) {
+      h += `<div class="council-stats">` +
+        `<span><i class="fas fa-flask"></i> <b>${an.n_claims}</b> claims</span>` +
+        (an.mean_confidence != null ? `<span>mean confidence <b>${Math.round(an.mean_confidence)}/100</b></span>` : '') +
+        `<span><b>${an.n_contested || 0}</b> contested (${an.pct_contested || 0}%)</span>` +
+        ((an.n_blocking || 0) ? `<span><i class="fas fa-octagon-exclamation"></i> <b>${an.n_blocking}</b> blocking objection(s)</span>` : '') +
+        (an.coverage_pct != null ? `<span>coverage <b>${an.coverage_pct}%</b></span>` : '') +
+        `</div>`;
+      const grounds = an.grounds || {};
+      const gkeys = Object.keys(grounds);
+      if (gkeys.length) {
+        const max = Math.max(...gkeys.map(k => grounds[k]));
+        h += `<div class="council-bars">` + gkeys.map(k => {
+          const w = max ? Math.round(100 * grounds[k] / max) : 0;
+          return `<div class="council-bar-row"><span class="council-bar-label">${escHtml(k.replace(/_/g, ' '))}</span>` +
+            `<span class="council-bar-track"><span class="council-bar-fill" style="width:${w}%"></span></span>` +
+            `<b>${grounds[k]}</b></div>`;
+        }).join('') + `</div>`;
+      }
+      // Coverage entries carry stored-row counts; the analytics block
+      // carries the reduced class lists. Either can be absent on a legacy
+      // row, so merge: entries win where present, bare names fill the rest.
+      const unex = cov.unexamined || [];
+      const silent = cov.not_in_corpus || [];
+      const unexNames = new Set(unex.map(e => e.class));
+      (an.unexamined_classes || []).forEach(c => {
+        if (!unexNames.has(c)) unex.push({ class: c, label: c });
+      });
+      if (unex.length || silent.length) {
+        h += `<div class="council-cov">` +
+          (unex.length ? `<div><b>Unexamined — evidence exists, no seat claimed it:</b> ` +
+            unex.map(e => `<span class="std-chip mono" title="${(e.stored_rows || 0)} stored row(s) bear on this class">${escHtml(e.label || e.class)}</span>`).join(' ') + `</div>` : '') +
+          (silent.length ? `<div class="council-dim">Out of scope (corpus silent): ${silent.map(e => escHtml(e.label || e.class)).join(', ')} — unmeasured, not absent.</div>` : '') +
+          `</div>`;
+      }
+    }
+
     const claims = hyp.claims || [];
     if (!claims.length) return;
-    const council = hyp.council || {};
     const panel = council.panel || {};
     const contested = claims.filter(c => (c.council || {}).challenges
       && c.council.challenges.length).length;

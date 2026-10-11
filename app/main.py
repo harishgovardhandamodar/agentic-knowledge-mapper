@@ -3530,6 +3530,7 @@ def investigation_council_record(inv_id: int, db: Session = Depends(get_db)):
     An investigation with no hypothesis assessment still gets the record; the
     hypotheses section is empty and says so, which is the honest answer.
     """
+    from . import council as _council
     from . import dossier as _dossier
     inv = db.query(Investigation).filter(Investigation.id == inv_id).first()
     if not inv:
@@ -3634,11 +3635,18 @@ def investigation_council_record(inv_id: int, db: Session = Depends(get_db)):
             sconf = (json.loads(_rec.scoring_json or "{}") or {}).get("confidence_pct")
         except (json.JSONDecodeError, AttributeError, TypeError):
             sconf = None
+        _claims = _dossier.hypothesis_register(_rec)
         hypotheses.append({
             "assessment_id": _rec.id,
             "confidence": sconf,
-            "claims": _dossier.hypothesis_register(_rec),
+            "claims": _claims,
             "council": council,
+            # Run-level figures derived from the stored claims and the
+            # stored coverage matrix -- the same review the scores describe,
+            # reduced to counts and means both UIs can render without
+            # further reduction.
+            "analytics": _council.run_analytics(
+                _claims, council.get("coverage"), council.get("panel")),
         })
 
     return {"investigation_id": inv_id, "logs": logs, "runs": runs,

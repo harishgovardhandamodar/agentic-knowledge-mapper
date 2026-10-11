@@ -824,6 +824,113 @@ def challenge_summary(claim: dict[str, Any],
                      f"{len(blocking)} blocking")}
 
 
+def run_analytics(verified: list[dict[str, Any]] | None,
+                  coverage: dict[str, Any] | None = None,
+                  panel: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Run-level analytics over one hypothesis assessment's verified claims.
+
+    The claim list answers "what was claimed". This answers the questions a
+    reader needs *before* reading the list: how many claims survived scrutiny,
+    where did the objections concentrate, which seats did the work, and how
+    much of the attack surface was never examined. Every figure here is
+    derived from the stored claims and the stored coverage matrix -- nothing
+    is recomputed, sampled, or estimated, so the analytics describe the same
+    review the scores beside them do.
+
+    Returned shape is deliberately flat (counts, means, sorted pairs) so both
+    UIs can render it without further reduction and the markdown report can
+    print it as tables.
+    """
+    claims = [c for c in (verified or []) if isinstance(c, dict)]
+    n = len(claims)
+    cov = coverage if isinstance(coverage, dict) else {}
+
+    def _num(c: dict[str, Any], key: str) -> float | None:
+        try:
+            v = float(c.get(key))
+            return v
+        except (TypeError, ValueError):
+            return None
+
+    confs = [v for v in (_num(c, "confidence") for c in claims) if v is not None]
+    contested = [c for c in claims if c.get("peer_reviewed")]
+    uncontested = [c for c in claims if not c.get("peer_reviewed")]
+    blocking = [c for c in claims
+                if any(float(ch.get("weight", 0) or 0) >= 1.0
+                       for ch in ((c.get("council") or {}).get("challenges") or [])
+                       if isinstance(ch, dict))]
+
+    grounds: dict[str, int] = {}
+    for c in claims:
+        for ch in ((c.get("council") or {}).get("challenges") or []):
+            if not isinstance(ch, dict):
+                continue
+            g = str(ch.get("ground") or "objection")
+            grounds[g] = grounds.get(g, 0) + 1
+
+    by_seat: dict[str, dict[str, int]] = {}
+    for c in claims:
+        seat = str((c.get("council") or {}).get("seat") or "")
+        if seat:
+            row = by_seat.setdefault(seat, {"filed": 0, "contested": 0})
+            row["filed"] += 1
+            if c.get("peer_reviewed"):
+                row["contested"] += 1
+        for ch in ((c.get("council") or {}).get("challenges") or []):
+            if not isinstance(ch, dict):
+                continue
+            os_ = str(ch.get("seat") or "")
+            if os_:
+                by_seat.setdefault(os_, {"filed": 0, "contested": 0})
+    # Objections raised per seat (as reviewer, not author).
+    reviewing: dict[str, int] = {}
+    for c in claims:
+        for ch in ((c.get("council") or {}).get("challenges") or []):
+            if isinstance(ch, dict) and ch.get("seat"):
+                reviewing[str(ch["seat"])] = reviewing.get(str(ch["seat"]), 0) + 1
+
+    statuses: dict[str, int] = {}
+    for c in claims:
+        statuses[str(c.get("status") or "untested")] = \
+            statuses.get(str(c.get("status") or "untested"), 0) + 1
+
+    impacts: dict[str, int] = {}
+    for c in claims:
+        try:
+            band = f"{int(float(c.get('impact', 0)))}/5"
+        except (TypeError, ValueError):
+            band = "unstated"
+        impacts[band] = impacts.get(band, 0) + 1
+
+    covered = cov.get("covered") or []
+    unexamined = cov.get("unexamined") or []
+    silent = cov.get("not_in_corpus") or []
+
+    return {
+        "n_claims": n,
+        "mean_confidence": round(sum(confs) / len(confs), 1) if confs else None,
+        "min_confidence": round(min(confs), 1) if confs else None,
+        "max_confidence": round(max(confs), 1) if confs else None,
+        "n_contested": len(contested),
+        "n_uncontested": len(uncontested),
+        "n_blocking": len(blocking),
+        "pct_contested": round(100.0 * len(contested) / n, 1) if n else 0.0,
+        "grounds": dict(sorted(grounds.items(), key=lambda kv: (-kv[1], kv[0]))),
+        "by_seat": dict(sorted(by_seat.items())),
+        "reviewing": dict(sorted(reviewing.items(),
+                                 key=lambda kv: (-kv[1], kv[0]))),
+        "statuses": dict(sorted(statuses.items())),
+        "impacts": dict(sorted(impacts.items())),
+        "coverage_pct": cov.get("coverage_pct"),
+        "n_covered": len(covered),
+        "n_unexamined": len(unexamined),
+        "n_not_in_corpus": len(silent),
+        "unexamined_classes": [str(e.get("class")) for e in unexamined
+                               if isinstance(e, dict) and e.get("class")],
+        "n_seats": (panel or {}).get("n_seats") if isinstance(panel, dict) else None,
+    }
+
+
 def council_panel() -> dict[str, Any]:
     """The panel as data: who is on it, what each owns, what each misses."""
     return {
