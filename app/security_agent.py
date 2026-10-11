@@ -684,6 +684,12 @@ def run_security_assessment(run_id: int, params: dict):
             a2a_trace_json=json.dumps({
                 "task_id": result.get("a2a_task_id", ""),
                 "trace": result.get("a2a_trace", []),
+                # The council travels with the trace rather than in a new
+                # column: it is part of the same provenance story (who sat on
+                # the review, what they objected to, what nobody reached), and
+                # a row that records the hops but not the panel that produced
+                # them describes half of how its own claims were reached.
+                "council": result.get("council") or {},
             }),
             threat_pack_version=threatpack.PACK_VERSION,
             threat_pack_fingerprint=threatpack.pack_fingerprint(),

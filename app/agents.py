@@ -2824,7 +2824,9 @@ def _hypothesis(fid: str, claim: str, premise: str, mechanism: str,
                 consequence: str, falsifier: str,
                 supporting: list[str] | None = None,
                 counter: list[str] | None = None,
-                impact: int = 3, testability: int = 3) -> dict[str, Any]:
+                impact: int = 3, testability: int = 3,
+                seat: str | None = None,
+                provenance: dict[str, Any] | None = None) -> dict[str, Any]:
     from .security import _severity
     impact = max(1, min(5, int(impact)))
     testability = max(1, min(5, int(testability)))
@@ -2832,7 +2834,7 @@ def _hypothesis(fid: str, claim: str, premise: str, mechanism: str,
     # means "how much is at stake if the claim holds", not likelihood x impact,
     # so the familiar residual columns stay empty rather than implying a
     # measured risk that does not exist.
-    return {
+    out = {
         "id": fid, "hypothesis_id": fid, "claim": claim,
         "premise": premise, "mechanism": mechanism,
         "consequence": consequence, "falsifier": falsifier,
@@ -2847,6 +2849,15 @@ def _hypothesis(fid: str, claim: str, premise: str, mechanism: str,
         "rationale": f"stakes if true: {impact}/5; refutable by: {falsifier}",
         "mitigations": [f"Observe: {falsifier}"],
     }
+    # Who proposed it, and from what discipline. Present on every claim so a
+    # consumer can always ask "who is saying this" -- a claim with no author
+    # on record is not a weaker claim, it is an unattributed one.
+    if seat:
+        out["seat"] = seat
+        out["provenance"] = dict(provenance or {"seat": seat})
+    elif provenance:
+        out["provenance"] = dict(provenance)
+    return out
 
 
 def _hypothesis_fallback(target_rows: list[dict[str, Any]],
@@ -3000,14 +3011,133 @@ def _hypothesis_fallback(target_rows: list[dict[str, Any]],
     return out
 
 
-def hypothesis_analyst_handle(env: dict[str, Any], db: Any = None) -> dict[str, Any]:
-    """Intent ``draft_hypotheses``: claims from the two prior flows.
+def _seat_prompt_blocks() -> list[str]:
+    """One instruction block per seat, each naming the discipline's remit.
 
-    Reads the stored internals findings and misuse scenarios handed to it and
-    drafts falsifiable claims. LLM first, deterministic cross-flow conjunction
-    rules on failure -- a down gateway must not yield an empty hypothesis set,
-    which would read as "nothing worth testing".
+    A single drafting prompt returns the model's modal view of the subject,
+    which for AI security is the consensus of the training corpus: the three
+    attacks every paper already covers. Asking six disciplines the same
+    question gets six rephrasings of that consensus. Asking each its own
+    question is what produces a panel rather than a sample. Temperature is
+    raised for the same reason: at 0.1 the model converges, and a council of
+    identical answers is a monologist.
     """
+    from . import council as CO
+    out = []
+    for seat in CO.SEATS:
+        if not seat["owns"]:
+            continue        # the methodologist reviews proposals, not evidence
+        out.append(
+            f"SEAT {seat['id']} ({seat['discipline']}). "
+            f"Your remit: {seat['remit']} "
+            f"You own these attack classes: {', '.join(seat['owns'])}. "
+            f"Your known blind spot -- other seats cover it, do not spend your "
+            f"claim there: {seat['blind_spot']} "
+            f"Every claim you make must satisfy: {seat['demands']}.")
+    return out
+
+
+def _mark_seat_convergence(hyps: list[dict[str, Any]]) -> None:
+    """Record seats that independently reached the same claim.
+
+    Convergence is kept, not deduplicated. Two disciplines arriving at one
+    claim from different instruments is the single thing a panel knows that one
+    voice cannot, and collapsing it into one row would discard the evidence
+    while keeping the claim -- the worst of both.
+
+    Measured on the claim and the falsifier, deliberately NOT the mechanism.
+    Two disciplines arriving at the same claim is the panel working; they will
+    almost always have reached it by different reasoning, and that difference
+    is the value, not noise. What makes it one claim rather than two is that
+    both propose the same thing AND would be refuted by the same observation.
+    """
+    buckets: dict[tuple[str, ...], list[dict[str, Any]]] = {}
+    for h in hyps:
+        key = (_claim_signature(h.get("claim", "")),
+               _claim_signature(h.get("falsifier", "")))
+        buckets.setdefault(key, []).append(h)
+    for group in buckets.values():
+        seats = sorted({str((h.get("provenance") or {}).get("seat") or "")
+                        for h in group
+                        if (h.get("provenance") or {}).get("seat")})
+        if len(seats) < 2:
+            continue
+        for h in group:
+            h["corroborated_by_seats"] = seats
+
+
+def _claim_signature(text: Any) -> str:
+    """Stemmed content tokens of a claim field, for convergence matching."""
+    toks = {t for t in re.findall(r"[a-z]{4,}", str(text or "").lower())}
+    stems = set()
+    for t in toks:
+        for suf in ("ing", "ed", "es", "s"):
+            if len(t) - len(suf) >= 4 and t.endswith(suf):
+                stems.add(t[:-len(suf)])
+                break
+        else:
+            stems.add(t)
+    return "|".join(sorted(stems))
+
+
+def _drop_gap_marker(hyps: list[dict[str, Any]]) -> None:
+    """Remove the "no evidence base" marker once real claims exist.
+
+    :func:`_hypothesis_fallback` emits a marker claim when the two flows
+    produced nothing, so that an empty register reads as a gap rather than as
+    "nothing worth testing". Once a gateway or a council seat has produced
+    actual claims that reasoning is inverted: the marker now asserts the
+    evidence base is empty while nine claims sit next to it citing rows. It is
+    a true statement about the fallback, made false by the panel, so it goes.
+    """
+    substantive = [h for h in hyps
+                   if "no overlapping signal" not in str(h.get("claim", ""))]
+    if substantive and len(substantive) < len(hyps):
+        hyps[:] = substantive
+
+
+def _assign_hypothesis_ids(hyps: list[dict[str, Any]]) -> None:
+    """Give every claim a unique, stable id, in place.
+
+    Council drafts arrive without one and the model's own ids collide across
+    seats (every seat starts counting at H01). Ids are the join key for the
+    whole register -- experiments, evidence runs and the UI all address claims
+    by id -- so a duplicate silently merges two claims into one row, which is
+    the one failure mode an identifier exists to prevent. Renumbered rather
+    than suffixed so they stay the short H## form the report prints.
+    """
+    used: set[str] = set()
+    for h in hyps:
+        cur = str(h.get("id") or h.get("hypothesis_id") or "").strip()
+        if cur and cur not in used:
+            used.add(cur)
+            h["id"] = h["hypothesis_id"] = cur
+            continue
+        n = 1
+        while f"H{n:02d}" in used:
+            n += 1
+        h["id"] = h["hypothesis_id"] = f"H{n:02d}"
+        used.add(h["id"])
+
+
+def hypothesis_analyst_handle(env: dict[str, Any], db: Any = None) -> dict[str, Any]:
+    """Intent ``draft_hypotheses``: a council drafts claims from the two flows.
+
+    Six disciplinary seats propose independently from the stored internals
+    findings and misuse scenarios (:mod:`app.council`), and any reachable model
+    is asked per-seat rather than once. The seats' claims are the floor, not
+    the fallback: they exist whether or not a gateway answers, because a
+    council that needs a model to exist disappears exactly when the evidence
+    is thinnest.
+
+    Claims are merged, never substituted. The old code replaced its
+    deterministic rules with the model's output on success, which meant a
+    working gateway produced strictly fewer claims than a broken one and the
+    corpus-reading monoculture stood unopposed. Now both stand, and where two
+    seats independently reach the same claim that convergence is recorded
+    rather than deduplicated away.
+    """
+    from . import council as CO
     from . import security as sec
     payload = env.get("payload", {})
     product = payload.get("product_name", "the model")
@@ -3017,27 +3147,39 @@ def hypothesis_analyst_handle(env: dict[str, Any], db: Any = None) -> dict[str, 
         product, use_case, focus)
     target_rows = [r for r in (payload.get("target_rows") or []) if isinstance(r, dict)]
     adv_rows = [r for r in (payload.get("adversarial_rows") or []) if isinstance(r, dict)]
+    # The panel's claims join the cross-flow rules rather than replacing them:
+    # the rules encode conjunctions of the two flows, the seats encode a
+    # discipline reading the same rows. Neither subsumes the other.
     hyps = _hypothesis_fallback(target_rows, adv_rows, profile)
-    source = "deterministic cross-flow rules (no LLM)"
+    seat_drafts = CO.draft_seat_claims(target_rows, adv_rows, profile)
+    hyps = hyps + seat_drafts
+    source = ("deterministic cross-flow rules + "
+              f"{len(seat_drafts)} council seat claim(s) (no LLM)")
     try:
         from . import llm as _llm
         sys_p = (
-            "You are a research lead turning two completed AI security "
-            "assessments into FALSIFIABLE HYPOTHESES. Flow 1 asked whether the "
-            "model is sound (findings about the model). Flow 2 asked what an "
-            "attacker could build with it (scenarios about misuse). "
-            "A hypothesis is a CLAIM someone could test and be wrong about -- "
-            "not a restatement of a finding. Every claim needs a premise, a "
-            "mechanism, a consequence if true, and a falsifier that would "
-            "REFUTE it. Prefer claims both assessments support; mark "
-            "single-assessment claims. Never assert a control that is not "
-            "named. Check every claim against the flow-1 findings: a claim "
-            "must not assert what a finding denies (the verifier will flag "
-            "it and mark the report). Reply with STRICT JSON only: {\"hypotheses\": [{\"id\": "
-            "\"H##\", \"claim\": str (one falsifiable sentence), \"premise\": str, "
-            "\"mechanism\": str, \"consequence\": str, \"falsifier\": str (a "
-            "specific observation that would refute it), \"impact\": 1-5 (stakes "
-            "if true), \"testability\": 1-5}]}."
+            "You are convening a council of security and privacy AI "
+            "researchers, not writing one report. Each reviewer has a "
+            "different discipline, a different instrument and a known blind "
+            "spot. Draft ONE claim per seat, addressed to that seat's remit "
+            "only.\n\n"
+            + "\n".join(_seat_prompt_blocks()) +
+            "\n\nA hypothesis is a CLAIM someone could test and be wrong "
+            "about -- not a restatement of a finding. Every claim needs a "
+            "premise, a mechanism, a consequence if true, and a falsifier "
+            "naming a specific OBSERVATION and a THRESHOLD that would refute "
+            "it. 'Review the deployment' is not a falsifier. Prefer claims "
+            "both assessments support; mark single-assessment claims. Never "
+            "assert a control that is not named, and never claim higher "
+            "stakes than the attack classes you cite license -- a reviewer "
+            "will check, and an inflated claim is marked down for it. Check "
+            "every claim against the flow-1 findings: a claim must not assert "
+            "what a finding denies. Reply with STRICT JSON only: "
+            "{\"hypotheses\": [{\"seat\": str (the seat id above), "
+            "\"id\": \"H##\", \"claim\": str (one falsifiable sentence), "
+            "\"premise\": str, \"mechanism\": str, \"consequence\": str, "
+            "\"falsifier\": str (a specific observation that would refute it), "
+            "\"impact\": 1-5 (stakes if true), \"testability\": 1-5}]}."
         )
         user_p = (f"Model: {product}\nUse: {use_case}\n"
                   f"Profile: {profile.get('summary') or 'unclassified'}\n"
@@ -3047,7 +3189,7 @@ def hypothesis_analyst_handle(env: dict[str, Any], db: Any = None) -> dict[str, 
                   f"{json.dumps([{k: r.get(k) for k in ('id','title','dimension','inherent_score')} for r in adv_rows])[:2500]}")
         raw = _llm.chat([{"role": "system", "content": sys_p},
                          {"role": "user", "content": user_p}],
-                        temperature=0.1, max_tokens=1500).strip()
+                        temperature=0.9, max_tokens=2600).strip()
         m = re.search(r"\{.*\}", raw, re.S)
         if not m:
             raise ValueError("model did not return a hypotheses object")
@@ -3058,13 +3200,22 @@ def hypothesis_analyst_handle(env: dict[str, Any], db: Any = None) -> dict[str, 
                 continue
             if not h.get("falsifier"):
                 continue          # a claim with no refutation is an assertion
+            seat_id = str(h.get("seat") or "")
+            if seat_id not in CO.SEAT_BY_ID:
+                seat_id = ""       # unattributed: still kept, but not credited
+            seat = CO.SEAT_BY_ID.get(seat_id) or {}
             llm_h.append(_hypothesis(
                 str(h.get("id") or f"H{i:02d}"), str(h["claim"])[:200],
                 str(h.get("premise") or "unstated")[:240],
                 str(h.get("mechanism") or "unstated")[:240],
                 str(h.get("consequence") or "unstated")[:240],
                 str(h["falsifier"])[:240],
-                impact=h.get("impact", 3), testability=h.get("testability", 3)))
+                impact=h.get("impact", 3), testability=h.get("testability", 3),
+                seat=seat_id or None,
+                provenance={"seat": seat_id or None,
+                            "discipline": seat.get("discipline", ""),
+                            "source": "council seat (model)"}
+                if seat_id else None))
         if llm_h:
             # Re-attach traceability the prose lost. The claims stay the
             # LLM's, but each one now names the rows of flows 1 and 2 it can be
@@ -3073,34 +3224,61 @@ def hypothesis_analyst_handle(env: dict[str, Any], db: Any = None) -> dict[str, 
             for h in llm_h:
                 h["supporting"] = (_match_hyp_sources(h, target_rows)
                                    + _match_hyp_sources(h, adv_rows))
-            hyps = llm_h
-            source = "hypothesis-analyst via LLM gateway"
+            hyps = hyps + llm_h
+            source = (f"deterministic cross-flow rules + {len(seat_drafts)} "
+                      f"council seat claim(s) + {len(llm_h)} model-proposed "
+                      f"claim(s)")
     except Exception as exc:
-        source = f"deterministic cross-flow rules (LLM unavailable: {exc})"
+        source = (f"deterministic cross-flow rules + {len(seat_drafts)} council "
+                  f"seat claim(s) (LLM unavailable: {exc})")
+    _drop_gap_marker(hyps)
+    _mark_seat_convergence(hyps)
+    _assign_hypothesis_ids(hyps)
     hyps.sort(key=lambda h: (-h["impact"], -h["testability"]))
+    seats_seen = sorted({str((h.get("provenance") or {}).get("seat") or "")
+                         for h in hyps if (h.get("provenance") or {}).get("seat")})
     return reply_envelope(
         env, "hypothesis-analyst", "hypotheses_drafted",
-        {"hypotheses": hyps, "source": source},
-        note=(f"{len(hyps)} claims drafted, {sum(1 for h in hyps if h['falsifier'])} "
-              f"with falsifiers" if hyps else "0 claims") + f" ({source})",
+        {"hypotheses": hyps, "source": source,
+         "council": CO.council_panel(),
+         "seats_contributing": seats_seen},
+        note=(f"{len(hyps)} claims from {len(seats_seen)}/{len(CO.SEATS)} "
+              f"seats, {sum(1 for h in hyps if h['falsifier'])} with falsifiers, "
+              f"{sum(1 for h in hyps if h.get('corroborated_by_seats'))} "
+              f"reached by more than one seat ({source})"),
     )
 
 
 def hypothesis_verifier_handle(env: dict[str, Any], db: Any = None) -> dict[str, Any]:
-    """Intent ``verify_hypotheses``: argue with each claim.
+    """Intent ``verify_hypotheses``: the panel argues with each claim.
 
-    Assigns support, surfaces the evidence that argues AGAINST each claim, and
-    flags the ones whose refutation test is too vague to settle anything. A
-    claim scoring high with no counter-evidence is downgraded on purpose --
-    "nothing argues against this" is more often a gap in collection than a
-    well-supported claim.
+    Two passes, because they are different questions.
+
+    The original pass is arithmetic: how many rows cite this claim, did both
+    flows reach it, does a refutation test exist, how much is at stake. It
+    cannot notice that the refutation test settles nothing, that the stakes
+    were invented, or that a rival explanation fits the same evidence -- those
+    are not countable.
+
+    The council pass (:func:`app.council.cross_examine`) is the one that can.
+    Every claim is attacked by the seats that do not own it, on grounds
+    recorded verbatim so a reader can disagree with the objection rather than
+    merely count it. Objections are folded into the same evidence-support
+    dimension the arithmetic already used, so a claim that survives scrutiny
+    and a claim nobody looked at are no longer scored the same way -- and a
+    claim that nobody looked at says so.
     """
+    from . import council as CO
     payload = env.get("payload", {})
     hyps = [h for h in (payload.get("hypotheses") or []) if isinstance(h, dict)]
     evidence = [e for e in (payload.get("evidence") or []) if isinstance(e, dict)]
     target_rows = [r for r in (payload.get("target_rows") or [])
                    if isinstance(r, dict)]
+    all_rows = target_rows + [r for r in (payload.get("adversarial_rows") or [])
+                              if isinstance(r, dict)]
     verified = []
+    verdicts: list[dict[str, Any]] = []
+    coverage_claims: list[dict[str, Any]] = []
     for h in hyps:
         support = list(h.get("supporting") or [])
         counter = list(h.get("counter_evidence") or [])
@@ -3132,6 +3310,26 @@ def hypothesis_verifier_handle(env: dict[str, Any], db: Any = None) -> dict[str,
         # nothing, and a claim nobody can refute cannot be promoted.
         if not str(h.get("falsifier", "")).strip():
             testability = 1.0
+
+        # ---- council pass ----------------------------------------------
+        challenges = CO.cross_examine(h, all_rows)
+        summary = CO.challenge_summary(h, challenges)
+        audit = CO.falsifier_audit(str(h.get("falsifier", "")))
+        classes = CO.claim_attack_classes(h, all_rows)
+        coverage_claims.append(h)
+        # Graded, not just present: a test that names no observation is worth
+        # less than one that names a threshold, and the old non-empty gate
+        # could not tell them apart.
+        testability = min(testability, max(1.0, audit["score"] * 5.0))
+        # Objections cost support the way counter-evidence always has, but a
+        # claim nobody attacked is *not* thereby vindicated: it is held at the
+        # documented neutral baseline rather than promoted. That is the same
+        # reasoning the scorer applies to an unmeasured dimension.
+        if challenges:
+            support_score -= 18.0 * min(3, summary["challenges"])
+        else:
+            support_score = min(support_score, 45.0)
+
         dims = {
             "evidence_support": max(0.0, min(100.0, support_score
                                             - 15.0 * len(counter)
@@ -3139,7 +3337,12 @@ def hypothesis_verifier_handle(env: dict[str, Any], db: Any = None) -> dict[str,
             "cross_flow_corroboration": cross,
             "testability": testability / 5.0 * 100.0,
             "impact_if_true": impact / 5.0 * 100.0,
+            "peer_scrutiny": (100.0 if challenges
+                              else 0.0) - 100.0 * float(
+                                  summary.get("pressure", 0.0)),
         }
+        dims["peer_scrutiny"] = round(max(0.0, min(100.0,
+                                                    dims["peer_scrutiny"])), 1)
         v = dict(h)
         if not v.get("hypothesis_id"):
             v["hypothesis_id"] = v.get("id")
@@ -3153,9 +3356,32 @@ def hypothesis_verifier_handle(env: dict[str, Any], db: Any = None) -> dict[str,
         if any(r in support for r in (h.get("_adversarial_ids") or [])):
             flows.append("model_adversarial")
         v["source_flows"] = flows
+        v["council"] = {
+            "challenges": challenges,
+            "summary": summary,
+            "falsifier_audit": audit,
+            "attack_classes": classes,
+            "seat": str(h.get("seat")
+                        or (h.get("provenance") or {}).get("seat") or ""),
+            "converged_with": list(h.get("corroborated_by_seats") or []),
+        }
+        for c in challenges:
+            verdicts.append({
+                "claim_id": str(v.get("hypothesis_id") or v.get("id")),
+                "seat": str(c.get("seat") or ""),
+                "stance": "contest",
+                "ground": str(c.get("ground") or ""),
+            })
+        if str(h.get("seat") or (h.get("provenance") or {}).get("seat") or ""):
+            verdicts.append({
+                "claim_id": str(v.get("hypothesis_id") or v.get("id")),
+                "seat": str(h.get("seat")
+                            or (h.get("provenance") or {}).get("seat")),
+                "stance": "concur",
+            })
         # The verifier judges corroboration, never refutation: refuted is
         # set explicitly by a human or by later evidence, not inferred here.
-        if counter or contradicted:
+        if counter or contradicted or challenges:
             v["status"] = "contested"
         elif dims["evidence_support"] >= 60.0:
             v["status"] = "supported"
@@ -3168,24 +3394,51 @@ def hypothesis_verifier_handle(env: dict[str, Any], db: Any = None) -> dict[str,
             "counter_evidence": counter,
             "contradicted_by": contradicted,
             "supporting_artifacts": [e.get("artifact_id") for e in matched[:5]],
+            "peer_reviewed": bool(challenges),
             # Confidence is the verifier's own read, not the drafter's.
             "confidence": round(
-                0.40 * dims["evidence_support"]
-                + 0.25 * dims["cross_flow_corroboration"]
-                + 0.20 * dims["testability"]
-                + 0.15 * dims["impact_if_true"], 1),
+                0.35 * dims["evidence_support"]
+                + 0.20 * dims["cross_flow_corroboration"]
+                + 0.15 * dims["testability"]
+                + 0.10 * dims["impact_if_true"]
+                + 0.20 * dims["peer_scrutiny"], 1),
         })
         verified.append(v)
     verified.sort(key=lambda v: -v.get("confidence", 0))
+    coverage = CO.coverage_matrix(coverage_claims, all_rows)
+    disagreement = CO.panel_disagreement(verdicts)
+    # The counts are computed here, not in the reporter, because this is the
+    # block that gets persisted and read back by the UIs. A reporter-only
+    # summary is invisible to every consumer except the markdown.
+    council_block = {
+        "panel": CO.council_panel(),
+        "coverage": coverage,
+        "disagreement": disagreement,
+        "seats_contributing": sorted(
+            {str((v.get("council") or {}).get("seat") or "")
+             for v in verified if (v.get("council") or {}).get("seat")}),
+        "contested": sum(1 for v in verified if v.get("peer_reviewed")),
+        "unexamined": sum(1 for v in verified if not v.get("peer_reviewed")),
+        "weak_tests": sum(
+            1 for v in verified
+            if ((v.get("council") or {}).get("falsifier_audit") or {})
+            .get("grade") == "unfalsifiable"),
+    }
     return reply_envelope(
         env, "hypothesis-verifier", "hypotheses_verified",
-        {"verified": verified,
+        {"verified": verified, "council": council_block,
          "dimension_inputs": _hypothesis_dimension_inputs(verified)},
         note=(f"{len(verified)} claims verified, "
               f"{sum(1 for v in verified if v.get('cross_flow'))} corroborated "
-              f"by both flows, {sum(1 for v in verified if not v.get('counter_evidence'))} "
-              f"uncountered, {sum(1 for v in verified if v.get('contradicted_by'))} "
-              f"in tension with flow-1 findings"),
+              f"by both flows, "
+              f"{sum(1 for v in verified if v.get('peer_reviewed'))} contested "
+              f"by the council, "
+              f"{sum(1 for v in verified if not v.get('peer_reviewed'))} "
+              f"unexamined by any seat, "
+              f"{sum(1 for v in verified if v.get('contradicted_by'))} in "
+              f"tension with flow-1 findings; attack-class coverage "
+              f"{coverage['coverage_pct']:g}% "
+              f"({len(coverage['unexamined'])} unexamined)"),
     )
 
 
@@ -3233,23 +3486,77 @@ def _hypothesis_contradictions(h: dict[str, Any],
     AND negation on exactly one side, compared field by field -- a "no" in
     the mechanism must not launder an affirmative premise that denies a
     finding, and quoting a finding's own denial must not flag either.
+
+    The **claim and premise only** are scanned for negation. A mechanism
+    explains why, and explains it with negations of its own: "requires an
+    observable per-record disclosure, *not* a corpus-level rate" says nothing
+    about whether the finding holds, but the "not" makes every row the
+    mechanism mentions read as a denial. Mechanism text is still the source of
+    the shared vocabulary; it just cannot supply the negation.
+
+    The negation test is then **scoped to what the negation governs**: in
+    English it binds forward, up to a clause boundary. "foundation model over
+    tabular records no conversational surface" contains a negation, but it
+    governs the conversational surface, not the subject's description, and
+    reading it as a denial of the subject's own premise is how an affirmative
+    claim gets flagged as contradicting the very findings it cites.
     """
-    fields = [str(h.get(k, "")) for k in ("claim", "premise", "mechanism")]
+    fields = [str(h.get(k, "")) for k in ("claim", "premise")]
     if not any(_content_tokens(f) for f in fields):
         return []
     out = []
     for r in target_rows or []:
         if not isinstance(r, dict) or not r.get("id"):
             continue
-        ftext = " ".join((str(r.get("title", "")),
-                          str(r.get("rationale", ""))))
+        # Title and rationale are separate fields. Joined by a space they read
+        # as one unbroken clause, and a negation in the rationale then
+        # swallows the title -- so a finding about an absent control gets read
+        # as denying the claim it was cited to support. A newline marks the
+        # field boundary for the clause splitter below.
+        ftext = f"{r.get('title', '')}\n{r.get('rationale', '')}"
         ftoks = _content_tokens(ftext)
-        fneg = _negated(ftext)
+        # Polarity is compared per token, never per field. A finding can
+        # affirm one thing and deny another in the same sentence -- "endpoint
+        # returns raw completions, no per-tenant authz" asserts four terms and
+        # negates two -- so a field-wide flag says nothing about any
+        # individual term. A claim contradicts the finding only where it
+        # asserts a term the finding denies, or denies one the finding
+        # asserts. Symmetric treatment is agreement, not contradiction: a
+        # premise reading "the endpoint has no per-tenant authorization
+        # boundary" says exactly what "no per-tenant authz" says, and
+        # flagging that inverts both.
+        fneg = _negated_vocabulary(ftext)
         for field in fields:
-            btoks = _content_tokens(field)
-            if len(btoks & ftoks) >= 2 and _negated(field) != fneg:
+            shared = _content_tokens(field) & ftoks
+            if len(shared) < 2:
+                continue
+            cneg = _negated_vocabulary(field)
+            if any((t in cneg) != (t in fneg) for t in shared):
                 out.append(str(r["id"]))
                 break
+    return out
+
+
+def _negated_vocabulary(text: str) -> set[str]:
+    """The content tokens a negation in ``text`` actually governs.
+
+    Everything after a negation word, up to the clause end. English negation
+    binds forward, so "no per-tenant authz" governs "per-tenant authz" and
+    nothing before it. That is what lets the contradiction check say *which*
+    term a finding denies rather than merely that it denies something.
+
+    This matters more than it looks. A subject profile reading "foundation
+    model over tabular records no conversational surface" contains a
+    negation; a field-wide scan reads the whole premise as a denial of the
+    subject's own description, and the affirmative claim underneath it gets
+    flagged as contradicting the findings it was drafted from.
+    """
+    neg = r"no|not|never|without|absent|lack|lacks|lacking|cannot|none|neither"
+    out: set[str] = set()
+    for clause in re.split(r"[;,.!?\n—–]|\bbut\b|\bwhile\b|\balthough\b",
+                           str(text or "").lower()):
+        for m in re.finditer(rf"\b(?:{neg})\b", clause):
+            out |= _content_tokens(clause[m.end():])
     return out
 
 
@@ -3304,11 +3611,19 @@ def _hypothesis_dimension_inputs(verified: list[dict[str, Any]],
     Mean, not max: the aggregate describes the claim SET, and a set is only as
     good as the claims that make it up. Taking the strongest claim would let
     one well-evidenced claim vouch for ten vague ones.
+
+    The key list is read from the scorer's own dimension table rather than
+    written out here. It was hardcoded to the original four, which meant the
+    council's ``peer_scrutiny`` was computed per claim, carried on every row,
+    and then dropped on the floor here -- the aggregate reported 0 for a
+    dimension nobody had actually scored as zero. A dimension that is measured
+    and never aggregated is worse than one that is never measured: it looks
+    like a finding.
     """
     if not verified:
         return {}
-    keys = ("evidence_support", "cross_flow_corroboration", "testability",
-            "impact_if_true")
+    from . import security as sec
+    keys = [dim_id for dim_id, _w, _d in sec.HYPOTHESIS_DIMENSIONS]
     out: dict[str, float] = {}
     for k in keys:
         vals = [float((v.get("verification_dimensions") or {}).get(k, 0.0))
@@ -3318,29 +3633,106 @@ def _hypothesis_dimension_inputs(verified: list[dict[str, Any]],
 
 
 def hypothesis_reporter_handle(env: dict[str, Any], db: Any = None) -> dict[str, Any]:
-    """Intent ``write_hypothesis_report``: the claims as prose + diagrams.
+    """Intent ``write_hypothesis_report``: the council's reasoning as prose.
 
-    Each claim gets its own section with the evidence, the counter-evidence and
-    the falsifier stated next to it, because a claim printed without its
+    Each claim gets its own section with the evidence, the counter-evidence
+    and the falsifier stated next to it, because a claim printed without its
     refutation is an assertion wearing a hypothesis's clothes.
+
+    Above the claims the report states the panel: who sat on it, which
+    disciplines contributed, and which parts of the attack surface no seat
+    covered. The coverage line is the one a reader should read first. A set of
+    fifteen confident claims that never mentions poisoning reads as thorough,
+    and a set that names its own blind spots reads as what it is -- a partial
+    panel, which is every panel.
     """
+    from . import council as CO
     from . import security as sec
     payload = env.get("payload", {})
     product = payload.get("product_name", "the model")
     verified = [h for h in (payload.get("verified") or []) if isinstance(h, dict)]
     scoring = payload.get("scoring") or {}
+    council = payload.get("council") or {}
+    coverage = council.get("coverage") or {}
+    disagreement = council.get("disagreement") or {}
+    panel = council.get("panel") or CO.council_panel()
+
+    seats_used = sorted({str((h.get("council") or {}).get("seat") or "")
+                         for h in verified
+                         if (h.get("council") or {}).get("seat")})
+    contested = [h for h in verified if h.get("peer_reviewed")]
+    unexamined = [h for h in verified if not h.get("peer_reviewed")]
+
     lines: list[str] = ["## Hypotheses and what would settle them", ""]
     lines.append(
         f"Confidence aggregate **{scoring.get('confidence_pct', 0):g}/100** "
         f"— {_HYPOTHESIS_CAVEAT}")
     lines.append("")
+
+    # --- the panel, stated before its output -------------------------
+    lines.append("### The panel")
+    lines.append("")
+    lines.append(
+        f"{panel.get('n_seats', len(panel.get('seats') or []))} seats sat on "
+        f"this review, {len(seats_used) or 0} of them filed a claim. Each "
+        f"declares the weakness it is known to have; a panel that claims to "
+        f"cover everything covers nothing.")
+    lines.append("")
+    for seat in panel.get("seats") or []:
+        sid = str(seat.get("id"))
+        mark = "filed a claim" if sid in seats_used else "**stayed silent**"
+        lines.append(f"- **{seat.get('discipline')}** ({sid}) — {mark}. "
+                     f"Remit: {seat.get('remit')} "
+                     f"*Known blind spot:* {seat.get('blind_spot')}")
+    lines.append("")
+
+    # --- coverage: the line to read first -----------------------------
+    if coverage:
+        lines.append("### What the panel did and did not reach")
+        lines.append("")
+        lines.append(
+            f"Attack-class coverage **{coverage.get('coverage_pct', 0):g}%** of "
+            f"the classes the corpus actually speaks to.")
+        lines.append("")
+        for entry in coverage.get("unexamined") or []:
+            lines.append(
+                f"- **{entry.get('label')}** (`{entry.get('class')}`, "
+                f"severity {entry.get('severity')}): "
+                f"{entry.get('stored_rows')} stored row(s) bear on this class "
+                f"and no seat turned them into a claim. This is a gap in the "
+                f"review, not a clean result.")
+        for entry in coverage.get("not_in_corpus") or []:
+            lines.append(
+                f"- **{entry.get('label')}** (`{entry.get('class')}`): the "
+                f"corpus says nothing about this class. Unmeasured, which is "
+                f"not the same as absent.")
+        if not (coverage.get("unexamined") or coverage.get("not_in_corpus")):
+            lines.append("- Every attack class the corpus speaks to was "
+                         "turned into at least one claim.")
+        lines.append("")
+
+    # --- the council's verdicts ---------------------------------------
+    lines.append(
+        f"{len(contested)} of {len(verified)} claim(s) were contested by a "
+        f"seat that did not draft them"
+        + (f"; {len(unexamined)} drew no objection at all, which is a "
+           f"statement about the review's reach rather than about the claim."
+           if unexamined else "."))
+    lines.append("")
+
     for h in verified:
         conf = h.get("confidence", 0)
+        c = h.get("council") or {}
+        seat = str(c.get("seat") or "")
         lines.append(f"### {h['id']} — {h['claim']}")
         lines.append("")
-        lines.append(f"_Confidence {conf:g}/100 · stakes if true "
-                     f"{h.get('impact', 0):g}/5 · refutable "
-                     f"{'yes' if str(h.get('falsifier', '')).strip() else 'NO'}_")
+        audit = c.get("falsifier_audit") or {}
+        by = (f" by **{seat}**" if seat else "")
+        lines.append(
+            f"_Confidence {conf:g}/100 · stakes if true "
+            f"{h.get('impact', 0):g}/5 · refutation test "
+            f"{audit.get('grade', 'ungraded')}"
+            f"{by}_")
         lines.append("")
         if h.get("premise"):
             lines.append(f"- **Premise:** {h['premise']}")
@@ -3350,8 +3742,13 @@ def hypothesis_reporter_handle(env: dict[str, Any], db: Any = None) -> dict[str,
             lines.append(f"- **If true:** {h['consequence']}")
         if h.get("falsifier"):
             lines.append(f"- **Refuted by:** {h['falsifier']}")
+        if audit.get("reason") and audit.get("grade") != "decisive":
+            lines.append(f"- **Test quality:** {audit['reason']}")
         if h.get("supporting"):
             lines.append(f"- **Traces to:** {', '.join(h['supporting'])}")
+        if c.get("attack_classes"):
+            lines.append(f"- **Attack classes:** "
+                         f"{', '.join(c['attack_classes'])}")
         if h.get("counter_evidence"):
             lines.append(f"- **Counter-evidence:** "
                          f"{', '.join(h['counter_evidence'])}")
@@ -3360,17 +3757,30 @@ def hypothesis_reporter_handle(env: dict[str, Any], db: Any = None) -> dict[str,
                          f"{', '.join(h['contradicted_by'])} — the claim and "
                          f"the finding disagree; settle it before acting on "
                          f"either.")
+        for ch in c.get("challenges") or []:
+            lines.append(f"- **Objected to by {ch.get('seat')}** "
+                         f"({ch.get('ground')}): {ch.get('why')}")
+        if not (c.get("challenges") or []):
+            lines.append("- **No seat objected.** Read that as the review's "
+                         "reach, not as the claim's safety.")
         if h.get("supporting_artifacts"):
             arts = ", ".join(f"#{a}" for a in h["supporting_artifacts"])
             lines.append(f"- **In-app evidence:** {arts}")
         if h.get("cross_flow"):
             lines.append("- **Corroborated:** reached independently by the "
                          "internals and misuse assessments")
+        if c.get("converged_with"):
+            lines.append("- **Independently reached by:** "
+                         + ", ".join(c["converged_with"])
+                         + " — two disciplines arriving at the same testable "
+                           "claim is the thing a panel knows that one voice "
+                           "cannot")
         lines.append("")
         lines.append("```mermaid")
         lines.append(sec.mermaid_hypothesis_chain(h).rstrip())
         lines.append("```")
         lines.append("")
+
     exec_paragraph = ""
     if verified:
         # Short sentences, rounded numbers. This used to recompute the mean
@@ -3380,18 +3790,31 @@ def hypothesis_reporter_handle(env: dict[str, Any], db: Any = None) -> dict[str,
         mean = scoring.get("confidence_pct", 0)
         strongest = max(verified, key=lambda h: h.get("confidence", 0))
         stakes = max(verified, key=lambda h: h.get("impact", 0))
+        unexam = len(unexamined)
         exec_paragraph = (
-            f"{len(verified)} testable claims at {mean:g}/100 mean confidence. "
+            f"{len(verified)} testable claims at {mean:g}/100 mean confidence, "
+            f"drafted by {len(seats_used)} of {panel.get('n_seats', 0)} seats "
+            f"and contested by a further {len(contested)}. "
             f"Best-evidenced: {strongest['id']} "
             f"({strongest.get('confidence', 0):g}/100). "
             f"Highest stakes: {stakes['id']} ({stakes.get('impact', 0):g}/5). "
-            "Every claim below names its refutation; test the high-stakes "
-            "ones first.")
+            + (f"{unexam} claim(s) drew no objection at all and should be "
+               f"treated as unreviewed, not safe. "
+               if unexam else "")
+            + "Every claim below names its refutation; test the high-stakes "
+              "ones first.")
     return reply_envelope(
         env, "hypothesis-reporter", "hypothesis_report_written",
         {"hypothesis_sections": "\n".join(lines),
-         "exec_paragraph": exec_paragraph},
-        note=(f"hypothesis report ({len(verified)} claims, {len(lines)} lines) "
+         "exec_paragraph": exec_paragraph,
+         "council": {"panel": panel, "coverage": coverage,
+                     "disagreement": disagreement,
+                     "seats_contributing": seats_used,
+                     "contested": len(contested),
+                     "unexamined": len(unexamined)}},
+        note=(f"hypothesis report ({len(verified)} claims, {len(seats_used)} "
+              f"seats, {len(contested)} contested, coverage "
+              f"{coverage.get('coverage_pct', 0):g}%, {len(lines)} lines) "
               f"+ {len(exec_paragraph)}-char exec paragraph"),
     )
 
@@ -4594,6 +5017,10 @@ def run_hypothesis_a2a_workflow(
     profile: dict[str, Any] = {}
     exec_paragraph = ""
     hypothesis_sections = ""
+    # Carried out of the verifier so callers (the assessment builder, the
+    # register) can read who sat on the panel and what they failed to reach
+    # without re-parsing the report markdown.
+    council: dict[str, Any] = {}
     try:
         env0 = new_envelope(
             "hypothesis-orchestrator", "model-profiler", "profile_model",
@@ -4662,6 +5089,7 @@ def run_hypothesis_a2a_workflow(
         res3 = dispatch(env3, db)
         trace = res3["trace"]
         verified = list(res3["payload"].get("verified", []))
+        council = res3["payload"].get("council") or {}
         _hop_io(trace, "hypothesis-verifier", "verify_hypotheses",
                 f"{len(hypotheses)} claims + {len(evidence)} artifacts in",
                 f"{len(verified)} verified, mean confidence "
@@ -4679,13 +5107,18 @@ def run_hypothesis_a2a_workflow(
                      f"({scoring.get('method', '')}) — a confidence, not a risk"),
         })
 
+        # The council block rides through from the verifier: the reporter is
+        # the only place the panel and its coverage can be read, and a panel
+        # whose coverage report is computed and never shown is a panel whose
+        # gaps are invisible to the person deciding what to fund.
         env5 = new_envelope(
             "hypothesis-orchestrator", "hypothesis-reporter",
             "write_hypothesis_report",
             {"product_name": product_name, "use_case": use_case,
-             "verified": verified, "scoring": scoring, "profile": profile},
+             "verified": verified, "scoring": scoring, "profile": profile,
+             "council": res3["payload"].get("council") or {}},
             task_id=task_id, trace=trace,
-            note="claims with confidence, evidence and falsifiers",
+            note="claims with confidence, evidence, falsifiers and the panel",
         )
         res5 = dispatch(env5, db)
         trace = res5["trace"]
@@ -4718,6 +5151,7 @@ def run_hypothesis_a2a_workflow(
         "hypothesis_verified": verified,
         "hypothesis_sections": hypothesis_sections,
         "exec_paragraph": exec_paragraph,
+        "council": council,
         "scoring": scoring,
         "model_profile": profile,
     }

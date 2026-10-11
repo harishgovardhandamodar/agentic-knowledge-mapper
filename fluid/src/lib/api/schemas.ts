@@ -182,6 +182,17 @@ export type ThreatRow = z.infer<typeof zThreatRow>;
  * fields the shell and the three primitives need are pinned; the rest rides
  * through untouched.
  */
+/** One attack class in the council's coverage report. */
+const zAttackClass = z
+  .object({
+    class: z.string(),
+    label: z.string().optional(),
+    severity: z.number().nullable().optional(),
+    claims: z.array(z.string()).optional(),
+    stored_rows: z.number().optional(),
+  })
+  .passthrough();
+
 export const zAssessment = z
   .object({
     id: z.number(),
@@ -217,10 +228,65 @@ export const zAssessment = z
       )
       .optional(),
     assessment_path: z.string().optional(),
+    /**
+     * The review panel behind a hypothesis assessment: who sat on it, which
+     * attack classes each owns, which claims were contested, and which classes
+     * no seat reached.
+     *
+     * `unexamined` and `not_in_corpus` are deliberately different lists. A
+     * class with stored evidence that no seat turned into a claim is a gap in
+     * the review; a class the corpus never mentions is out of scope. Collapsing
+     * them would let "nobody looked" read as "there is nothing there".
+     */
+    council: z
+      .object({
+        panel: z
+          .object({
+            n_seats: z.number(),
+            note: z.string().optional(),
+            seats: z
+              .array(
+                z.object({
+                  id: z.string(),
+                  discipline: z.string(),
+                  remit: z.string(),
+                  owns: z.array(z.string()),
+                  blind_spot: z.string(),
+                  demands: z.string().optional(),
+                }),
+              )
+              .optional(),
+          })
+          .optional(),
+        coverage: z
+          .object({
+            covered: z.array(zAttackClass).optional(),
+            unexamined: z.array(zAttackClass).optional(),
+            not_in_corpus: z.array(zAttackClass).optional(),
+            coverage_pct: z.number().optional(),
+            note: z.string().optional(),
+          })
+          .optional(),
+        disagreement: z
+          .object({
+            applicable: z.boolean(),
+            gwet_ac1: z.number().nullable().optional(),
+            alpha: z.number().nullable().optional(),
+            claims_with_split: z.number().optional(),
+            n_claims: z.number().optional(),
+            note: z.string().optional(),
+          })
+          .optional(),
+        seats_contributing: z.array(z.string()).optional(),
+        contested: z.number().optional(),
+        unexamined: z.number().optional(),
+      })
+      .optional(),
     markdown: z.string().nullable().optional(),
   })
   .passthrough();
 export type Assessment = z.infer<typeof zAssessment>;
+
 
 /** GET /api/investigations/{id}/security/assessments (array or envelope). */
 export const zAssessmentList = z.union([

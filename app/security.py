@@ -835,16 +835,25 @@ def score_model_adversarial(dimensions: dict[str, float]) -> dict[str, Any]:
 # into one meaningless digit, so this one is a *confidence* aggregate, not a
 # risk aggregate, and the method string says so.
 HYPOTHESIS_DIMENSIONS: tuple[tuple[str, float, str], ...] = (
-    ("evidence_support", 0.40,
-     "how much of the collected research actually backs the claim"),
-    ("cross_flow_corroboration", 0.25,
+    ("evidence_support", 0.35,
+     "how much of the collected research actually backs the claim, net of "
+     "what the council objected to"),
+    ("cross_flow_corroboration", 0.20,
      "whether the internals and misuse flows independently reached it"),
-    ("testability", 0.20,
-     "whether a concrete observation would confirm or refute it"),
-    ("impact_if_true", 0.15,
-     "what is at stake if the claim holds"),
+    ("peer_scrutiny", 0.20,
+     "whether a reviewer who did not propose it tried to break it, and how "
+     "well it survived. A claim no seat examined scores zero here: unattacked "
+     "is not the same as unrefutable, and treating silence as a pass is how a "
+     "review stops being a review"),
+    ("testability", 0.15,
+     "whether a concrete observation would confirm or refute it, graded on "
+     "whether the test names an observation and a threshold rather than "
+     "merely existing"),
+    ("impact_if_true", 0.10,
+     "what is at stake if the claim holds, capped by the attack classes the "
+     "claim actually traces to"),
 )
-HYPOTHESIS_SCORING_METHOD = "hypothesis-synthesis-v1"
+HYPOTHESIS_SCORING_METHOD = "hypothesis-council-v2"
 
 
 def score_hypotheses(dimensions: dict[str, float]) -> dict[str, Any]:
@@ -857,15 +866,23 @@ def score_hypotheses(dimensions: dict[str, float]) -> dict[str, Any]:
     hypotheses as a high risk score, which inverts the meaning.
 
     Unmeasured dimensions take the documented neutral baseline: an
-    under-examined claim is not thereby a well-supported one.
+    under-examined claim is not thereby a well-supported one. That applies
+    most sharply to ``peer_scrutiny``, which defaults to 0 rather than to the
+    40-point baseline -- a claim no reviewer attacked must drag the aggregate
+    down, not sit at neutral, or a single-minded panel would score as highly
+    as a genuinely contested one.
     """
     rows = []
     total = 0.0
     for dim_id, weight, _desc in HYPOTHESIS_DIMENSIONS:
+        baseline = 0.0 if dim_id == "peer_scrutiny" else 40.0
         try:
-            score = max(0.0, min(100.0, float(dimensions.get(dim_id, 40.0))))
+            # A measured 0.0 must survive: this is exactly the case the
+            # peer_scrutiny baseline exists for, and `x or baseline` would
+            # silently promote an unattacked claim back to neutral.
+            score = max(0.0, min(100.0, float(dimensions.get(dim_id, baseline))))
         except (TypeError, ValueError):
-            score = 40.0
+            score = baseline
         contrib = round(score * weight, 2)
         total += contrib
         rows.append({"id": dim_id, "weight": weight, "score": round(score, 1),
@@ -2541,6 +2558,17 @@ def render_hypothesis_markdown(product_name: str, product_url: str,
     A("- The confidence aggregate scores the **claims**, not the system. It is "
       "not comparable to the internals or misuse scores and must not be "
       "averaged with them.")
+    A("- **The panel is partial and declares it.** Each seat states the weakness "
+      "it is known to have, and the attack classes no seat reached are listed "
+      "above. A claim set that never mentions poisoning reads as thorough; "
+      "this one is meant to be read with its gaps attached.")
+    A("- **A claim no seat objected to is unreviewed, not safe.** Silence is a "
+      "statement about how far the review reached, and the scoring treats it "
+      "that way: unattacked claims score zero on peer scrutiny rather than "
+      "riding the neutral baseline.")
+    A("- **A refutation test is graded, not merely present.** A test naming no "
+      "observation scores no better than no test, and 'review the deployment' "
+      "is not a falsifier.")
     A("- Claims are derived from the two stored assessments. Anything those "
       "flows did not surface cannot appear here, however relevant it may be.")
     A("- No AI-standards mapping applies, consistent with the other model paths.")
@@ -2601,28 +2629,66 @@ def _build_hypothesis_assessment(product_name: str, product_url: str,
     untestable = [h for h in verified
                   if not str(h.get("falsifier", "")).strip()]
     top = sorted(verified, key=lambda h: -float(h.get("confidence", 0)))
+    council = a2a.get("council") or {}
+    _cov = council.get("coverage") or {}
+    contested = [h for h in verified if h.get("peer_reviewed")]
+    seats_used = sorted({str((h.get("council") or {}).get("seat") or "")
+                         for h in verified
+                         if (h.get("council") or {}).get("seat")})
+    n_seats = (council.get("panel") or {}).get("n_seats", 0)
+    unconvincing = [h for h in verified
+                    if (h.get("council") or {}).get("falsifier_audit", {})
+                    .get("grade") == "unfalsifiable"]
+    unexamined = _cov.get("unexamined") or []
+    metrics = [
+        _metric("Mean confidence", f"{confidence_pct:g}"),
+        _metric("Claims", len(verified)),
+        _metric("Council seats filing claims",
+                f"{len(seats_used)}/{n_seats}" if n_seats else len(seats_used)),
+        _metric("Contested by another seat", len(contested),
+                "high" if contested else "medium"),
+        _metric("Corroborated by both flows", len(corroborated),
+                "high" if corroborated else "medium"),
+        _metric("Refutation test settles nothing", len(unconvincing),
+                "high" if unconvincing else "neutral"),
+        _metric("Attack classes evidence exists for but no seat claimed",
+                len(unexamined), "high" if unexamined else "neutral"),
+        _metric("Not yet refutable", len(untestable),
+                "high" if untestable else "neutral"),
+    ]
+    bullets = [
+        _bullet("Best-evidenced: " + (f"{top[0]['id']} {top[0]['claim']}"
+                                      if top else "no claims drafted.")),
+    ]
+    if unexamined:
+        bullets.append(_bullet(
+            "Unreached by the panel: "
+            + ", ".join(str(e.get("label") or e.get("class"))
+                        for e in unexamined[:3])
+            + " — stored evidence bears on these and no seat turned it into a "
+              "claim. That is a gap in the review, not a clean result.",
+            "critical"))
+    if unconvincing:
+        bullets.append(_bullet(
+            f"{len(unconvincing)} claim(s) name a refutation test that could "
+            f"not settle them. A claim whose test settles nothing should not be "
+            f"funded until someone names the observation."))
+    bullets.extend([
+        _bullet("A claim no seat objected to is unreviewed, not safe: the "
+                "council reports silence as its own limitation rather than "
+                "reading it as a pass."),
+        _bullet("Confidence here is about the claims, not the system. It "
+                "does not rank against the internals or misuse scores."),
+    ])
     perspectives = [{
         "key": "hypothesis", "label": "Hypotheses", "icon": "fa-flask",
         "headline": (f"{product_name}: {len(verified)} claim(s) at "
-                     f"{confidence_pct:g}/100 mean confidence"),
-        "metrics": [
-            _metric("Mean confidence", f"{confidence_pct:g}"),
-            _metric("Claims", len(verified)),
-            _metric("Corroborated by both flows", len(corroborated),
-                    "high" if corroborated else "medium"),
-            _metric("Not yet refutable", len(untestable),
-                    "high" if untestable else "neutral"),
-        ],
-        "bullets": [
-            _bullet("Best-evidenced: " + (f"{top[0]['id']} {top[0]['claim']}"
-                                          if top else "no claims drafted.")),
-            _bullet("A claim with no falsifier cannot be tested and should "
-                    "not be funded until someone names the observation that "
-                    "would settle it."),
-            _bullet("Confidence here is about the claims, not the system. It "
-                    "does not rank against the internals or misuse scores."),
-        ],
-        "focus": ["Claims", "Confidence", "Falsifiers", "Open questions"],
+                     f"{confidence_pct:g}/100 mean confidence, "
+                     f"{len(seats_used)}/{n_seats or '?'} council seats"),
+        "metrics": metrics,
+        "bullets": bullets,
+        "focus": ["Claims", "Confidence", "Falsifiers", "Council",
+                  "Open questions"],
     }]
     diagrams = {
         "dataflow": mermaid_hypothesis_map(verified),
@@ -2663,6 +2729,11 @@ def _build_hypothesis_assessment(product_name: str, product_url: str,
         "posture": scoring.get("posture", ""),
         "threats": verified,
         "scoring": scoring,
+        # The panel that drafted and contested those claims, plus the parts of
+        # the attack surface no seat reached. Carried on the assessment (not
+        # only in the markdown) so the UIs and the register can show the gaps
+        # without parsing prose.
+        "council": a2a.get("council") or {},
         "perspectives": perspectives,
         "control_plan": {"declared_controls": declared_controls or [],
                          "proposed_controls": [],

@@ -1910,6 +1910,11 @@ def _security_json(rec: SecurityAssessment, *, analysis: bool = False) -> dict:
         "exec_paragraph": ev.get("exec_paragraph", ""),
         "a2a_task_id": tr.get("task_id", ""),
         "a2a_trace": tr.get("trace", []),
+        # The review panel: who sat, who filed, what was contested, and which
+        # attack classes no seat reached. Read from the trace blob so a stored
+        # row shows the panel that actually produced its claims rather than a
+        # freshly-computed one that may disagree.
+        "council": tr.get("council") or {},
         "threat_pack": pack,
         # --- assurance (app/assurance.py) ---
         # `assessed: False` is a real answer, not an error: it marks a scoring

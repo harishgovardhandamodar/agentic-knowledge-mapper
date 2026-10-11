@@ -151,7 +151,7 @@ class TestScoringSemantics(unittest.TestCase):
 
     def test_method_and_meaning_are_declared(self):
         sc = sec.score_hypotheses({})
-        self.assertEqual(sc["method"], "hypothesis-synthesis-v1")
+        self.assertEqual(sc["method"], "hypothesis-council-v2")
         self.assertEqual(sc["assessment_path"], "model_hypothesis")
         self.assertIn("not risk", sc["score_meaning"])
 
@@ -463,6 +463,56 @@ class TestContradictions(unittest.TestCase):
         self.assertIn("In tension with flow 1", sections)
         self.assertIn("P01", sections)
 
+    def test_an_unrelated_negation_in_the_premise_is_not_a_denial(self):
+        # The subject profile reads "no conversational surface". That negation
+        # governs the conversational surface and nothing else. Compared
+        # per-field it taints the whole premise, so the premise's OTHER clause
+        # -- an affirmative statement about the subject -- gets read as a
+        # denial, and the claim is flagged as contradicting a finding (M02,
+        # "tabular outputs reveal column semantics") that it plainly agrees
+        # with. Every affirmative claim carrying a profile summary was
+        # penalised this way.
+        h = agents._hypothesis(
+            "H09", "tabular outputs expose the column distribution",
+            "foundation model over tabular records no conversational surface",
+            "column semantics are recoverable from served outputs",
+            "an attacker maps the schema without the data",
+            "serve labels only", supporting=["M02"])
+        v = self._verify([h], [self.P01, self.M02])["H09"]
+        self.assertEqual(v.get("contradicted_by"), [])
+
+    def test_a_negation_in_the_mechanism_is_not_a_denial(self):
+        # Mechanisms explain why, and explain it with negations of their own:
+        # "requires an observable per-record disclosure, not a corpus-level
+        # rate" says nothing about whether the finding holds. Reading it as a
+        # denial flags every row the mechanism happens to mention.
+        h = agents._hypothesis(
+            "H06", "attributes of an individual are recoverable from outputs",
+            "tabular outputs reveal column distributions",
+            "the seat requires an observable per-record disclosure, not a "
+            "corpus-level rate, which no prior flow asserted",
+            "an individual is profiled from responses alone",
+            "attempt attribute recovery on 50 held-out records",
+            supporting=["M02"])
+        v = self._verify([h], [self.P01, self.M02])["H06"]
+        self.assertEqual(v.get("contradicted_by"), [])
+
+    def test_an_absent_control_is_not_read_as_a_denial(self):
+        # "no per-tenant authz" is SUPPORTING evidence of exposure. Reading an
+        # absent control as a contradiction inverts the finding.
+        authz = {"id": "M03", "dimension": "deployment_surface",
+                 "title": "inference endpoint returns raw completions",
+                 "rationale": "no per-tenant authz"}
+        h = agents._hypothesis(
+            "H10", "the serving endpoint returns raw completions",
+            "the endpoint has no per-tenant authorization boundary",
+            "an unauthenticated caller reads another tenant's response",
+            "tenant isolation is not enforced at the serving layer",
+            "call the endpoint as a second tenant and diff the responses",
+            supporting=["M03"])
+        v = self._verify([h], [authz])["H10"]
+        self.assertEqual(v.get("contradicted_by"), [])
+
 
 class TestReadFromStoredRows(unittest.TestCase):
     """Flow 3 reads the stored rows, not a fresh run of the other agents."""
@@ -638,7 +688,7 @@ class TestReport(unittest.TestCase):
         try:
             md = self._report(inv)
             self.assertIn("not a risk score", md)
-            self.assertIn("hypothesis-synthesis-v1", md)
+            self.assertIn("hypothesis-council-v2", md)
         finally:
             inv.close()
 

@@ -654,6 +654,17 @@ async function secRenderScenarios(data) {
 .sec-cal-stats i { margin-right: 4px; color: var(--amber, #f59e0b); }
 .sec-cal-stats b { color: var(--text); font-variant-numeric: tabular-nums; }
 .sec-cal-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 4px; }
+/* council panel: the seats, and what each is known to miss */
+.sec-council-seats { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 8px; margin-top: 8px; }
+.sec-council-seat { border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; background: var(--bg2); }
+.sec-council-seat.silent { border-style: dashed; }
+.sec-council-seat-h { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 4px; }
+.sec-council-seat-h b { font-size: 12px; }
+.sec-council-tag { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: var(--text2); white-space: nowrap; }
+.sec-council-seat:not(.silent) .sec-council-tag { color: var(--teal, #2dd4bf); }
+.sec-council-remit { font-size: 11.5px; color: var(--text); line-height: 1.5; margin-bottom: 4px; }
+.sec-council-blind { font-size: 11px; color: var(--text2); line-height: 1.5; border-top: 1px dashed var(--border); padding-top: 4px; }
+.sec-council-blind i { margin-right: 4px; color: var(--amber, #f59e0b); }
 /* derived-scenario list */
 .sec-cal-list { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
 .sec-cal-list li { border-left: 2px solid var(--border); padding-left: 9px; }
@@ -1452,6 +1463,7 @@ body.pane-sec-top-collapsed .sec-topbar-sub { display: none; }
             <div id="secControls" class="sec-ctl-list">Loading control catalogue…</div>
           </div>
           <div id="secCalibration" class="sec-calibration" hidden></div>
+          <div id="secCouncil" class="sec-calibration" hidden></div>
           <div id="secScenarios" class="sec-calibration" hidden></div>
           <div id="secResult"><div class="sec-card"><p style="color:var(--text2)">Pick an investigation, configure the product and exposure, then run the agent. The report includes an executive summary, illustrated data-flow / threat-path / workflow diagrams, a full threat &amp; risk register, a Known Exploits section grounded in this app's graph, and Markdown + PDF export.</p></div></div>
         </div>
@@ -7966,7 +7978,7 @@ function renderSecurityReport(data) {
     secUpdateCtlCount();
   }
   secRenderCalibration(data);
-  secRenderScenarios(data);
+  secRenderCouncil(data);
   secRenderScenarios(data);
   secRunWhatIf();
   secEnsureMermaid(el);
@@ -8023,6 +8035,99 @@ function secRenderCalibration(data) {
     h += `<div class="sec-cal-chips">${un.slice(0, 10).map(c => `<span class="std-chip mono">${c}</span>`).join('')}${un.length > 10 ? `<span class="std-note">+${un.length - 10} more</span>` : ''}</div>`;
   }
 
+  host.innerHTML = h;
+}
+
+/* ---- council panel ----------------------------------------------------
+   A claim list does not say who wrote it, who attacked it, or which part of
+   the attack surface nobody covered. That last omission is the dangerous one:
+   fifteen confident claims that never mention poisoning read as thorough, and
+   the reader has no way to tell the difference without being told. Coverage
+   gaps are named here, and "no seat objected" is labelled as the limit of the
+   review rather than as a pass.
+--------------------------------------------------------------------------- */
+function secRenderCouncil(data) {
+  const host = document.getElementById('secCouncil');
+  if (!host) return;
+  const c = data.council || {};
+  const panel = c.panel || {};
+  const cov = c.coverage || {};
+  if (!panel.n_seats && !cov.covered) { host.hidden = true; return; }
+  host.hidden = false;
+
+  const claims = (data.threats || []).filter(t => t && t.id);
+  const seatsUsed = new Set(claims.map(t => (t.council || {}).seat).filter(Boolean));
+  const contested = claims.filter(t => t.peer_reviewed);
+  const unexamined = claims.filter(t => !t.peer_reviewed);
+  const weakTest = claims.filter(t => ((t.council || {}).falsifier_audit || {}).grade === 'unfalsifiable');
+  const unexam = cov.unexamined || [];
+  const silent = cov.not_in_corpus || [];
+
+  let h = `<div class="sec-cal-note">
+    <b>${panel.n_seats || 0} reviewer seats sat on this review;
+    ${seatsUsed.size} filed a claim and ${contested.length} were contested by a seat that did not draft them.</b>
+    Each seat declares the weakness it is known to have. A panel that claims to cover everything
+    covers nothing — read this panel's gaps alongside its claims.
+  </div>`;
+
+  if (contested.length) {
+    const grounds = {};
+    contested.forEach(t => ((t.council || {}).challenges || []).forEach(ch => {
+      const k = ch.ground || 'objection';
+      grounds[k] = (grounds[k] || 0) + 1;
+    }));
+    h += `<div class="sec-cal-stats">` +
+      `<span><i class="fas fa-comments"></i> <b>${contested.length}</b> claims contested</span>` +
+      Object.entries(grounds).map(([k, n]) =>
+        `<span><i class="fas fa-circle-exclamation"></i> <b>${n}</b> ${escHtml(k.replace(/_/g, ' '))}</span>`).join('') +
+      `</div>`;
+  }
+  if (unexamined.length) {
+    h += `<div class="sec-cal-note sec-cal-warn">
+      <b>${unexamined.length} claim(s) drew no objection at all.</b>
+      Read that as the reach of this review, not as the claim's safety: unattacked is not the same
+      as unrefutable, and the scoring treats it that way.
+    </div>`;
+  }
+  if (weakTest.length) {
+    h += `<div class="sec-cal-note sec-cal-warn">
+      <b>${weakTest.length} claim(s) name a refutation test that could not settle them.</b>
+      A test with nothing to observe is not a test — "review the deployment" settles nothing.
+    </div>`;
+  }
+
+  if (unexam.length) {
+    h += `<div class="sec-cal-note sec-cal-warn">
+      <b>Unreached by the panel — evidence exists, no seat claimed it.</b>
+      ${unexam.map(e => `<b>${escHtml(e.label || e.class)}</b> (${escHtml(e.class)}, severity ${escHtml(e.severity)}, ${e.stored_rows} stored row(s))`).join(' · ')}.
+      That is a gap in the review, not a clean result.
+    </div>`;
+  }
+  if (silent.length) {
+    h += `<div class="sec-cal-stats">
+      <span><i class="fas fa-microscope"></i> <b>${silent.length}</b> attack class(es) the corpus never mentions:
+      ${silent.map(e => escHtml(e.label || e.class)).join(', ')} — unmeasured, which is not the same as absent.</span>
+    </div>`;
+  }
+
+  h += `<div class="sec-cal-stats">
+    <span><i class="fas fa-shield-halved"></i> attack-class coverage <b>${cov.coverage_pct || 0}%</b> of the classes the corpus speaks to</span>
+  </div>`;
+
+  const seats = panel.seats || [];
+  if (seats.length) {
+    h += `<div class="sec-council-seats">` + seats.map(s => {
+      const used = seatsUsed.has(s.id);
+      return `<div class="sec-council-seat${used ? '' : ' silent'}">
+        <div class="sec-council-seat-h">
+          <b>${escHtml(s.discipline)}</b>
+          <span class="sec-council-tag">${used ? 'filed a claim' : 'stayed silent'}</span>
+        </div>
+        <div class="sec-council-remit">${escHtml(s.remit || '')}</div>
+        <div class="sec-council-blind"><i class="fas fa-eye-slash"></i> <b>Blind spot:</b> ${escHtml(s.blind_spot || '')}</div>
+      </div>`;
+    }).join('') + `</div>`;
+  }
   host.innerHTML = h;
 }
 

@@ -1292,6 +1292,41 @@ def engine_invariants() -> list[dict[str, Any]]:
     out.append({"name": "underpowered-experiment-is-inconclusive",
                 "ok": _incon["verdict"] == "inconclusive",
                 "detail": {"verdict": _incon["verdict"]}})
+
+    # The hypothesis council must run with no model at all, and it must not
+    # reward a claim nobody looked at. Both are engine properties, so both
+    # belong in the gate and not only in the council's own suite: a panel that
+    # needs a gateway disappears exactly when the evidence is thinnest, and a
+    # panel that scores silence as a pass is a monologist wearing a
+    # committee's clothes.
+    from . import agents as AG
+    from . import council as CO
+    _hyp_rows = [{"id": "M01", "title": "memorisation of training rows",
+                  "dimension": "training_data_privacy",
+                  "rationale": "personal data in the corpus"},
+                 {"id": "A09", "title": "distil weights from the endpoint",
+                  "dimension": "capability_abuse",
+                  "rationale": "query budget"}]
+    _drafts = CO.draft_seat_claims(_hyp_rows, [], {"is_model_query": True})
+    _panel = AG.hypothesis_verifier_handle(
+        {"payload": {"hypotheses": _drafts, "target_rows": _hyp_rows,
+                     "adversarial_rows": _hyp_rows},
+         "task_id": "inv", "trace": []})["payload"]
+    _verified = _panel["verified"]
+    out.append({
+        "name": "council-runs-offline-and-never-passes-silence",
+        "ok": (bool(_drafts)
+               and all(CO.falsifier_audit(h["falsifier"])["grade"] == "decisive"
+                       for h in _drafts)
+               and all(v.get("peer_reviewed") for v in _verified)
+               and _panel["dimension_inputs"].get("peer_scrutiny", 0) > 0),
+        "detail": {"seats_filed": len(_drafts),
+                   "contested": _panel["council"]["contested"],
+                   "unexamined": _panel["council"]["unexamined"],
+                   "coverage_pct": _panel["council"]["coverage"]["coverage_pct"],
+                   "peer_scrutiny": _panel["dimension_inputs"].get(
+                       "peer_scrutiny")},
+    })
     return out
 
 

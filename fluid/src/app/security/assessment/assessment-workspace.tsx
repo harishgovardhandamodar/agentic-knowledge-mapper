@@ -16,6 +16,7 @@ import {
 import { StatusBadge } from '@/components/ui/status-badge';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { CouncilPanel } from '@/components/council-panel';
 import { Skeleton } from '@/components/ui/skeleton';
 import type { ThreatRow } from '@/lib/api/schemas';
 
@@ -74,6 +75,13 @@ export function AssessmentWorkspace() {
           </div>
 
           <ThreatTable threats={assessment.scoring?.threats ?? assessment.threats ?? []} />
+
+          {/* The panel only exists on the hypothesis path, and the component
+              returns null everywhere else. It sits directly under the claim
+              table because the coverage gaps it reports qualify those claims:
+              a reader who reads one without the other is reading half the
+              review. */}
+          <CouncilPanel assessment={assessment} />
 
           <JudgmentsCard judgments={assessment.judgments ?? []} />
 
