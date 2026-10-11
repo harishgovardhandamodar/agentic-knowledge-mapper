@@ -87,11 +87,21 @@ const RECORD = {
           // No council block: legacy-shaped claim. Must render, not throw.
         },
       ],
-      council: { panel: { n_seats: 6 }, contested: 1 },
+      council: {
+        panel: { n_seats: 6 }, contested: 1,
+        coverage: {
+          coverage_pct: 50.0,
+          covered: [{ class: 'extraction', label: 'Extraction' }],
+          unexamined: [{ class: 'poisoning', label: 'Poisoning', stored_rows: 2 }],
+          not_in_corpus: [],
+        },
+      },
       analytics: {
         n_claims: 2, mean_confidence: 51.5, n_contested: 1,
         n_uncontested: 1, n_blocking: 0, pct_contested: 50.0,
-        grounds: { single_flow: 1 }, by_seat: {}, reviewing: {},
+        grounds: { single_flow: 1 },
+        by_seat: { 'privacy-cryptography': { filed: 1, contested: 1 } },
+        reviewing: { 'measurement-science': 1 },
         statuses: {}, impacts: {}, coverage_pct: 50.0,
         n_covered: 1, n_unexamined: 1, n_not_in_corpus: 0,
         unexamined_classes: ['poisoning'], n_seats: 6,
@@ -120,7 +130,11 @@ async function main() {
   show('call placement', 'inside loadArtifacts');
 
   // 2. Render the record through the real function.
-  const src = 'let FOLD_STORE = "akm.folds";\nlet _foldCache = null;\n'
+  const src = 'const LB_W = 640;\n'
+    + 'function lbScale(domain, range) { const [d0, d1] = domain, [r0, r1] = range; const span = (d1 - d0) || 1; return (v) => r0 + ((v - d0) / span) * (r1 - r0); }\n'
+    + 'function lbNiceMax(v) { if (v <= 0) return 10; const mag = Math.pow(10, Math.floor(Math.log10(v))); return Math.ceil(v / mag) * mag; }\n'
+    + 'function lbAxisTicks(max, count) { const out = []; for (let i = 0; i <= count; i++) out.push(Math.round((max / count) * i)); return out; }\n'
+    + 'let FOLD_STORE = "akm.folds";\nlet _foldCache = null;\n'
     + 'const CSS = { escape: (s) => s };\n'
     + 'const localStorage = { _s: {}, getItem(k) { return k in this._s ? this._s[k] : null; },'
     + ' setItem(k, v) { this._s[k] = String(v); }, removeItem(k) { delete this._s[k]; } };\n'
@@ -129,6 +143,9 @@ async function main() {
     + extractFn('foldIsOpen') + '\n'
     + extractFn('foldSection') + '\n'
     + extractFn('loadCouncilRecord') + '\n'
+    + extractFn('councilConfBars') + '\n'
+    + extractFn('councilDonut') + '\n'
+    + extractFn('lbGroupedBars') + '\n'
     + extractFn('councilRecordHtml') + '\n';
   const escHtml = (v) => String(v === null || v === undefined ? '' : v);
   const els = {};
@@ -157,7 +174,12 @@ async function main() {
   assert(host.includes('Vendor logs everything'), 'council-less claim H02 dropped instead of rendered');
   assert(host.includes('mean confidence'), 'analytics strip missing');
   assert(host.includes('single flow'), 'grounds bars missing');
-  assert(host.includes('poisoning'), 'coverage matrix missing the unexamined class');
+  assert(host.toLowerCase().includes('poisoning'), 'coverage matrix missing the unexamined class');
+  assert(host.includes('Confidence per claim'), 'confidence chart missing');
+  assert(host.includes('Attack-class coverage'), 'coverage donut missing');
+  assert(host.includes('filed vs reviewing'), 'seats chart missing');
+  const svgs = (host.match(/<svg/g) || []).length;
+  assert(svgs >= 3, 'expected at least 3 chart SVGs, found ' + svgs);
   show('sections', 'logs + actions + decisions + hypotheses');
 
   // 3. Sparse record: logs only, no hypotheses, no decisions. Must render the

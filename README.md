@@ -307,7 +307,12 @@ recomputed would be a different review):
   / guardrails / reject / exception, who decided, when, why, expiry).
 - **Hypotheses** — the generated claims with their seats, refutation-test
   grades, objections raised by non-author seats, and the falsifier that would
-  settle each one.
+  settle each one. Each entry opens with charts: confidence per claim (amber
+  contested, grey unobjected, dashed mean), an attack-class coverage donut
+  (covered / unexamined / corpus-silent), and seats filed-vs-reviewing bars.
+  The classic surface draws them as dependency-free SVG following the
+  `lbGroupedBars` contract; Fluid uses recharts. A claim nobody attacked is
+  dimmed, never hidden.
 
 The Fluid security page carries the same record above the assessment list.
 

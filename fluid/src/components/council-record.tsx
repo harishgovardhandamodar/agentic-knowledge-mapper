@@ -23,6 +23,7 @@ import { Badge } from './ui/badge';
 import { Skeleton } from './ui/skeleton';
 import { cn } from '@/lib/utils';
 import type { CouncilRecord } from '@/lib/api/schemas';
+import { CouncilCharts } from '@/components/charts/council-charts';
 
 function Section({
   icon,
@@ -161,6 +162,23 @@ export function CouncilRecordView({
           const an = h.analytics;
           const grounds = an?.grounds ? Object.entries(an.grounds) : [];
           const maxGround = Math.max(0, ...grounds.map(([, n]) => n));
+          // Chart data comes straight from the stored claims and the stored
+          // coverage matrix: contested flags, confidences, seats and class
+          // lists as the review recorded them. Nothing here is estimated.
+          const claims = (h.claims ?? []).filter(
+            (c): c is NonNullable<typeof c> & { hypothesis_id?: string; id?: string } =>
+              c.hypothesis_id != null || c.id != null,
+          );
+          const cov = (h as { council?: { coverage?: {
+            covered?: unknown[]; unexamined?: unknown[]; not_in_corpus?: unknown[];
+            coverage_pct?: number | null } } }).council?.coverage;
+          const seats = Object.entries(an?.by_seat ?? {})
+            .map(([seat, st]) => ({
+              seat,
+              filed: st?.filed ?? 0,
+              reviewing: an?.reviewing?.[seat] ?? 0,
+            }))
+            .filter((r) => r.filed > 0 || r.reviewing > 0);
           return (
           <Section
             key={h.assessment_id}
@@ -236,6 +254,26 @@ export function CouncilRecordView({
                     <b className="tabular text-foreground">{an.n_blocking}</b> blocking
                   </span>
                 )}
+              </div>
+            )}
+            {(claims.length > 0 || grounds.length > 0 || seats.length > 0) && (
+              <div className="mb-1">
+                <CouncilCharts
+                  claims={claims.map((c) => ({
+                    id: c.hypothesis_id ?? c.id ?? '?',
+                    confidence: Math.max(0, Math.min(100, c.confidence ?? 0)),
+                    contested: c.peer_reviewed === true,
+                    seat: c.council?.seat,
+                  }))}
+                  grounds={Object.fromEntries(grounds)}
+                  coverage={{
+                    covered: cov?.covered?.length ?? an?.n_covered ?? 0,
+                    unexamined: cov?.unexamined?.length ?? an?.n_unexamined ?? 0,
+                    silent: cov?.not_in_corpus?.length ?? 0,
+                    pct: cov?.coverage_pct ?? an?.coverage_pct ?? null,
+                  }}
+                  seats={seats}
+                />
               </div>
             )}
             {grounds.length > 0 && (

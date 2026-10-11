@@ -263,6 +263,7 @@ export const zCouncilRecord = z
                     confidence: z.number().nullable().optional(),
                     impact: z.number().nullable().optional(),
                     status: z.string().optional(),
+                    peer_reviewed: z.boolean().optional(),
                     council: z
                       .object({
                         seat: z.string().optional(),
