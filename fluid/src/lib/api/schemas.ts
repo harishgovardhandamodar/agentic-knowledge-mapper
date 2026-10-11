@@ -212,6 +212,26 @@ export const zCouncilRecord = z
                 }),
               )
               .optional(),
+            plan: z
+              .array(
+                z
+                  .object({
+                    n: z.number(),
+                    kind: z.string(),
+                    phase: z.string(),
+                    by: z.string().optional(),
+                    worker: z.string().optional(),
+                    plan: z.string().optional(),
+                    input_note: z.string().optional(),
+                    output_note: z.string().optional(),
+                    started_at: z.string().nullable().optional(),
+                    finished_at: z.string().nullable().optional(),
+                    duration_s: z.number().nullable().optional(),
+                    status: z.string(),
+                  })
+                  .passthrough(),
+              )
+              .optional(),
           })
           .passthrough(),
       )

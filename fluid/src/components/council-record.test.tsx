@@ -16,6 +16,23 @@ const RECORD = {
         { agent: 'hypothesis-analyst', intent: 'hypotheses_drafted', note: '2 claims drafted' },
         { agent: 'hypothesis-verifier', intent: 'hypotheses_verified', note: '2 verified' },
       ],
+      plan: [
+        {
+          n: 0, kind: 'plan', phase: 'plan_hypothesis_synthesis',
+          by: 'hypothesis-orchestrator', plan: 'analyst → verifier → reporter',
+          status: 'planned',
+        },
+        {
+          n: 1, kind: 'step', phase: 'draft_hypotheses',
+          by: 'hypothesis-orchestrator', worker: 'hypothesis-analyst',
+          input_note: 'claims from priors', output_note: '2 claims drafted',
+          duration_s: 38, status: 'done',
+        },
+        {
+          n: 2, kind: 'step', phase: 'write_hypothesis_report',
+          by: 'hypothesis-orchestrator', input_note: 'write it', status: 'incomplete',
+        },
+      ],
     },
   ],
   runs: [],
@@ -69,8 +86,26 @@ describe('CouncilRecordView', () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it('shows the deliberation log hop by hop', () => {
+  it('shows the plan step by step: numbered pairs with in and out', () => {
     render(<CouncilRecordView record={RECORD} />);
+    // Step 0 is the plan itself; each dispatch pairs with its worker.
+    expect(screen.getByText('plan_hypothesis_synthesis')).toBeInTheDocument();
+    expect(screen.getByText('draft_hypotheses')).toBeInTheDocument();
+    const text = document.body.textContent ?? '';
+    expect(text).toMatch(/claims from priors/);
+    expect(text).toMatch(/2 claims drafted/);
+    // An open step is marked, not silently dropped.
+    expect(text).toMatch(/incomplete/);
+  });
+
+  it('falls back to flat hops when the payload predates plan pairing', () => {
+    // Legacy payloads carry hops but no plan. The hops render as before
+    // instead of nothing: the work happened, only the pairing is missing.
+    const legacy = {
+      ...RECORD,
+      logs: (RECORD.logs ?? []).map((l) => ({ ...l, plan: undefined })),
+    };
+    render(<CouncilRecordView record={legacy} />);
     expect(screen.getByText('hypothesis-analyst')).toBeInTheDocument();
     expect(screen.getByText('hypotheses_drafted')).toBeInTheDocument();
     expect(screen.getByText(/2 claims drafted/)).toBeInTheDocument();

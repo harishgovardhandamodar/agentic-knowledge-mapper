@@ -3559,6 +3559,12 @@ def investigation_council_record(inv_id: int, db: Session = Depends(get_db)):
                       "at": h.get("at", ""), "note": h.get("note", "")}
                      for h in (trace.get("trace") or [])
                      if isinstance(h, dict)],
+            # The same hops paired into numbered plan steps: the plan
+            # itself as step 0, each dispatch with its worker, in/out
+            # notes and durations. The tab renders this, not the flat
+            # list -- a flat list answers what happened, steps answer
+            # whether the plan finished.
+            "plan": _council.trace_plan(trace.get("trace")),
         })
     run_rows = (db.query(AgentRun)
                 .filter(AgentRun.investigation_id == inv_id)

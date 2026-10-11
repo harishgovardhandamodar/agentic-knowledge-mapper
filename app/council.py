@@ -931,6 +931,136 @@ def run_analytics(verified: list[dict[str, Any]] | None,
     }
 
 
+def trace_plan(trace: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    """Pair a stored A2A trace into ordered plan steps.
+
+    The trace is flat: orchestrator dispatches alternate with worker
+    completions. A flat list answers "what happened" but not "what was the
+    plan and did each step finish it" -- so this pairs each orchestrator
+    dispatch with the next hop from a different agent and numbers the pairs.
+    The ``plan_*`` hop becomes step 0 (the plan itself); a dispatch with no
+    completion is ``incomplete`` rather than silently dropped; an ``error``
+    hop fails the open step instead of ending the list.
+
+    Pure pairing over stored dicts: no recomputation, no gateway, no clock.
+    Durations come from the stored ``at`` stamps and are None when a stamp is
+    missing or unparsable -- a missing timestamp is a gap in the record, not
+    a zero-second step.
+    """
+    hops = [h for h in (trace or []) if isinstance(h, dict)]
+    steps: list[dict[str, Any]] = []
+    open_step: dict[str, Any] | None = None
+    # Intents the engine executes itself and traces as a hop rather than
+    # dispatching to an agent (agents.py: "runs in the engine and is traced
+    # as a hop -- not dispatched to an agent that does not exist"). No
+    # worker hop will ever close these, so they complete themselves; without
+    # this the next dispatch would mislabel finished arithmetic as
+    # "incomplete".
+    engine_intents = {"score"}
+
+    def _close(step: dict[str, Any], hop: dict[str, Any] | None,
+               status: str) -> None:
+        if hop is not None:
+            step["worker"] = str(hop.get("agent") or "")
+            step["output_intent"] = str(hop.get("intent") or "")
+            step["output_note"] = str(hop.get("note") or "")
+            step["finished_at"] = hop.get("at")
+            step["duration_s"] = _span_s(step.get("started_at"),
+                                         hop.get("at"))
+        step["status"] = status
+        steps.append(step)
+
+    for h in hops:
+        agent = str(h.get("agent") or "")
+        intent = str(h.get("intent") or "")
+        if intent.startswith("plan_"):
+            if open_step is not None:
+                _close(open_step, None, "incomplete")
+                open_step = None
+            steps.append({
+                "n": 0, "kind": "plan", "phase": intent,
+                "by": agent, "plan": str(h.get("note") or ""),
+                "started_at": h.get("at"), "finished_at": h.get("at"),
+                "duration_s": 0.0, "status": "planned",
+            })
+        elif intent == "error":
+            if open_step is not None:
+                _close(open_step, h, "failed")
+                open_step = None
+            else:
+                steps.append({
+                    "n": len(steps), "kind": "step",
+                    "phase": intent, "by": agent,
+                    "input_note": str(h.get("note") or ""),
+                    "started_at": h.get("at"), "status": "failed",
+                })
+        elif agent.endswith("orchestrator"):
+            if open_step is not None:
+                _close(open_step, None, "incomplete")
+            if intent in engine_intents:
+                steps.append({
+                    "n": len(steps), "kind": "step", "phase": intent,
+                    "by": agent, "worker": "scoring engine",
+                    "input_note": str(h.get("note") or ""),
+                    "output_note": str(h.get("note") or ""),
+                    "started_at": h.get("at"), "finished_at": h.get("at"),
+                    "duration_s": 0.0, "status": "done",
+                })
+                continue
+            open_step = {
+                "n": len(steps), "kind": "step", "phase": intent,
+                "by": agent, "input_note": str(h.get("note") or ""),
+                "started_at": h.get("at"),
+            }
+        else:
+            if open_step is not None:
+                _close(open_step, h, "done")
+                open_step = None
+            else:
+                # A worker hop with no dispatch on record (older traces, or a
+                # resumed run). Kept as a done step with no input side rather
+                # than dropped: the work happened, only the dispatch record
+                # is missing.
+                steps.append({
+                    "n": len(steps), "kind": "step", "phase": intent,
+                    "by": agent, "worker": agent,
+                    "output_intent": intent,
+                    "output_note": str(h.get("note") or ""),
+                    "started_at": h.get("at"), "finished_at": h.get("at"),
+                    "duration_s": 0.0, "status": "done",
+                })
+    if open_step is not None:
+        _close(open_step, None, "incomplete")
+    # Number plan-0 first and steps after it in execution order.
+    renumbered: list[dict[str, Any]] = []
+    k = 0
+    for st in steps:
+        if st.get("kind") == "plan":
+            st["n"] = 0
+        else:
+            k += 1
+            st["n"] = k
+        renumbered.append(st)
+    return renumbered
+
+
+def _span_s(start: Any, end: Any) -> float | None:
+    """Seconds between two ISO stamps, None when either is unusable."""
+    from datetime import datetime
+    try:
+        a = datetime.fromisoformat(str(start))
+        b = datetime.fromisoformat(str(end))
+        if a.tzinfo is None:
+            from datetime import UTC
+            a = a.replace(tzinfo=UTC)
+        if b.tzinfo is None:
+            from datetime import UTC
+            b = b.replace(tzinfo=UTC)
+        return round((b - a).total_seconds(), 1)
+    except (TypeError, ValueError):
+        return None
+
+
 def council_panel() -> dict[str, Any]:
     """The panel as data: who is on it, what each owns, what each misses."""
     return {

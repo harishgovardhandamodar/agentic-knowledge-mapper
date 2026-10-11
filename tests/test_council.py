@@ -373,6 +373,80 @@ class TestRunAnalytics(unittest.TestCase):
         self.assertEqual(a["grounds"], {})
 
 
+class TestTracePlan(unittest.TestCase):
+    """Flat hops pair into numbered plan steps."""
+
+    def _trace(self):
+        return [
+            {"agent": "hypothesis-orchestrator",
+             "intent": "plan_hypothesis_synthesis", "at": "2026-01-01T00:00:00+00:00",
+             "note": "analyst → verifier → reporter"},
+            {"agent": "hypothesis-orchestrator", "intent": "draft_hypotheses",
+             "at": "2026-01-01T00:00:01+00:00", "note": "claims from priors"},
+            {"agent": "hypothesis-analyst", "intent": "hypotheses_drafted",
+             "at": "2026-01-01T00:00:39+00:00", "note": "7 claims drafted"},
+            {"agent": "hypothesis-orchestrator", "intent": "score",
+             "at": "2026-01-01T00:00:40+00:00", "note": "aggregate 41.3/100"},
+            {"agent": "hypothesis-orchestrator", "intent": "write_hypothesis_report",
+             "at": "2026-01-01T00:00:41+00:00", "note": "write it"},
+        ]
+
+    def test_plan_is_step_zero_and_pairs_follow(self):
+        steps = C.trace_plan(self._trace())
+        self.assertEqual(steps[0]["n"], 0)
+        self.assertEqual(steps[0]["status"], "planned")
+        self.assertEqual([(s["n"], s["phase"], s["status"], s.get("worker"))
+                          for s in steps[1:]],
+                         [(1, "draft_hypotheses", "done", "hypothesis-analyst"),
+                          (2, "score", "done", "scoring engine"),
+                          (3, "write_hypothesis_report", "incomplete", None)])
+
+    def test_durations_come_from_stamps(self):
+        steps = C.trace_plan(self._trace())
+        draft = next(s for s in steps if s["phase"] == "draft_hypotheses")
+        self.assertEqual(draft["duration_s"], 38.0)
+
+    def test_engine_score_completes_itself(self):
+        # score runs in-engine: no worker hop will ever close it, so it
+        # must not read as incomplete once the next dispatch arrives.
+        steps = C.trace_plan(self._trace())
+        score = next(s for s in steps if s["phase"] == "score")
+        self.assertEqual(score["status"], "done")
+        self.assertEqual(score["worker"], "scoring engine")
+
+    def test_unpaired_dispatch_is_incomplete_not_dropped(self):
+        steps = C.trace_plan(self._trace())
+        write = next(s for s in steps if s["phase"] == "write_hypothesis_report")
+        self.assertEqual(write["status"], "incomplete")
+        self.assertIn("write it", write["input_note"])
+
+    def test_error_fails_the_open_step(self):
+        # Slice before the analyst's completion hop so the dispatch is
+        # still open when the error lands; otherwise the error correctly
+        # becomes its own failed step and the draft stays done.
+        trace = self._trace()[:2] + [
+            {"agent": "hypothesis-orchestrator", "intent": "error",
+             "at": "2026-01-01T00:00:50+00:00", "note": "boom"}]
+        steps = C.trace_plan(trace)
+        draft = next(s for s in steps if s["phase"] == "draft_hypotheses")
+        self.assertEqual(draft["status"], "failed")
+
+    def test_empty_and_malformed_traces_are_empty_plans(self):
+        self.assertEqual(C.trace_plan(None), [])
+        self.assertEqual(C.trace_plan([]), [])
+        self.assertEqual(C.trace_plan([None, "x", 42]), [])
+
+    def test_bad_stamps_yield_none_durations(self):
+        trace = [{"agent": "a-orchestrator", "intent": "do",
+                  "at": "not-a-date", "note": "x"},
+                 {"agent": "worker", "intent": "did",
+                  "at": None, "note": "y"}]
+        steps = C.trace_plan(trace)
+        self.assertEqual(len(steps), 1)
+        self.assertIsNone(steps[0]["duration_s"])
+        self.assertEqual(steps[0]["status"], "done")
+
+
 class TestCouncilReportSection(unittest.TestCase):
     """The run summary must show every flow, not just the latest row."""
 

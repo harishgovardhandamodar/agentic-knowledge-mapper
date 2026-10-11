@@ -50,6 +50,63 @@ function Section({
   );
 }
 
+/**
+ * Numbered dispatch → worker pairs, not a flat hop list. Step 0 is the plan
+ * itself; each step shows what went in and what came out; an incomplete or
+ * failed step is marked as such rather than silently ending the list.
+ */
+function PlanSteps({
+  steps,
+}: {
+  steps: NonNullable<NonNullable<CouncilRecord['logs']>[number]['plan']>;
+}) {
+  return (
+    <ol className="relative flex flex-col gap-2.5 border-l-2 border-border pl-0 text-sm">
+      {steps.map((st) => {
+        const open = st.status !== 'done' && st.status !== 'planned';
+        return (
+          <li key={`${st.n}-${st.phase}`} className="relative pl-6 leading-relaxed">
+            <span
+              aria-hidden
+              className={cn(
+                'absolute left-0 top-0.5 flex size-5 -translate-x-1/2 items-center justify-center rounded-full text-[10px] font-bold',
+                open ? 'bg-amber-500 text-black' : 'bg-muted text-foreground',
+              )}
+            >
+              {st.n}
+            </span>
+            <div>
+              <b>{st.phase}</b>{' '}
+              <span className="text-xs text-muted-foreground">
+                {st.worker ? `${st.by ?? ''} → ${st.worker}` : (st.by ?? '')}
+                {st.duration_s != null ? ` · ${st.duration_s}s` : ''}
+              </span>
+            </div>
+            {st.plan ? <div className="text-xs">{st.plan}</div> : null}
+            {st.input_note ? (
+              <div className="text-xs">
+                <span className="text-muted-foreground">in: </span>
+                {st.input_note}
+              </div>
+            ) : null}
+            {st.output_note ? (
+              <div className="text-xs">
+                <span className="text-muted-foreground">out: </span>
+                {st.output_note}
+              </div>
+            ) : null}
+            {open ? (
+              <div className="text-xs font-semibold text-amber-600 dark:text-amber-400">
+                {st.status}
+              </div>
+            ) : null}
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
 export function CouncilRecordView({
   record,
   isLoading,
@@ -62,7 +119,9 @@ export function CouncilRecordView({
   if (isLoading) return <Skeleton className="h-40 w-full" />;
   if (!record) return null;
 
-  const logs = (record.logs ?? []).filter((l) => (l.hops ?? []).length > 0);
+  const logs = (record.logs ?? []).filter(
+    (l) => (l.plan ?? []).length > 0 || (l.hops ?? []).length > 0,
+  );
   const decisions = (record.decisions ?? []).filter((d) => d.assurance_decision);
   const claimCount = (record.hypotheses ?? []).reduce(
     (n, h) => n + (h.claims ?? []).length,
@@ -84,22 +143,28 @@ export function CouncilRecordView({
         {logs.length > 0 && (
           <Section
             icon={<ListOrdered className="size-4" />}
-            title="Logs — the deliberation"
+            title="Logs — the plan, step by step"
           >
-            <ol className="flex list-decimal flex-col gap-2 pl-5 text-sm">
-              {logs.flatMap((l) =>
-                (l.hops ?? []).map((hop, i) => (
-                  <li key={`${l.assessment_id}-${i}`} className="leading-relaxed">
-                    <b>{hop.agent}</b>{' '}
-                    <code className="text-[11px] text-muted-foreground">{hop.intent}</code>
-                    {hop.note ? <span> — {hop.note}</span> : null}
-                    <span className="ml-2 text-[11px] text-muted-foreground">
-                      #{l.assessment_id} {l.path}
-                    </span>
-                  </li>
-                )),
-              )}
-            </ol>
+            {logs.map((l) => (
+              <div key={l.assessment_id} className="mb-3">
+                <div className="mb-1.5 text-xs text-muted-foreground">
+                  #{l.assessment_id} {l.path}
+                </div>
+                {(l.plan ?? []).length > 0 ? (
+                  <PlanSteps steps={l.plan ?? []} />
+                ) : (
+                  <ol className="flex list-decimal flex-col gap-2 pl-5 text-sm">
+                    {(l.hops ?? []).map((hop, i) => (
+                      <li key={`${l.assessment_id}-${i}`} className="leading-relaxed">
+                        <b>{hop.agent}</b>{' '}
+                        <code className="text-[11px] text-muted-foreground">{hop.intent}</code>
+                        {hop.note ? <span> — {hop.note}</span> : null}
+                      </li>
+                    ))}
+                  </ol>
+                )}
+              </div>
+            ))}
           </Section>
         )}
 

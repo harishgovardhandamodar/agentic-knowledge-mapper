@@ -49,12 +49,30 @@ const RECORD = {
     {
       assessment_id: 11, path: 'model_hypothesis', product: 'Widget',
       task_id: 'hyp-x',
+      plan: [
+        { n: 0, kind: 'plan', phase: 'plan_hypothesis_synthesis', by: 'hypothesis-orchestrator',
+          plan: 'analyst → verifier → reporter', started_at: 't0', finished_at: 't0',
+          duration_s: 0.0, status: 'planned' },
+        { n: 1, kind: 'step', phase: 'draft_hypotheses', by: 'hypothesis-orchestrator',
+          worker: 'hypothesis-analyst', input_note: 'claims from priors',
+          output_note: '2 claims drafted', started_at: 't0', finished_at: 't1',
+          duration_s: 38.0, status: 'done' },
+        { n: 2, kind: 'step', phase: 'write_hypothesis_report',
+          by: 'hypothesis-orchestrator', input_note: 'write it',
+          started_at: 't2', status: 'incomplete' },
+      ],
       hops: [
         { agent: 'hypothesis-analyst', intent: 'hypotheses_drafted', at: 't0', note: '2 claims drafted' },
         { agent: 'hypothesis-verifier', intent: 'hypotheses_verified', at: 't1', note: '2 verified, 1 contested' },
       ],
     },
     { assessment_id: 9, path: 'model', product: 'Widget', task_id: 'mod-y', hops: [] },
+    // Legacy payload: hops but no plan pairing. Must render the flat list,
+    // not nothing.
+    { assessment_id: 8, path: 'model', product: 'Widget', task_id: 'mod-z',
+      hops: [
+        { agent: 'model-orchestrator', intent: 'plan_model_assessment', at: 't0', note: 'profile it' },
+      ] },
   ],
   runs: [{ id: 3, status: 'done', trigger: 'security' }],
   actions: [
@@ -146,6 +164,7 @@ async function main() {
     + extractFn('councilConfBars') + '\n'
     + extractFn('councilDonut') + '\n'
     + extractFn('lbGroupedBars') + '\n'
+    + extractFn('councilPlanHtml') + '\n'
     + extractFn('councilRecordHtml') + '\n';
   const escHtml = (v) => String(v === null || v === undefined ? '' : v);
   const els = {};
@@ -166,6 +185,11 @@ async function main() {
   const host = els.councilRecord.innerHTML;
   assert(host.includes('Council record'), 'fold header missing');
   assert(host.includes('hypothesis-analyst'), 'log hops not rendered');
+  assert(host.includes('council-steps'), 'plan stepper not rendered');
+  assert(host.includes('draft_hypotheses'), 'step phase not rendered');
+  assert(host.includes('2 claims drafted'), 'step output not rendered');
+  assert(host.includes('incomplete'), 'open step status not marked');
+  assert(host.includes('profile it'), 'legacy flat-hop fallback not rendered');
   assert(host.includes('Register edit'), 'register-edit action not rendered');
   assert(host.includes('accept'), 'assurance decision not rendered');
   assert(host.includes('Outputs reveal training rows'), 'claim H01 not rendered');
