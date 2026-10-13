@@ -135,7 +135,7 @@ class _StubLive:
         self.frames = []
         self.running = True
 
-    def update(self, frame):
+    def update(self, frame, refresh=False):
         self.frames.append(frame)
 
     def stop(self):

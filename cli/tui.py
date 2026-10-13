@@ -15,8 +15,10 @@ stdin is not a TTY.
 
 from __future__ import annotations
 
+import re
 import select
 import sys
+import threading
 import time
 
 from rich import box
@@ -32,6 +34,23 @@ REFRESH_S = 8.0
 LOG_TAIL_LINES = 15
 LIST_WINDOW = 12
 DIAGRAM_MAX_LINES = 18
+
+_ANSI_SPLIT_RE = re.compile(r"(\x1b\[[0-9;?]*[a-zA-Z])")
+
+
+def _safe(line: str) -> str:
+    """Escape ``[`` outside ANSI sequences before frame assembly.
+
+    The frame joins captured render output into strings, which the
+    final print re-parses as console markup: a literal ``[draft]`` in
+    an investigation title would otherwise parse as a style tag and
+    crash the render. ANSI sequences themselves are left intact so
+    table headers and the selection highlight keep their styling.
+    """
+    parts = _ANSI_SPLIT_RE.split(line)
+    for i in range(0, len(parts), 2):
+        parts[i] = parts[i].replace("[", "\\[")
+    return "".join(parts)
 
 
 def _cell(value: object, n: int = 48) -> str:
@@ -83,6 +102,8 @@ class Dashboard:
         self.note = ""
         self.data: dict = {}
         self.last_fetch = 0.0
+        self._refreshing = False
+        self._fresh = True
         # Research tab is filter-first: the investigations list is only
         # fetched (and only shown) on request, never by auto-refresh.
         self.filter_text = ""
@@ -122,6 +143,7 @@ class Dashboard:
         except (ApiError, Exception) as e:  # keep stale data on screen
             self.error = str(e)[:160]
         self.last_fetch = time.time()
+        self._fresh = True
 
     def _selected_inv(self, d: dict | None = None) -> dict | None:
         rows = self._filtered(d)
@@ -397,8 +419,8 @@ class Dashboard:
             view = lines[:budget]
             pos = ""
         view = view + [""] * (budget - len(view))
-        return Group(self._header(), self._tabs(), "\n".join(view),
-                     self._footer() + pos)
+        return Group(self._header(), self._tabs(),
+                     _safe("\n".join(view)), self._footer() + pos)
 
     def _set_raw(self) -> None:
         import tty
@@ -511,7 +533,7 @@ class Dashboard:
         elif key == "c":
             if self.mgr_id is not None:
                 self.note = f"compiling #{self.mgr_id} (slow)…"
-                live.update(self.frame())
+                live.update(self.frame(), refresh=True)
                 try:
                     res = self.client.manager_compile(self.mgr_id)
                     self.note = (f"compiled artifact "
@@ -530,21 +552,39 @@ class Dashboard:
         old = termios.tcgetattr(fd)
         self._term_old = old
         from rich.live import Live
-        self.refresh(force=True)
+        stop = threading.Event()
+
+        def _poll_loop() -> None:
+            # Refresh off the input loop: the fetch fans out to half a
+            # dozen API calls and any one of them may stall on a slow
+            # gateway; blocking the loop would freeze typing.
+            while not stop.is_set():
+                if not self._refreshing:
+                    self._refreshing = True
+                    try:
+                        self.refresh(force=True)
+                    finally:
+                        self._refreshing = False
+                if stop.wait(REFRESH_S):
+                    break
+
         try:
             self._set_raw()
+            poller = threading.Thread(target=_poll_loop, daemon=True)
+            poller.start()
             with Live(self.frame(), console=self.console,
                       auto_refresh=False, refresh_per_second=2) as live:
                 while True:
-                    if time.time() - self.last_fetch > REFRESH_S:
-                        self.refresh()
-                        live.update(self.frame())
+                    if self._fresh:
+                        self._fresh = False
+                        live.update(self.frame(), refresh=True)
                     key = _read_key(0.25)
                     if key is None:
                         continue
                     if not self.act(live, key):
+                        stop.set()
                         return 0
-                    live.update(self.frame())
+                    live.update(self.frame(), refresh=True)
         finally:
             termios.tcsetattr(fd, termios.TCSADRAIN, old)
             self.console.print("bye")
@@ -552,11 +592,20 @@ class Dashboard:
 
 
 def _read_key(timeout_s: float) -> str | None:
-    """Read one key (arrows mapped); None on timeout."""
+    """Read one key (arrows mapped); None on timeout.
+
+    Empty read means EOF (closed pipe): report ``\"q\"`` so the loop
+    quits instead of spinning deaf forever.
+    """
     r, _, _ = select.select([sys.stdin], [], [], timeout_s)
     if not r:
         return None
-    ch = sys.stdin.read(1)
+    try:
+        ch = sys.stdin.read(1)
+    except (BlockingIOError, InterruptedError):
+        return None
+    if ch == "":
+        return "q"
     if ch == "\x1b":
         r, _, _ = select.select([sys.stdin], [], [], 0.05)
         seq = sys.stdin.read(2) if r else ""

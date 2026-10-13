@@ -13,9 +13,40 @@ os.environ["AKM_DATABASE_URL"] = os.environ.get("AKM_TEST_DB") or (
                                 "test.db"))
 
 import cli.chat as chatmod  # noqa: E402
-from cli.chat import Chat, Editor  # noqa: E402
+from cli.chat import Chat, Editor, KeyReader  # noqa: E402
 
 chatmod.POLL_S = 0
+
+
+class KeyReaderCase(unittest.TestCase):
+    def _reader(self, chunks):
+        r, w = os.pipe()
+        for c in chunks:
+            os.write(w, c)
+        os.close(w)
+        return KeyReader(fd=r)
+
+    def test_printable_arrows_and_enter(self):
+        kr = self._reader([b"a\x1b[B\r"])
+        self.assertEqual(kr.key(), "a")
+        self.assertEqual(kr.key(), "down")
+        self.assertEqual(kr.key(), "enter")
+
+    def test_split_multibyte_reassembles(self):
+        emoji = "ü".encode()
+        kr = self._reader([emoji[:1], emoji[1:]])
+        self.assertEqual(kr.key(), "ü")
+
+    def test_eof_reports_once_then_quits(self):
+        r, w = os.pipe()
+        os.close(w)
+        kr = KeyReader(fd=r)
+        self.assertEqual(kr.key(0.1), "eof")
+        os.close(r)
+
+    def test_bare_esc_is_esc(self):
+        kr = self._reader([b"\x1b"])
+        self.assertEqual(kr.key(), "esc")
 
 
 class StubClient:

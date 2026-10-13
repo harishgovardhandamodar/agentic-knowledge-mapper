@@ -11,6 +11,9 @@ there. Rich-only rendering, stdlib input.
 
 from __future__ import annotations
 
+import codecs
+import os
+import re
 import select
 import sys
 import threading
@@ -18,6 +21,7 @@ import time
 
 from rich.console import Console, Group
 from rich.markdown import Markdown
+from rich.text import Text
 
 from cli import mermaid as _mm
 from cli.client import AkMClient, ApiError
@@ -27,20 +31,112 @@ POLL_S = 5.0
 HEADER_S = 12.0
 MAX_BLOCKS = 120
 
+_ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[a-zA-Z]")
 
-def read_key(timeout_s: float) -> str | None:
-    """One keypress mapped to a name; None on timeout."""
-    r, _, _ = select.select([sys.stdin], [], [], timeout_s)
-    if not r:
-        return None
-    ch = sys.stdin.read(1)
-    if ch == "\x1b":
-        r, _, _ = select.select([sys.stdin], [], [], 0.05)
-        seq = sys.stdin.read(3) if r else ""
-        return {"[A": "up", "[B": "down", "[C": "right",
-                "[D": "left", "[5~": "pgup", "[6~": "pgdn",
-                "[H": "home", "[F": "end", "[3~": "delete"}.get(seq,
-                                                               "esc")
+
+class KeyReader:
+    """Single-key input that survives piped stdin and dead pipes.
+
+    Reads from ``/dev/tty`` when available so the console stays usable
+    even when stdin is redirected; falls back to the stdin fd. Raw
+    ``os.read`` avoids TextIOWrapper buffering quirks, an incremental
+    decoder reassembles split multibyte characters, and EOF (closed
+    pipe) reports as ``\"eof\"`` instead of spinning the loop forever.
+    """
+
+    def __init__(self, fd: int | None = None) -> None:
+        if fd is None:
+            try:
+                self.fd = os.open("/dev/tty", os.O_RDONLY)
+                self._own = True
+            except OSError:
+                self.fd = sys.stdin.fileno()
+                self._own = False
+        else:
+            self.fd = fd
+            self._own = False
+        self._dec = codecs.getincrementaldecoder("utf-8")()
+        self._chars = ""
+        self.eof = False
+
+    def close(self) -> None:
+        if self._own:
+            try:
+                os.close(self.fd)
+            except OSError:
+                pass
+            self._own = False
+
+    def is_tty(self) -> bool:
+        try:
+            return os.isatty(self.fd)
+        except OSError:
+            return False
+
+    def _fill(self, timeout_s: float) -> bool:
+        try:
+            r, _, _ = select.select([self.fd], [], [], timeout_s)
+        except (OSError, ValueError):
+            self.eof = True
+            return False
+        if not r:
+            return False
+        try:
+            data = os.read(self.fd, 64)
+        except (OSError, InterruptedError):
+            return False
+        if data == b"":
+            self.eof = True  # closed pipe: never spin, report once
+            return False
+        self._chars += self._dec.decode(data)
+        return True
+
+    def key(self, timeout_s: float = 0.25) -> str | None:
+        """Next mapped key, None on timeout, ``\"eof\"`` at end of input."""
+        while True:
+            if self._chars.startswith("\x1b"):
+                self._fill(0.05)
+                seq = self._chars[1:4]
+                for cand, name in (
+                        ("[3~", "delete"), ("[5~", "pgup"),
+                        ("[6~", "pgdn"), ("[A", "up"), ("[B", "down"),
+                        ("[C", "right"), ("[D", "left"),
+                        ("[H", "home"), ("[F", "end")):
+                    if seq.startswith(cand):
+                        self._chars = self._chars[1 + len(cand):]
+                        return name
+                self._chars = self._chars[1:]
+                return "esc"
+            if self._chars:
+                ch, self._chars = self._chars[0], self._chars[1:]
+                return _map_char(ch)
+            if self.eof:
+                return "eof"
+            if not self._fill(timeout_s):
+                return None if not self.eof else "eof"
+
+    def readline_cooked(self) -> str:
+        """Line input for prompts; caller must have cooked the terminal
+        so the kernel echoes and edits. Ctrl-C cancels to empty."""
+        buf = b""
+        try:
+            while not buf.endswith(b"\n"):
+                r, _, _ = select.select([self.fd], [], [], 60.0)
+                if not r:
+                    break
+                try:
+                    chunk = os.read(self.fd, 256)
+                except (OSError, InterruptedError):
+                    break
+                if chunk == b"":
+                    break
+                buf += chunk
+        except KeyboardInterrupt:
+            return ""
+        return buf.decode("utf-8", "replace").rstrip("\r\n")
+
+
+def _map_char(ch: str) -> str | None:
     if ch in ("\r", "\n"):
         return "enter"
     if ch in ("\x7f", "\x08"):
@@ -171,7 +267,7 @@ class Chat:
         self.dia_idx = 0
         self.jobs: list[dict] = []
         self.health: dict = {}
-        self.last_header = 0.0
+        self._health_fresh = False
         self.lock = threading.Lock()
         self._term_old = None
         self._say("text", "AKM agent console — same database as the web "
@@ -184,25 +280,31 @@ class Chat:
             del self.blocks[:max(0, len(self.blocks) - MAX_BLOCKS)]
         self.scroll = 0
 
-    def _render_block(self, block: tuple) -> list[str]:
+    def _render_block(self, block: tuple) -> list[Text]:
+        """Render a block to Text lines (never markup strings).
+
+        Captured ANSI is stripped and lines are Text objects, so frame
+        assembly can never re-parse terminal codes or user text
+        (``[brackets]`` in either) as console markup -- that double
+        parse corrupted code spans into visible ``[1m`` soup and could
+        raise on unknown style tags.
+        """
         kind, body = block
         if kind == "user":
-            return [f"[bold green]❯ {body}[/bold green]"]
+            return [Text(f"❯ {body}", style="bold green")]
         if kind == "status":
-            return [f"[dim]◌ {body}[/dim]"]
+            return [Text(f"◌ {body}", style="dim")]
         if kind == "done":
-            return [f"[dim]● {body}[/dim]"]
+            return [Text(f"● {body}", style="dim")]
         if kind == "error":
-            return [f"[red]✗ {body}[/red]"]
+            return [Text(f"✗ {body}", style="red")]
         if kind == "ascii":
-            return str(body).splitlines()
-        if kind == "table":
-            with self.console.capture() as cap:
-                self.console.print(body)
-            return cap.get().splitlines()
+            return [Text(ln) for ln in str(body).splitlines()]
         with self.console.capture() as cap:
-            self.console.print(Markdown(str(body)))
-        return cap.get().splitlines()
+            self.console.print(Markdown(str(body)) if kind == "text"
+                               else body)
+        return [Text(_ANSI_RE.sub("", ln))
+                for ln in cap.get().splitlines()]
 
     # -- background jobs -------------------------------------------------
     def _submit(self, label: str, fn) -> None:
@@ -532,7 +634,7 @@ class Chat:
                 f"[dim]{self.mode} (esc nav)[/dim]")
 
     def frame(self) -> Group:
-        lines: list[str] = []
+        lines: list[Text] = []
         with self.lock:
             blocks = list(self.blocks)
         for b in blocks:
@@ -542,22 +644,23 @@ class Chat:
         self.scroll = max(0, min(self.scroll, max(0, total - budget)))
         end = total - self.scroll
         view = lines[max(0, end - budget):end]
-        view = view + [""] * (budget - len(view))
-        return Group(self._header(), "\n".join(view), self._input_line(),
+        view = view + [Text("")] * (budget - len(view))
+        return Group(self._header(), *view, self._input_line(),
                      self._footer())
 
-    def _input_line(self) -> str:
+    def _input_line(self) -> Text:
         w = max(20, self.console.width - 4)
         if self.mode == "nav":
-            return (f"❯ {_cell(self.editor.text(), max(10, w - 10))}"
-                    f"  [dim][NAV][/dim]")
+            return Text.assemble(
+                "❯ ", _cell(self.editor.text(), max(10, w - 10)),
+                "  [NAV]", style="dim")
         buf = self.editor.text()
         cur = self.editor.cursor
         # Keep the cursor on screen for long lines.
         lo = max(0, cur - (w - 8))
         vis = buf[lo:lo + w - 4]
         cx = cur - lo
-        return "❯ " + vis[:cx] + "▊" + vis[cx:]
+        return Text.assemble("❯ ", vis[:cx], ("▊", "reverse"), vis[cx:])
 
     def _footer(self) -> str:
         if self.mode == "nav":
@@ -609,45 +712,73 @@ class Chat:
             self.health = self.client.health()
         except (ApiError, Exception):
             pass
+        self._health_fresh = True
 
-    def _set_raw(self) -> None:
+    def _set_raw(self, fd: int) -> None:
         import tty
-        tty.setraw(sys.stdin.fileno())
+        tty.setraw(fd)
 
-    def _set_cooked(self) -> None:
+    def _set_cooked(self, fd: int) -> None:
         if self._term_old is not None:
             import termios
-            termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN,
-                              self._term_old)
+            termios.tcsetattr(fd, termios.TCSADRAIN, self._term_old)
 
     def run(self) -> int:
-        if not sys.stdin.isatty():
+        reader = KeyReader()
+        if not reader.is_tty():
             self.console.print("chat needs a TTY (stdin is not one)")
+            reader.close()
             return 2
         import termios
-        self._term_old = termios.tcgetattr(sys.stdin.fileno())
-        self._poll_header()
-        from rich.live import Live
-        last_header = 0.0
         try:
-            self._set_raw()
+            self._term_old = termios.tcgetattr(reader.fd)
+        except termios.error:
+            self.console.print("chat needs a TTY (stdin is not one)")
+            reader.close()
+            return 2
+        from rich.live import Live
+        stop = threading.Event()
+
+        def _poll_loop() -> None:
+            while not stop.is_set():
+                self._poll_header()
+                if stop.wait(HEADER_S):
+                    break
+
+        try:
+            self._set_raw(reader.fd)
+            poller = threading.Thread(target=_poll_loop, daemon=True)
+            poller.start()
             with Live(self.frame(), console=self.console,
                       auto_refresh=False, refresh_per_second=4) as live:
+                # Redraw only on change: every tick re-rendering the full
+                # frame is what flooded scrollback before. Background job
+                # threads append blocks at any time; the block-count check
+                # picks those up on the next tick.
+                dirty = True
+                last_n = -1
                 while True:
-                    if time.time() - last_header > HEADER_S:
-                        self._poll_header()
-                        last_header = time.time()
-                        live.update(self.frame())
                     self._reap()
                     try:
-                        cont = self.key(read_key(0.25))
+                        k = reader.key(0.25)
+                        cont = self.key(k)
                     except _Quit:
                         return 0
                     if not cont:
                         return 0
-                    live.update(self.frame())
+                    if k is not None or len(self.blocks) != last_n:
+                        dirty = True
+                    if self._health_fresh:
+                        self._health_fresh = False
+                        dirty = True
+                    if dirty:
+                        live.update(self.frame(), refresh=True)
+                        last_n = len(self.blocks)
+                        dirty = False
         finally:
-            self._set_cooked()
+            stop.set()
+            self._set_cooked(reader.fd)
+            reader.close()
             self.console.print("bye")
         return 0
 
