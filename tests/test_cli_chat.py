@@ -224,5 +224,36 @@ class FrameCase(unittest.TestCase):
         self.assertIn("[NAV]", cap2.get())
 
 
+class TermiosCase(unittest.TestCase):
+    """Regression: raw mode staircased every redraw (OPOST off drops the
+    carriage return). Both TUIs must use cbreak: instant input, cooked
+    output."""
+
+    def _check_cbreak(self, set_raw):
+        import pty
+        import termios
+        m, s = pty.openpty()
+        try:
+            set_raw(s)
+            attrs = termios.tcgetattr(s)
+            self.assertTrue(attrs[1] & termios.OPOST)  # \n -> \r\n kept
+            self.assertFalse(attrs[3] & termios.ICANON)  # char-at-a-time
+            self.assertFalse(attrs[3] & termios.ECHO)  # app echoes itself
+            self.assertFalse(attrs[3] & termios.ISIG)  # ^C as byte, quit
+        finally:
+            os.close(m)
+            os.close(s)
+
+    def test_chat_uses_cbreak(self):
+        from cli.chat import Chat
+        chat = Chat(StubClient())  # type: ignore[arg-type]
+        self._check_cbreak(chat._set_raw)
+
+    def test_dashboard_uses_cbreak(self):
+        from cli.tui import Dashboard
+        dash = Dashboard(StubClient())  # type: ignore[arg-type]
+        self._check_cbreak(dash._set_raw)
+
+
 if __name__ == "__main__":
     unittest.main()

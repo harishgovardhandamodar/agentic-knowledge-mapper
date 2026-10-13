@@ -715,8 +715,19 @@ class Chat:
         self._health_fresh = True
 
     def _set_raw(self, fd: int) -> None:
+        # cbreak, not raw: input stays character-at-a-time with echo off,
+        # but output processing (OPOST/ONLCR) stays on so \n still returns
+        # the carriage. tty.setraw disables OPOST, which staircases every
+        # redraw down-and-right across the screen. ISIG is cleared too, so
+        # Ctrl-C arrives as a \x03 byte the key loop turns into a graceful
+        # quit (terminal restored, "bye") rather than a signal that may go
+        # nowhere without job control; KeyboardInterrupt stays as backstop.
         import tty
-        tty.setraw(fd)
+        tty.setcbreak(fd)
+        import termios
+        attrs = termios.tcgetattr(fd)
+        attrs[3] &= ~termios.ISIG
+        termios.tcsetattr(fd, termios.TCSADRAIN, attrs)
 
     def _set_cooked(self, fd: int) -> None:
         if self._term_old is not None:
@@ -757,24 +768,28 @@ class Chat:
                 # picks those up on the next tick.
                 dirty = True
                 last_n = -1
-                while True:
-                    self._reap()
-                    try:
-                        k = reader.key(0.25)
-                        cont = self.key(k)
-                    except _Quit:
-                        return 0
-                    if not cont:
-                        return 0
-                    if k is not None or len(self.blocks) != last_n:
-                        dirty = True
-                    if self._health_fresh:
-                        self._health_fresh = False
-                        dirty = True
-                    if dirty:
-                        live.update(self.frame(), refresh=True)
-                        last_n = len(self.blocks)
-                        dirty = False
+                try:
+                    while True:
+                        self._reap()
+                        try:
+                            k = reader.key(0.25)
+                            cont = self.key(k)
+                        except _Quit:
+                            return 0
+                        if not cont:
+                            return 0
+                        if k is not None or len(self.blocks) != last_n:
+                            dirty = True
+                        if self._health_fresh:
+                            self._health_fresh = False
+                            dirty = True
+                        if dirty:
+                            live.update(self.frame(), refresh=True)
+                            last_n = len(self.blocks)
+                            dirty = False
+                except KeyboardInterrupt:
+                    # cbreak keeps ISIG: Ctrl-C arrives as SIGINT.
+                    return 0
         finally:
             stop.set()
             self._set_cooked(reader.fd)

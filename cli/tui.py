@@ -422,9 +422,17 @@ class Dashboard:
         return Group(self._header(), self._tabs(),
                      _safe("\n".join(view)), self._footer() + pos)
 
-    def _set_raw(self) -> None:
+    def _set_raw(self, fd: int | None = None) -> None:
+        # cbreak, not raw (see cli.chat: raw disables OPOST and every
+        # redraw staircases down-and-right). ISIG cleared so Ctrl-C quits
+        # gracefully via the key loop in any process-group setup.
         import tty
-        tty.setraw(sys.stdin.fileno())
+        target = sys.stdin.fileno() if fd is None else fd
+        tty.setcbreak(target)
+        import termios
+        attrs = termios.tcgetattr(target)
+        attrs[3] &= ~termios.ISIG
+        termios.tcsetattr(target, termios.TCSADRAIN, attrs)
 
     def _set_cooked(self) -> None:
         if self._term_old is not None:
@@ -574,17 +582,22 @@ class Dashboard:
             poller.start()
             with Live(self.frame(), console=self.console,
                       auto_refresh=False, refresh_per_second=2) as live:
-                while True:
-                    if self._fresh:
-                        self._fresh = False
+                try:
+                    while True:
+                        if self._fresh:
+                            self._fresh = False
+                            live.update(self.frame(), refresh=True)
+                        key = _read_key(0.25)
+                        if key is None:
+                            continue
+                        if not self.act(live, key):
+                            stop.set()
+                            return 0
                         live.update(self.frame(), refresh=True)
-                    key = _read_key(0.25)
-                    if key is None:
-                        continue
-                    if not self.act(live, key):
-                        stop.set()
-                        return 0
-                    live.update(self.frame(), refresh=True)
+                except KeyboardInterrupt:
+                    # cbreak keeps ISIG: Ctrl-C arrives as SIGINT.
+                    stop.set()
+                    return 0
         finally:
             termios.tcsetattr(fd, termios.TCSADRAIN, old)
             self.console.print("bye")
