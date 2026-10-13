@@ -56,7 +56,7 @@ class TestAdoptionAdviceCatalog(unittest.TestCase):
 
 class TestIncidentCatalog(unittest.TestCase):
     def test_incident_fingerprint_pinned(self):
-        self.assertEqual(inc.incident_fingerprint(), "2165a362ba75")
+        self.assertEqual(inc.incident_fingerprint(), "72d189b0954e")
 
     def test_incident_policy_names_all_bump_levels(self):
         for level in ("major", "minor", "patch", "version"):

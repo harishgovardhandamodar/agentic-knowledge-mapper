@@ -28,6 +28,7 @@ function grab(name) {
 }
 
 const lib = ['escHtml', 'mdInline', 'mdBlock'].map(grab).join('\n');
+const miniSrc = grab('renderMiniMarkdown');
 const asFn = (src) => eval('(' + src.replace(/^function \w+/, 'function') + ')');
 const escHtml = asFn(grab('escHtml'));
 const mdBlock = new Function('escHtml', 'mdInline',
@@ -54,5 +55,17 @@ check('unclosed fence at EOF', unclosed.includes('<div class="mermaid"'));
 check('loader local-first', html.includes('/static/vendor/mermaid.min.js'));
 check('loader CDN failover', html.includes('MM_CDN_SRC'));
 check('loader failure note', html.includes('mmNoteUnavailable'));
+
+const renderMiniMarkdown = new Function(miniSrc + '\nreturn renderMiniMarkdown;')();
+const causal = 'text\n\n```mermaid causal\nflowchart TD\n    T["a"]\n```\n\ntail';
+const mini = renderMiniMarkdown(causal);
+check('labeled fence -> div.mermaid (mini)',
+  mini.includes('<div class="mermaid"'));
+check('no pre-wrapped mermaid (mini)',
+  !/<pre>[^<]*flowchart/.test(mini));
+const bare = renderMiniMarkdown('```mermaid\ngraph TD\n A-->B\n```');
+check('bare fence still works', bare.includes('<div class="mermaid"'));
+const py = renderMiniMarkdown('```python\nx = 1\n```');
+check('non-mermaid stays code', py.includes('<pre>'));
 
 process.exit(fails ? 1 : 0);

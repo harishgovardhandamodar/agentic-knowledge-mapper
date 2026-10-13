@@ -28,11 +28,11 @@ import re
 from datetime import date
 from typing import Any
 
-INCIDENT_VERSION = "1.0.0"
+INCIDENT_VERSION = "1.1.0"
 
 CHANGE_POLICY = {
     "major": "verdict levels, topic set, or evidence rules changed",
-    "minor": "new patterns, thresholds, or diagram shapes (verdicts stable)",
+    "minor": "new patterns, thresholds, or boilerplate guards (verdicts stable)",
     "patch": "wording, caps, or parsing robustness without meaning change",
     "version": INCIDENT_VERSION,
 }
@@ -60,6 +60,18 @@ _DATE_RES = (
 )
 
 _SENT_SPLIT = re.compile(r"(?<=[.!?])\s+|\n+")
+
+# Navigation/SEO boilerplate is never evidence: it names no event and
+# would otherwise surface as triggers ("released") or impacts ("learn
+# about its impact ...").
+_BOILER_RE = re.compile(
+    r"learn about|click here|read more|cookies?|subscribe|sign up|"
+    r"rights reserved|advertisement|newsletter",
+    re.IGNORECASE)
+
+MIN_TRIGGER_WORDS = 2
+MIN_TRIGGER_CHARS = 10
+MIN_IMPACT_WORDS = 3
 
 _TRIGGER_RES = (
     (3, "root cause", re.compile(r"root cause[^.?!]{0,120}", re.I)),
@@ -342,21 +354,30 @@ def analyze(db, inv_id: int) -> dict[str, Any]:
         else:
             undated += 1
         for s in _sentences(title, desc, content[:2000]):
+            if _BOILER_RE.search(s):
+                continue
             for weight, kind, rx in _TRIGGER_RES:
                 m = rx.search(s)
-                if m:
-                    text = (m.group(1) if m.lastindex else m.group(0)
-                            ).strip()
-                    trigger_cands.append(
-                        {"text": text[:200], "kind": kind,
-                         "score": weight + rel,
-                         "evidence": title[:120] or url[:120],
-                         "artifact_id": a.id})
-                    break
+                if not m:
+                    continue
+                text = (m.group(1) if m.lastindex else m.group(0)
+                        ).strip()
+                if len(text) < MIN_TRIGGER_CHARS or \
+                        len(text.split()) < MIN_TRIGGER_WORDS:
+                    continue
+                trigger_cands.append(
+                    {"text": text[:200], "kind": kind,
+                     "score": weight + rel,
+                     "evidence": title[:120] or url[:120],
+                     "artifact_id": a.id})
+                break
             for rx in _IMPACT_RES:
                 m = rx.search(s)
                 if m and len(impacts) < 8:
-                    impacts.append({"text": m.group(1).strip()[:200],
+                    text = m.group(1).strip()
+                    if len(text.split()) < MIN_IMPACT_WORDS:
+                        continue
+                    impacts.append({"text": text[:200],
                                     "evidence": title[:120] or url[:120],
                                     "artifact_id": a.id})
                     break
@@ -565,6 +586,10 @@ def incident_fingerprint() -> str:
                         "response"),
              "strong_terms": sorted(_STRONG_TERMS),
              "trigger_weights": [(w, k) for w, k, _ in _TRIGGER_RES],
+             "boilerplate": sorted(_BOILER_RE.pattern.split("|")),
+             "minima": {"trigger_words": MIN_TRIGGER_WORDS,
+                        "trigger_chars": MIN_TRIGGER_CHARS,
+                        "impact_words": MIN_IMPACT_WORDS},
              "rules": {"dated_for_reconstructed": 3,
                        "timeline_cap": 12, "impacts_cap": 5}}
     return hashlib.sha256(json.dumps(canon, sort_keys=True).encode()

@@ -169,6 +169,23 @@ class AnalyzeCase(unittest.TestCase):
         pack = _pack(iid)
         self.assertEqual(pack["verdict"]["key"], "insufficient_evidence")
 
+    def test_boilerplate_never_becomes_evidence(self):
+        iid = _inv()
+        _art(iid, "Vendor blog",
+             "Learn about its impact, affected versions, and mitigation "
+             "methods. Click here to subscribe to our newsletter.")
+        pack = _pack(iid)
+        self.assertEqual(pack["verdict"]["key"], "insufficient_evidence")
+        self.assertIsNone(pack["trigger"])
+        self.assertEqual(pack["impacts"], [])
+
+    def test_single_word_trigger_rejected(self):
+        iid = _inv()
+        _art(iid, "Release notes", "Version 4 was released.")
+        pack = _pack(iid)
+        self.assertIsNone(pack["trigger"])
+        self.assertIn("no trigger evidence", " ".join(pack["gaps"]))
+
     def test_empty_collection_is_insufficient(self):
         iid = _inv()
         pack = _pack(iid)

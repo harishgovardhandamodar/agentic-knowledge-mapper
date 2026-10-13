@@ -5647,7 +5647,8 @@ function designRender(md) {
       while (i < lines.length && !close.test(lines[i])) { buf.push(lines[i]); i++; }
       const src = buf.join('\n');
       const lang = (fence[2] || '').toLowerCase();
-      out.push(lang === 'mermaid'
+      const isMermaid = lang.split(/\s+/)[0] === 'mermaid';
+      out.push(isMermaid
         ? `<div class="diagram-wrap design-zoomable"><button class="design-expand" onclick="designZoomOpen(this)" title="Open large with zoom"><i class="fas fa-expand"></i> enlarge</button><pre class="mermaid">${escHtml(src)}</pre></div>`
         : `<pre class="md-code"><code>${escHtml(src)}</code></pre>`);
       continue;
@@ -9728,7 +9729,7 @@ function renderMiniMarkdown(src) {
       while (i < lines.length && !lines[i].trim().startsWith('```')) { buf.push(lines[i]); i++; }
       i++;
       flushList();
-      if (lang === 'mermaid') {
+      if (lang.split(/\s+/)[0] === 'mermaid') {
         // diagrams render through the shared mermaid queue (secEnsureMermaid
         // at each injection point); the escaped source stays as the fallback
         // text so a failed render degrades to readable code, not a blank.
