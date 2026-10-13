@@ -129,6 +129,7 @@ def _plan_queries(inv: Investigation) -> dict:
     _ensure_vendor_doc_query(inv, clean, enabled)
     _ensure_model_queries(inv, clean, enabled)
     _ensure_provider_posture_queries(inv, clean, enabled)
+    _ensure_incident_queries(inv, clean, enabled)
     return {"rationale": plan.get("rationale", ""), "queries": clean or
             [{"text": inv.keywords.split(",")[0].strip() or inv.title, "sources": list(enabled)}]}
 
@@ -306,6 +307,46 @@ def _ensure_provider_posture_queries(inv: Investigation, clean: list[dict],
     ]
     have = " ".join(q.get("text") or "" for q in clean).lower()
     srcs = ["web"] if "web" in enabled else sorted(enabled)
+    if not srcs:
+        return
+    for text in families:
+        if len(clean) >= 6:
+            return
+        if text.lower() in have:
+            continue
+        clean.append({"text": text[:120], "sources": srcs})
+        have += " " + text.lower()
+
+
+def _ensure_incident_queries(inv: Investigation, clean: list[dict],
+                             enabled: set[str]) -> None:
+    """Event query families for incident reconstruction briefs.
+
+    An incident brief needs dated event evidence (outage timeline, status
+    history, official statements, postmortems) -- without these families
+    the collection drifts into adjacent product-vulnerability space and
+    the reconstruction has nothing to order. Mutates ``clean`` in place;
+    capped at six queries total.
+    """
+    from . import incident as _inc
+    if not _inc.is_incident_brief(inv.title or "", inv.keywords or "",
+                                  inv.description or ""):
+        return
+    subject = (inv.keywords or "").split(",")[0].strip() or \
+        (inv.title or "")[:60]
+    families = [
+        # Event evidence first: dated reporting orders the timeline and
+        # official sources decide trigger and cause. Order is load-bearing
+        # -- the planner caps at six queries, so the first families win
+        # the remaining slots.
+        f"{subject} outage timeline what happened",
+        f"{subject} status page incident history",
+        f"{subject} official statement postmortem",
+        f"{subject} root cause trigger",
+        f"{subject} impact users affected duration",
+    ]
+    have = " ".join(q.get("text") or "" for q in clean).lower()
+    srcs = ["web", "rss"] if {"web", "rss"} <= enabled else sorted(enabled)
     if not srcs:
         return
     for text in families:

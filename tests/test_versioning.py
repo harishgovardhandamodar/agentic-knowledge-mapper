@@ -15,6 +15,7 @@ os.environ["AKM_DATABASE_URL"] = os.environ.get("AKM_TEST_DB") or (
 
 from app import adoption_advice as aa  # noqa: E402
 from app import database as _db  # noqa: E402
+from app import incident as inc  # noqa: E402
 from app import model_eval as me  # noqa: E402
 from app import models as _models  # noqa: E402,F401 -- registers tables
 from app import threatpack as tp  # noqa: E402
@@ -50,6 +51,16 @@ class TestAdoptionAdviceCatalog(unittest.TestCase):
         for level in ("major", "minor", "patch", "version"):
             self.assertTrue(aa.CHANGE_POLICY[level], level)
         self.assertEqual(aa.CHANGE_POLICY["version"], aa.ADOPTION_ADVICE_VERSION)
+
+
+class TestIncidentCatalog(unittest.TestCase):
+    def test_incident_fingerprint_pinned(self):
+        self.assertEqual(inc.incident_fingerprint(), "2165a362ba75")
+
+    def test_incident_policy_names_all_bump_levels(self):
+        for level in ("major", "minor", "patch", "version"):
+            self.assertTrue(inc.CHANGE_POLICY[level], level)
+        self.assertEqual(inc.CHANGE_POLICY["version"], inc.INCIDENT_VERSION)
 
 
 class TestChangePolicy(unittest.TestCase):

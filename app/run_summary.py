@@ -460,6 +460,29 @@ def manager_run_report(db, run_id: int) -> dict[str, Any]:
     all_diagrams: list[dict[str, str]] = []
     for s in sections:
         all_diagrams.extend(s["diagrams"])
+    for inv_id in child_ids:
+        # Incident reconstructions store their timeline/causal figures as
+        # fenced markdown in a per-topic artifact, not on the assessment
+        # row: collect them so the report diagrams cover what happened,
+        # not only the risk scoring.
+        try:
+            art = (db.query(Artifact)
+                   .filter(Artifact.investigation_id == inv_id,
+                           Artifact.tags.like("%incident-reconstruction%"))
+                   .order_by(Artifact.id.desc()).first())
+        except Exception:
+            art = None
+        if art is None or not art.content:
+            continue
+        for key, src in _dossier._mermaid_fences(art.content):
+            if any(d.get("source") == src for d in all_diagrams):
+                continue
+            all_diagrams.append(
+                {"key": key or "(unlabelled)",
+                 "caption": (key.replace("_", " ") if key
+                             else f"incident figure (#{inv_id})"),
+                 "source": src,
+                 "origin": "incident reconstruction"})
     if all_diagrams:
         A("## Diagrams")
         A("")

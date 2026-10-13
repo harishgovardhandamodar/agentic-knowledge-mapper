@@ -5225,6 +5225,42 @@ def post_adoption_advice(data: AdoptionAdviceRequest, request: Request,
     return pack
 
 
+@app.post("/api/investigations/{inv_id}/incident-analysis")
+def post_incident_analysis(inv_id: int, request: Request,
+                           db: Session = Depends(get_db)):
+    """Deterministic incident reconstruction from collected artifacts.
+
+    Timeline, trigger, and root cause are read off dated evidence and
+    trigger sentences; anything unconfirmed stays unknown and thin
+    evidence returns insufficient_evidence. Idempotent per topic.
+    """
+    from . import incident as _inc
+    resolved = _landscape_inv(inv_id, db)
+    stored = _inc.store_analysis(db, resolved)
+    pack = stored.get("pack") or {}
+    ledger_api.human_action(
+        request, "incident_analysis.stored",
+        {"investigation": resolved,
+         "artifact_id": stored.get("artifact_id"),
+         "verdict": (pack.get("verdict") or {}).get("key"),
+         "dated_events": len(pack.get("dated_events") or [])})
+    return {"artifact_id": stored.get("artifact_id"),
+            "existing": stored.get("existing", False),
+            "pack": pack}
+
+
+@app.get("/api/investigations/{inv_id}/incident-analysis")
+def get_incident_analysis(inv_id: int, db: Session = Depends(get_db)):
+    """Latest reconstruction, re-derived (no write).
+
+    Reading, not writing: the pack is deterministic over the stored
+    artifacts, so this always reflects the current collection.
+    """
+    from . import incident as _inc
+    resolved = _landscape_inv(inv_id, db)
+    return {"pack": _inc.analyze(db, resolved)}
+
+
 @app.get("/api/investigations/{inv_id}/adoption-advice")
 def get_investigation_adoption_advice(inv_id: int, product: str | None = None,
                                       query: str = "",

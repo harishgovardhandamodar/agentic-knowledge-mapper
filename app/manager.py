@@ -19,6 +19,7 @@ import re
 from datetime import UTC, datetime
 from typing import Any
 
+from . import incident as incident_mod
 from . import llm
 from .agent import launch_run
 from .models import AgentEvent, AgentRun, Artifact, Investigation, SecurityAssessment
@@ -249,6 +250,13 @@ def parse_command(command: str) -> dict[str, Any]:
     except Exception:
         pass
     try:
+        from . import incident as _inc
+        template = _inc.incident_plan(command)
+        if template is not None:
+            return validate_plan(template)
+    except Exception:
+        pass
+    try:
         return validate_plan(_llm_parse(command))
     except Exception:
         pass
@@ -289,6 +297,7 @@ def validate_plan(plan: dict[str, Any]) -> dict[str, Any]:
     summary = plan.get("summary") or {}
     out = {"domain": str(plan.get("domain") or "")[:200],
            "exposure": exposure,
+           "incident": bool(plan.get("incident")),
            "topics": topics,
            "summary": {"title": str(summary.get("title") or
                                    f"Summary: {topics[0]['title']} +{len(topics) - 1}")[:300],
@@ -562,6 +571,12 @@ def compile_run(db, run_id: int) -> dict[str, Any]:
     briefs = []
     topics_risks: list[tuple[str, list[dict[str, Any]]]] = []
     topic_gaps: list[tuple[str, list[str]]] = []
+    plan = {}
+    try:
+        plan = json.loads(run.plan_json or "{}")
+    except Exception:
+        plan = {}
+    plan_incident = bool(plan.get("incident"))
     for c in row["children"]:
         inv = db.query(Investigation).filter(
             Investigation.id == c["investigation_id"]).first()
@@ -590,22 +605,37 @@ def compile_run(db, run_id: int) -> dict[str, Any]:
             f"(overall {getattr(rec, 'overall_pct', None)}), "
             f"{arts} artifacts.\n{md}"
             + (f"\nOpen gaps: {'; '.join(gaps)}." if gaps else ""))
-    plan = {}
-    try:
-        plan = json.loads(run.plan_json or "{}")
-    except Exception:
-        plan = {}
+        if plan_incident:
+            # Ground the synthesis in the reconstruction verdict, not just
+            # the risk scores: incident runs answer what happened.
+            try:
+                _ipack = incident_mod.analyze(db, c["investigation_id"])
+                _iv = (_ipack.get("verdict") or {}).get("key", "?")
+                _nd = len(_ipack.get("dated_events") or [])
+                briefs[-1] += (f"\nIncident reconstruction: {_iv} "
+                               f"({_nd} dated events).")
+            except Exception:
+                pass
     overlaps = find_overlaps(topics_risks)
     lapses = find_lapses(topics_risks)
     tables = render_summary_tables(topics_risks, overlaps, lapses)
+    sys_prompt = ("You are given fact tables (top risks, overlaps, lapses) "
+                   "plus assessment briefs. Do NOT repeat the tables. Reply "
+                   "markdown with: overall verdict in two sentences, "
+                   "cross-cutting patterns across topics, what the evidence "
+                   "does not cover, and concrete next steps. Ground every "
+                   "claim in the briefs; invent nothing.")
+    if plan_incident:
+        sys_prompt = ("You are given an incident command, topic briefs "
+                      "with reconstruction verdicts, and risk tables. Do "
+                      "NOT repeat the tables. Reply markdown with: what "
+                      "happened in two sentences, the trigger and root "
+                      "cause with their confidence, what the evidence does "
+                      "not cover, and concrete next steps (what to collect "
+                      "to confirm or overturn the reconstruction). Ground "
+                      "every claim in the briefs; invent nothing.")
     text = llm.chat(
-        [{"role": "system",
-          "content": ("You are given fact tables (top risks, overlaps, lapses) "
-                      "plus assessment briefs. Do NOT repeat the tables. Reply "
-                      "markdown with: overall verdict in two sentences, "
-                      "cross-cutting patterns across topics, what the evidence "
-                      "does not cover, and concrete next steps. Ground every "
-                      "claim in the briefs; invent nothing.")},
+        [{"role": "system", "content": sys_prompt},
          {"role": "user",
           "content": f"Command: {run.command}\n\n{tables}\n\n" + "\n\n".join(briefs)}],
         max_tokens=3000, temperature=0.2)
@@ -618,6 +648,7 @@ def compile_run(db, run_id: int) -> dict[str, Any]:
                                   + "".join(f"- {g}\n" for g in gaps)
                                   for title, gaps in topic_gaps))
     markdown = (tables + gaps_section + _provider_section(db, plan, row)
+                + _incident_section(db, plan, row)
                 + "\n## Synthesis\n\n" + (text or "").strip() + "\n")
     art = Artifact(investigation_id=summary_id,
                    title=f"Manager synthesis (run #{run.id})",
@@ -797,6 +828,50 @@ def _provider_section(db, plan: dict[str, Any],
         for key in ("capability", "safety", "org_api"):
             L.append(f"- **{key}**: {answers[key]}")
         L.append("")
+    return "\n".join(L)
+
+
+def _incident_section(db, plan: dict[str, Any],
+                      row: dict[str, Any]) -> str:
+    """Deterministic incident reconstruction for incident runs.
+
+    Returns "" for anything else. Each child gets a stored
+    reconstruction (idempotent per topic) rendered with its timeline
+    and causal figures, so the report answers what happened even when
+    the evidence only supports a partial picture. Like the gaps
+    section, this is computed, not generated, so it survives the LLM
+    paraphrase intact.
+    """
+    if not plan.get("incident"):
+        return ""
+    children = row.get("children") or []
+    if not children:
+        return ""
+    L = ["\n## Incident reconstruction", "",
+         "Deterministic, from collected artifacts. Dated events order "
+         "the timeline; undated material stays unordered; unconfirmed "
+         "causes stay unknown.",
+         ""]
+    any_content = False
+    for c in children:
+        if not isinstance(c, dict):
+            continue
+        inv_id = c.get("investigation_id")
+        if not inv_id:
+            continue
+        try:
+            stored = incident_mod.store_analysis(db, inv_id)
+            pack = stored.get("pack") or {}
+            md = incident_mod.render_markdown(pack)
+        except Exception:
+            continue
+        L.append(f"### {c.get('title') or 'topic'}")
+        L.append("")
+        L.append(md.strip())
+        L.append("")
+        any_content = True
+    if not any_content:
+        return ""
     return "\n".join(L)
 
 
