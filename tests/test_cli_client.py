@@ -216,7 +216,11 @@ class StubClient:
 
 class DashboardCase(unittest.TestCase):
     def setUp(self):
+        from rich.console import Console
         self.dash = Dashboard(StubClient())  # type: ignore[arg-type]
+        # Tall console: the ops tab pages to terminal height, and the
+        # default 25-line fallback would cut later sections off.
+        self.dash.console = Console(width=100, height=200)
         self.dash.refresh(force=True)
         self.live = _StubLive()
 

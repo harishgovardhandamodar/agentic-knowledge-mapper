@@ -19,6 +19,7 @@ import select
 import sys
 import time
 
+from rich import box
 from rich.console import Console, Group
 from rich.panel import Panel
 from rich.syntax import Syntax
@@ -31,20 +32,27 @@ REFRESH_S = 8.0
 LOG_TAIL_LINES = 15
 
 
-def _table(title: str, cols: list[str], rows: list[list[str]],
-           highlight: int = -1) -> Table:
-    t = Table(title=title, show_lines=False, expand=True)
-    for c in cols:
-        t.add_column(c, overflow="fold")
+def _cell(value: object, n: int = 48) -> str:
+    """One table cell: None/empty becomes an en dash, rest truncated."""
+    if value is None or value == "":
+        return "–"
+    s = str(value)
+    return s if len(s) <= n else s[: n - 1] + "…"
+
+
+def _table(title: str, cols: list[tuple[str, int]],
+           rows: list[list[str]], highlight: int = -1) -> Table:
+    """Compact left-justified table: no full-width stretching, cells wrap
+    never (ellipsis instead), so narrow terminals stay readable."""
+    t = Table(title=title, box=box.SIMPLE, show_lines=False,
+              expand=False, header_style="bold", title_justify="left")
+    for name, width in cols:
+        t.add_column(name, no_wrap=True, max_width=width,
+                     overflow="ellipsis")
     for i, row in enumerate(rows):
         style = "reverse" if i == highlight else ""
         t.add_row(*row, style=style)
     return t
-
-
-def _short(value: object, n: int = 64) -> str:
-    s = "" if value is None else str(value)
-    return s if len(s) <= n else s[: n - 1] + "…"
 
 
 class Dashboard:
@@ -130,45 +138,47 @@ class Dashboard:
             if self.tab == "research" else " 1 Research "
         o = "[reverse] 2 Ops [/reverse]" \
             if self.tab == "ops" else " 2 Ops "
-        return r + " " + o + ("   CLI shares the web app's database: "
-                              "everything here is visible in the GUI.")
+        return r + " " + o + "  [dim](shares the web app's database)[/dim]"
 
     def _footer(self) -> str:
         if self.tab == "research":
-            return ("1/2 tabs · ↑↓ select · l launch run · n new · "
-                    "d next diagram · s save .mmd · r refresh · q quit")
-        return ("1/2 tabs · j/k scroll · m manager run · c compile · "
+            return ("1/2 tabs · ↑↓ select · l launch · n new · "
+                    "d diagram · s save · r refresh · q quit")
+        return ("1/2 tabs · j/k scroll · m run · c compile · "
                 "r refresh · q quit")
 
     # -- research tab ----------------------------------------------------
     def _research_body(self) -> Group:
         rows = self.data.get("investigations", [])
-        inv_rows = [[str(r.get("id")), _short(r.get("title"), 46),
-                     str(r.get("status", "?"))] for r in rows]
+        w = self.console.width
+        inv_rows = [[_cell(r.get("id"), 6), _cell(r.get("title"), w - 30),
+                     _cell(r.get("status"), 10)] for r in rows]
         left = _table(f"investigations ({len(rows)})",
-                      ["id", "title", "status"], inv_rows,
-                      highlight=self.inv_idx)
+                      [("id", 6), ("title", max(20, w - 30)),
+                       ("status", 10)],
+                      inv_rows, highlight=self.inv_idx)
         inv = self._selected_inv()
         if inv is None:
             return Group(left, Panel("no investigations yet (n)"))
         iid = inv.get("id")
         runs = [r for r in self.data.get("runs", [])
                 if r.get("investigation_id") == iid][:8]
-        run_rows = [[str(r.get("id")), str(r.get("trigger")),
-                     str(r.get("status"))] for r in runs]
+        run_rows = [[_cell(r.get("id"), 6), _cell(r.get("trigger"), 24),
+                     _cell(r.get("status"), 12)] for r in runs]
         summ = self.data.get("summary", {})
         assess = self.data.get("assessments", [])
         parts: list = [
-            Panel(f"[bold]#{iid} {inv.get('title')}[/bold]\n"
-                  f"{_short(summ.get('summary') or summ, 500)}",
+            Panel(f"[bold]#{iid} {_cell(inv.get('title'), w - 12)}"
+                  f"[/bold]\n{_cell(summ.get('summary') or summ, 500)}",
                   title="detail"),
             _table(f"research runs ({len(run_rows)})",
-                   ["id", "trigger", "status"], run_rows),
+                   [("id", 6), ("trigger", 24), ("status", 12)], run_rows),
             _table(f"assessments ({len(assess)})",
-                   ["id", "product", "residual"],
-                   [[str(a.get("id")), _short(a.get("product_name"), 34),
-                     str(a.get("residual_pct",
-                               a.get("overall_pct", "?")))]
+                   [("id", 6), ("product", 34), ("residual", 10)],
+                   [[_cell(a.get("id"), 6),
+                     _cell(a.get("product_name"), 34),
+                     _cell(a.get("residual_pct",
+                                 a.get("overall_pct")), 10)]
                     for a in assess[:8]]),
             self._diagram_panel(),
         ]
@@ -188,28 +198,29 @@ class Dashboard:
         if not srcs:
             return Panel("no diagrams (assess the product first)",
                          title="diagram")
+        w = max(40, self.console.width - 6)
         self.diagram_idx %= len(srcs)
         key, src = srcs[self.diagram_idx]
-        art = render_ascii(src)
-        body = art if art is not None else src[:3000]
+        head = (f"[bold]{_cell(key, 40)}[/bold] "
+                f"({diagram_kind(src)}; "
+                f"{self.diagram_idx + 1}/{len(srcs)})")
+        art = render_ascii(src, width=w)
         if art is None:
-            return Panel(Group(
-                f"[bold]{key}[/bold] ({diagram_kind(src)}; "
-                f"{self.diagram_idx + 1}/{len(srcs)})",
-                Syntax(body, "text")), title="diagram")
-        return Panel(f"[bold]{key}[/bold] ({diagram_kind(src)}; "
-                     f"{self.diagram_idx + 1}/{len(srcs)})\n{body}",
-                     title="diagram")
+            return Panel(Group(head, Syntax(src[:3000], "text",
+                                            word_wrap=True)),
+                         title="diagram")
+        lines = [ln[:w] for ln in art.splitlines()][:40]
+        return Panel(head + "\n" + "\n".join(lines), title="diagram")
 
     # -- ops tab ----------------------------------------------------------
     def _ops_body(self) -> Group:
         llm = (self.data.get("health", {}) or {}).get("llm", {})
-        llm_rows = [[k, _short(llm.get(k), 60)] for k in
+        llm_rows = [[k, _cell(llm.get(k), 56)] for k in
                     ("preferred_url", "served_by", "reachable",
                      "preferred_reachable", "fallback_active", "notice",
                      "model", "fallback_uses", "last_fallback_at")]
-        parts: list = [
-            _table("LLM gateway", ["key", "value"], llm_rows),
+        sections = [
+            _table("LLM gateway", [("key", 20), ("value", 56)], llm_rows),
             self._swarm_panel(),
             self._manager_panel(),
             self._activity_panel(),
@@ -217,37 +228,43 @@ class Dashboard:
             self._logs_panel(),
         ]
         joined: list[str] = []
-        for p in parts:
+        for p in sections:
             with self.console.capture() as cap:
                 self.console.print(p)
             joined.extend(cap.get().splitlines())
-        window = joined[self.scroll:self.scroll + 60]
-        return Group("\n".join(window),
-                     f"[dim]line {self.scroll + 1}-{self.scroll + 60} "
-                     f"of {len(joined)} (j/k scroll)[/dim]")
+        page = max(10, self.console.height - 8)
+        total = len(joined)
+        self.scroll = max(0, min(self.scroll, max(0, total - page)))
+        window = joined[self.scroll:self.scroll + page]
+        pos = (f"lines {self.scroll + 1}-{self.scroll + len(window)} "
+               f"of {total} (j/k)" if total > page else f"{total} lines")
+        return Group("\n".join(window), f"[dim]{pos}[/dim]")
 
     def _swarm_panel(self) -> Table:
-        rows = self.data.get("runs", [])[:25]
+        rows = self.data.get("runs", [])[:12]
         return _table(f"agent swarm ({len(rows)} runs)",
-                      ["id", "inv", "trigger", "status", "finished"],
-                      [[str(r.get("id")),
-                        str(r.get("investigation_id")),
-                        _short(r.get("trigger"), 18),
-                        str(r.get("status")),
-                        _short(r.get("finished_at"), 16)] for r in rows])
+                      [("id", 6), ("inv", 6), ("trigger", 20),
+                       ("status", 12), ("finished", 16)],
+                      [[_cell(r.get("id"), 6),
+                        _cell(r.get("investigation_id"), 6),
+                        _cell(r.get("trigger"), 20),
+                        _cell(r.get("status"), 12),
+                        _cell(r.get("finished_at"), 16)] for r in rows])
 
     def _manager_panel(self) -> Table:
-        rows = self.data.get("manager_runs", [])
+        rows = self.data.get("manager_runs", [])[:8]
         table_rows = []
-        for r in rows[:12]:
-            mark = ">" if r.get("id") == self.mgr_id else " "
+        for r in rows:
+            mark = "> " if r.get("id") == self.mgr_id else "  "
             table_rows.append(
-                [mark + str(r.get("id")), str(r.get("status")),
-                 str(r.get("compiled")), _short(r.get("command"), 52)])
+                [mark + _cell(r.get("id"), 5),
+                 _cell(r.get("status"), 10),
+                 _cell(r.get("compiled"), 8),
+                 _cell(r.get("command"), 52)])
         t = _table("manager (m select, c compile)",
-                   ["", "id", "status", "compiled", "command"],
-                   [[r[0], r[0].strip(), r[1], r[2], r[3]]
-                    for r in table_rows])
+                   [("id", 8), ("status", 10), ("compiled", 8),
+                    ("command", 52)],
+                   table_rows)
         mgr = self.data.get("mgr")
         if mgr is not None:
             flow = " > ".join(str(f) for f in
@@ -255,36 +272,38 @@ class Dashboard:
                                 or []))
             t.caption = (f"run #{mgr.get('id')} "
                          f"{mgr.get('status')}/{mgr.get('compiled')}: "
-                         f"{flow}"[:120])
+                         f"{flow}"[:110])
         return t
 
     def _activity_panel(self) -> Table:
-        rows = (self.data.get("ledger", []) or [])[-18:]
+        rows = (self.data.get("ledger", []) or [])[-12:]
         return _table("activity monitor (ledger tail)",
-                      ["ts", "actor", "kind", "verdict"],
-                      [[_short(r.get("ts"), 19),
-                        _short(f"{r.get('actor_type')}:"
-                               f"{r.get('actor')}", 24),
-                        _short(r.get("kind"), 20),
-                        str(r.get("verdict"))] for r in rows])
+                      [("ts", 19), ("actor", 22), ("kind", 18),
+                       ("verdict", 8)],
+                      [[_cell(r.get("ts"), 19),
+                        _cell(f"{r.get('actor_type')}:"
+                              f"{r.get('actor')}", 22),
+                        _cell(r.get("kind"), 18),
+                        _cell(r.get("verdict"), 8)] for r in rows])
 
     def _searches_panel(self) -> Table:
         yields = self.data.get("yields", {}) or {}
         shapes = yields.get("shapes") or yields.get("items") or []
         return _table("web-search history (query shapes)",
-                      ["shape", "att", "found", "kept"],
-                      [[_short(s.get("shape"), 52),
-                        str(s.get("attempts", "?")),
-                        str(s.get("found", "?")),
-                        str(s.get("kept", "?"))]
-                       for s in shapes[:12]])
+                      [("shape", 50), ("att", 5), ("found", 6),
+                       ("kept", 5)],
+                      [[_cell(s.get("shape"), 50),
+                        _cell(s.get("attempts"), 5),
+                        _cell(s.get("found"), 6),
+                        _cell(s.get("kept"), 5)]
+                       for s in shapes[:10]])
 
     def _logs_panel(self) -> Panel:
         lines: list[str] = []
         drops = self.data.get("drops", []) or []
         for d in drops[-6:]:
             lines.append(f"DROP {d.get('run_id')} {d.get('actor')}: "
-                         f"{_short(d.get('error'), 90)}")
+                         f"{_cell(d.get('error'), 90)}")
         pending = self.data.get("pending", []) or []
         if pending:
             lines.append(f"{len(pending)} approval(s) pending")
@@ -410,7 +429,7 @@ class Dashboard:
         self.refresh(force=True)
         try:
             tty.setraw(fd)
-            with Live(self.frame(), console=self.console,
+            with Live(self.frame(), console=self.console, screen=True,
                       refresh_per_second=2) as live:
                 while True:
                     if time.time() - self.last_fetch > REFRESH_S:
