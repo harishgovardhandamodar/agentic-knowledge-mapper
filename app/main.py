@@ -83,6 +83,21 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.middleware("http")
+async def _client_label_middleware(request: Request, call_next):
+    """Carry the operator's frontend (``X-AKM-Client: tui``) into llm calls.
+
+    Research threads inherit it via copy_context; queued workers re-bind it
+    from the job payload. Reset per request so one frontend's label never
+    leaks into another's traffic.
+    """
+    token = llm.set_client_label(request.headers.get("X-AKM-Client"))
+    try:
+        return await call_next(request)
+    finally:
+        llm.reset_client_label(token)
+
 static_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static")
 if os.path.isdir(static_dir):
     app.mount("/static", StaticFiles(directory=static_dir, html=True), name="static")

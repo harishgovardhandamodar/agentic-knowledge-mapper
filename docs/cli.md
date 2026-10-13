@@ -17,6 +17,17 @@ lands in the shared database and is immediately viewable in the web GUI
 Dependencies: stdlib + `httpx` / `rich` / `click` (already installed).
 No new requirements.
 
+## Gateway identity: `agentic-knowledge-mapper-tUI`
+
+Every CLI request sends `X-AKM-Client: tui`. The backend carries that
+label into its fox-services calls as `X-Service-Name:
+agentic-knowledge-mapper-tui` (request scope, inherited by research
+threads, re-bound from the job payload by queued security workers), so
+the gateway queue, usage history, and project dashboard tell
+CLI-driven load apart from web-driven load. The gateway needs no
+code change for this: service names are free-form and the dashboard
+groups the TUI name under the `agentic-knowledge-mapper` project.
+
 ## Scriptable commands (`python -m cli ...`)
 
 | Command | What it does |

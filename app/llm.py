@@ -2,7 +2,15 @@
 
 Identified by header X-Service-Name for attribution. Works both from inside
 docker (host.docker.internal) and local dev (localhost) via fallback.
+
+The identity follows the operator's frontend: traffic driven from the
+terminal CLI/TUI is labelled ``agentic-knowledge-mapper-tui`` so the
+gateway queue and usage history tell it apart from web-driven traffic.
+The label travels in a contextvar (set from the ``X-AKM-Client`` request
+header, inherited by research threads via copy_context) and is re-bound
+from the job payload by queued workers, which outlive the request.
 """
+import contextvars
 import datetime
 import json
 import os
@@ -13,6 +21,44 @@ import time
 import httpx
 
 SERVICE_NAME = "agentic-knowledge-mapper"
+# Distinct gateway identity for CLI/TUI-driven traffic: same backend and
+# database, but the gateway attributes queue slots, usage rows, and project
+# grouping to this name. Free-form on the gateway side (it lowercases any
+# X-Service-Name) and grouped under the agentic-knowledge-mapper project.
+SERVICE_NAME_TUI = "agentic-knowledge-mapper-tui"
+CLIENT_LABEL_TUI = "tui"
+
+_client_label: contextvars.ContextVar[str | None] = (
+    contextvars.ContextVar("akm_client_label", default=None))
+
+
+def set_client_label(label: object) -> contextvars.Token:
+    """Pin the originating frontend for this context.
+
+    Only ``"tui"`` is special (anything else clears); returns a token for
+    :func:`reset_client_label` so middleware and job handlers cannot leak
+    the label into unrelated work.
+    """
+    value = (CLIENT_LABEL_TUI if isinstance(label, str)
+             and label.strip().lower() == CLIENT_LABEL_TUI else None)
+    return _client_label.set(value)
+
+
+def reset_client_label(token: contextvars.Token) -> None:
+    """Release a label pinned by :func:`set_client_label`."""
+    _client_label.reset(token)
+
+
+def current_client_label() -> str | None:
+    """The frontend label pinned for this context, if any."""
+    return _client_label.get()
+
+
+def service_name() -> str:
+    """Gateway identity for the next call on this context."""
+    if _client_label.get() == CLIENT_LABEL_TUI:
+        return SERVICE_NAME_TUI
+    return SERVICE_NAME
 
 BASE_URL = os.environ.get("LLM_BASE_URL", "http://axiom.tailb61a66.ts.net:8210/v1").rstrip("/")
 # Optional second backend (e.g. local gateway as fallback when primary is a
@@ -124,7 +170,7 @@ def _post(base: str, payload: dict, extra_headers: dict | None = None) -> tuple[
         with httpx.Client(
                 timeout=httpx.Timeout(TIMEOUT_S, connect=CONNECT_TIMEOUT_S)) as client:
             resp = client.post(url, json=payload,
-                               headers={"X-Service-Name": SERVICE_NAME, **(extra_headers or {})})
+                               headers={"X-Service-Name": service_name(), **(extra_headers or {})})
     except Exception as e:
         raise LLMError(f"{url}: {e}")
     if resp.status_code >= 400:
@@ -234,7 +280,7 @@ def chat(messages: list, model: str = MODEL, temperature: float = 0.2,
             # Direct backends bypass Fox-services telemetry, so link this call
             # with a digest-only report. The gateway path already logged itself.
             _report_proof({
-                "service": SERVICE_NAME,
+                "service": service_name(),
                 "model": used_model,
                 "prompt_tokens": tokens_in,
                 "completion_tokens": tokens_out,
@@ -333,6 +379,7 @@ def health() -> dict:
     out = {"base_url": BASE_URL, "fallback_url": FALLBACK_URL or None,
            "preferred_url": BASE_URL,
            "model": MODEL, "fallback_model": FALLBACK_MODEL,
+           "service": service_name(),
            "reachable": False, "models": [],
            "preferred_reachable": False, "fallback_active": False,
            "notice": None}
@@ -340,7 +387,7 @@ def health() -> dict:
         try:
             with httpx.Client(
                     timeout=httpx.Timeout(10, connect=CONNECT_TIMEOUT_S)) as client:
-                r = client.get(base + "/models", headers={"X-Service-Name": SERVICE_NAME})
+                r = client.get(base + "/models", headers={"X-Service-Name": service_name()})
                 if r.status_code == 200:
                     ids = [m.get("id") for m in r.json().get("data", [])]
                     preferred_ok = (base == BASE_URL)

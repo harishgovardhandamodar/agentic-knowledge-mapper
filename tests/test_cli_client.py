@@ -41,12 +41,12 @@ class _ClientCtx:
     def __exit__(self, *exc):
         return False
 
-    def get(self, url, params=None):
-        self.seen.append(("GET", url, params))
+    def get(self, url, params=None, headers=None):
+        self.seen.append(("GET", url, params, headers))
         return self.resp
 
-    def post(self, url, json=None):
-        self.seen.append(("POST", url, json))
+    def post(self, url, json=None, headers=None):
+        self.seen.append(("POST", url, json, headers))
         return self.resp
 
 
@@ -99,7 +99,7 @@ class ClientCase(unittest.TestCase):
             def __exit__(self, *exc):
                 return False
 
-            def post(self, url, json=None):
+            def post(self, url, json=None, headers=None):
                 return _Resp(payload={"artifact_id": 9})
 
         with mock.patch("cli.client.httpx.Client",
@@ -115,6 +115,19 @@ class ClientCase(unittest.TestCase):
                              {"served_by": "axiom"})
         finally:
             p.stop()
+
+    def test_every_request_carries_the_tui_frontend_label(self):
+        from cli.client import TUI_HEADERS
+        seen, p = _patch(_Resp(payload=[{"id": 1}]))
+        try:
+            AkMClient("http://x").list_runs()
+            AkMClient("http://x").launch_run(3)
+        finally:
+            p.stop()
+        self.assertEqual(len(seen), 2)
+        for entry in seen:
+            self.assertEqual(entry[3], TUI_HEADERS)
+            self.assertEqual(entry[3].get("X-AKM-Client"), "tui")
 
 
 class _StubLive:

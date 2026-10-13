@@ -27,6 +27,12 @@ class ApiError(RuntimeError):
         self.body = body
 
 
+# Every CLI/TUI request carries this: the backend labels the LLM traffic
+# it triggers as agentic-knowledge-mapper-tui at the fox-services gateway,
+# so queue slots and usage rows tell CLI-driven load apart from web load.
+TUI_HEADERS = {"X-AKM-Client": "tui"}
+
+
 class AkMClient:
     """Small wrapper over the endpoints the CLI/TUI needs."""
 
@@ -47,14 +53,14 @@ class AkMClient:
 
     def get_json(self, path: str, params: dict | None = None) -> dict:
         with httpx.Client(timeout=self.timeout_s) as c:
-            r = c.get(self._url(path), params=params)
+            r = c.get(self._url(path), params=params, headers=TUI_HEADERS)
         self._raise("GET", path, r)
         data = r.json()
         return data if isinstance(data, dict) else {"items": data}
 
     def get_list(self, path: str, params: dict | None = None) -> list:
         with httpx.Client(timeout=self.timeout_s) as c:
-            r = c.get(self._url(path), params=params)
+            r = c.get(self._url(path), params=params, headers=TUI_HEADERS)
         self._raise("GET", path, r)
         data = r.json()
         if isinstance(data, list):
@@ -67,14 +73,15 @@ class AkMClient:
 
     def get_text(self, path: str, params: dict | None = None) -> str:
         with httpx.Client(timeout=self.timeout_s) as c:
-            r = c.get(self._url(path), params=params)
+            r = c.get(self._url(path), params=params, headers=TUI_HEADERS)
         self._raise("GET", path, r)
         return r.text
 
     def post_json(self, path: str, payload: dict | None = None,
                   timeout_s: float | None = None) -> dict:
         with httpx.Client(timeout=timeout_s or self.timeout_s) as c:
-            r = c.post(self._url(path), json=payload or {})
+            r = c.post(self._url(path), json=payload or {},
+                       headers=TUI_HEADERS)
         self._raise("POST", path, r)
         if not r.content:
             return {}
