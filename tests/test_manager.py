@@ -1009,7 +1009,9 @@ class TestRetrigger(unittest.TestCase):
                              {"title": "Summary",
                               "description": "All together"})
             self.assertEqual(row["options"],
-                             {"research": True, "assessment": False})
+                             {"research": True, "assessment": False,
+                              "depth": "standard", "max_items": 25,
+                              "max_rounds": 2})
             self.assertTrue(all(t.get("investigation_id")
                                 for t in row["topics"]))
         finally:

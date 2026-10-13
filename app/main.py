@@ -3875,12 +3875,23 @@ class ManagerRunRequest(BaseModel):
 def manager_parse(data: ManagerParseRequest):
     """Understand a command: LLM plan first, heuristic splitter on failure.
 
-    No side effects. The returned plan is a preview for the Run step.
+    No side effects. The returned plan is a preview for the Run step,
+    annotated with the investigation-type plugins that match the command
+    and the episode depth levels to pick from.
     """
     try:
-        return manager_mod.parse_command(data.command or "")
+        plan = manager_mod.parse_command(data.command or "")
     except ValueError as e:
         raise HTTPException(400, str(e))
+    from . import plugins as _plugins
+    plan["plugins"] = _plugins.match_command(data.command or "")
+    plan["depths"] = {key: {"label": spec["label"],
+                            "blurb": spec["blurb"],
+                            "max_items": spec["max_items"],
+                            "max_rounds": spec["max_rounds"]}
+                      for key, spec in manager_mod.DEPTHS.items()}
+    plan["suggested_depth"] = manager_mod.SUGGESTED_DEPTH
+    return plan
 
 
 @app.post("/api/manager/run")

@@ -48,6 +48,45 @@ _HYP_RES = (
     re.compile(r"\bwhat\b.*\bcould happen\b", re.IGNORECASE),
 )
 
+_ADOPTION_RES = (
+    re.compile(r"\bshould we adopt\b", re.IGNORECASE),
+    re.compile(r"^\s*adopt\b", re.IGNORECASE),
+    re.compile(r"\broll\s?out\b", re.IGNORECASE),
+)
+
+_QUESTION_RES = (
+    re.compile(r"^\s*(what|how|why|explain|compare)\b", re.IGNORECASE),
+    re.compile(r"\?\s*$"),
+)
+
+
+def match_command(command: str) -> list[dict]:
+    """Which plugins take part in an episode for this command.
+
+    Shown by the manager when a command parses so the operator sees the
+    investigation mix before choosing a depth. Matches are independent
+    (an incident question can also match writeup); security is the
+    default lens and always matches because assessments run unless
+    unchecked.
+    """
+    text = command or ""
+    matched = {
+        "adoption": (any(rx.search(text) for rx in _ADOPTION_RES),
+                     "adoption language"),
+        "security": (True, "default lens"),
+        "vulnerability": (_vuln_detect(text), "CVE/advisory language"),
+        "writeup": (any(rx.search(text) for rx in _QUESTION_RES),
+                    "question form"),
+        "hypothesis": (_hyp_detect(text), "scenario language"),
+    }
+    out = []
+    for key, plugin in PLUGINS.items():
+        is_match, via = matched[key]
+        out.append({"key": key, "title": plugin.title,
+                    "version": plugin.version,
+                    "matched": bool(is_match), "via": via})
+    return out
+
 
 def _clean_vuln_subject(command: str) -> str:
     text = re.sub(r"\s+", " ", (command or "")).strip().rstrip(".?")

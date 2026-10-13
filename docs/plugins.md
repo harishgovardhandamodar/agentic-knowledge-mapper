@@ -16,6 +16,15 @@ stay in their home modules; plugins route and read back.
 /api/investigations/{id}/scenarios` enumerates hypothesis scenarios
 (idempotent).
 
+## Episode depth
+
+After parsing, the manager shows the matched plugins and three depth
+levels (Scout / Standard / Deep) mapping to research scale
+(`max_items` 8/25/50, `max_rounds` 1/2/3, clamped server-side). Depth
+presets suggest the research/assessment mix; the checkboxes keep the
+final say. Depth and scale persist in the run options so re-runs
+reproduce the episode.
+
 ## Research council (`app/research_council.py`)
 
 Every investigation plans through the council: source seats (news,

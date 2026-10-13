@@ -30,6 +30,23 @@ MAX_TOPICS = 6
 SYNTH_TAG = "manager-synthesis"
 COMPILE_TRUNC = 1500
 
+# Episode depth levels, picked in the manager UI after parsing. Research
+# scale only: the research/assessment checkboxes keep their own say, and
+# every value is clamped server-side because options arrive over HTTP.
+DEPTHS = {
+    "scout": {"label": "Scout",
+              "blurb": "Quick sweep: one small research round, "
+                       "no assessment unless checked.",
+              "max_items": 8, "max_rounds": 1},
+    "standard": {"label": "Standard",
+                 "blurb": "Full research plus assessment.",
+                 "max_items": 25, "max_rounds": 2},
+    "deep": {"label": "Deep",
+             "blurb": "Wide collection, an extra round, plus assessment.",
+             "max_items": 50, "max_rounds": 3},
+}
+SUGGESTED_DEPTH = "standard"
+
 _LEAD = re.compile(
     r"^(?:please\s+)?(?:run|start|launch|do|execute|perform)?\s*"
     r"(?:a\s+|an\s+)?(?:detailed\s+)?(?:new\s+)?"
@@ -389,7 +406,21 @@ def run_plan(db, plan: dict[str, Any], options: dict[str, Any] | None = None,
     """Create investigations, launch research + assessments, link a summary."""
     from .models import ManagerRun
     plan = validate_plan(plan)
-    options = {"research": True, "assessment": True, **(options or {})}
+    options = {"research": True, "assessment": True, "depth": "standard",
+               **(options or {})}
+    depth = options.get("depth") or "standard"
+    spec = DEPTHS.get(depth) or DEPTHS["standard"]
+    options["depth"] = depth if depth in DEPTHS else "standard"
+    try:
+        max_items = int(options.get("max_items", spec["max_items"]))
+    except (TypeError, ValueError):
+        max_items = spec["max_items"]
+    try:
+        max_rounds = int(options.get("max_rounds", spec["max_rounds"]))
+    except (TypeError, ValueError):
+        max_rounds = spec["max_rounds"]
+    options["max_items"] = max(1, min(max_items, 100))
+    options["max_rounds"] = max(1, min(max_rounds, 3))
     plan["options"] = options
     run = ManagerRun(command=command or plan.get("command") or "",
                      plan_json=json.dumps(plan), status="running")
@@ -418,7 +449,9 @@ def run_plan(db, plan: dict[str, Any], options: dict[str, Any] | None = None,
         db.refresh(inv)
         t["investigation_id"] = inv.id
         if options.get("research"):
-            launch_run(inv.id, trigger=f"manager:{run.id}")
+            launch_run(inv.id, trigger=f"manager:{run.id}",
+                       max_items=options["max_items"],
+                       max_rounds=options["max_rounds"])
         if options.get("assessment"):
             # A model subject gets THREE assessments, not one: is the model
             # sound, what could someone build with it, and which of the claims

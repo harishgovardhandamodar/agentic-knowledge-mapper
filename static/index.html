@@ -143,6 +143,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .mgr-topic:last-child { border-bottom: none; }
 .mgr-topic input[type="checkbox"] { margin-top: 3px; }
 .mgr-topic .grow { flex: 1; min-width: 0; }
+.mgr-plugin { display: inline-block; font-size: 11px; padding: 2px 8px; border: 1px solid var(--border); border-radius: 10px; color: var(--text2); }
+.mgr-plugin.on { border-color: var(--accent); color: var(--text); background: color-mix(in srgb, var(--accent) 12%, transparent); }
 .mgr-child { display: flex; gap: 10px; align-items: center; padding: 7px 4px; border-bottom: 1px solid var(--border); font-size: 12px; flex-wrap: wrap; }
 .mgr-child:last-child { border-bottom: none; }
 .mgr-child .grow { flex: 1; min-width: 180px; }
@@ -489,6 +491,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .diagram-wrap .mermaid, .diagram-wrap pre.mermaid { background: transparent; text-align: center; min-width: min-content; }
 .diagram-wrap div.mermaid svg, .diagram-wrap pre.mermaid svg { max-width: 100%; height: auto; }
 .diagram-wrap .mermaid .labelBkg { background: transparent !important; }
+.mm-na-note { font-size: 11px; color: var(--warn, #d29922); margin: 4px 0; }
 /* Follow-ups + threads */
 .fu-row { display: flex; gap: 6px; margin: 14px 0 4px; }
 .fu-row input { flex: 1; padding: 7px 12px; background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-size: 12px; }
@@ -4099,10 +4102,29 @@ function mdInline(s) {
 }
 function mdBlock(text) {
   const lines = (text || '').split('\n');
-  let html = '', list = null;
+  let html = '', list = null, fence = null, fenceInfo = '';
   const close = () => { if (list) { html += list === 'ul' ? '</ul>' : '</ol>'; list = null; } };
+  const closeFence = () => {
+    if (fence === null) return;
+    const src = fence.join('\n');
+    // Mermaid fences become live diagrams (rendered by mmRender); any
+    // other fence stays a plain code block instead of one paragraph
+    // per line.
+    if (/^mermaid(\s|$)/i.test(fenceInfo) || /^\s*(graph|flowchart|sequenceDiagram|classDiagram|stateDiagram|erDiagram|journey|gantt|pie|mindmap|timeline|quadrantChart|C4Context)\b/i.test(src)) {
+      html += `<div class="diagram-wrap"><div class="mermaid" data-src="${escHtml(src)}">${escHtml(src)}</div></div>`;
+    } else {
+      html += `<pre>${escHtml(src)}</pre>`;
+    }
+    fence = null; fenceInfo = '';
+  };
   for (const ln of lines) {
     const t = ln.trim();
+    if (t.startsWith('```')) {
+      if (fence === null) { close(); fence = []; fenceInfo = t.slice(3).trim(); }
+      else closeFence();
+      continue;
+    }
+    if (fence !== null) { fence.push(ln); continue; }
     let m;
     if (m = t.match(/^###\s+(.*)/)) { close(); html += `<h4>${mdInline(m[1])}</h4>`; }
     else if (m = t.match(/^##\s+(.*)/)) { close(); html += `<h3>${mdInline(m[1])}</h3>`; }
@@ -4111,7 +4133,7 @@ function mdBlock(text) {
     else if (!t) close();
     else { close(); html += `<p>${mdInline(t)}</p>`; }
   }
-  close();
+  closeFence(); close();
   return html;
 }
 
@@ -4600,15 +4622,35 @@ function mmRender(nodes) {
   return job;
 }
 
+var MM_LOCAL_SRC = '/static/vendor/mermaid.min.js';
+var MM_CDN_SRC = 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js';
 function mmLoad(run) {
   if (window.mermaid) { run(); return; }
   const scr = document.getElementById('mermaid-lib');
   if (scr) { scr.addEventListener('load', run); return; }
   const s = document.createElement('script');
   s.id = 'mermaid-lib';
-  s.src = 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js';
+  s.onerror = () => {
+    // Local bundle missing (old deployment) or blocked: fall back to
+    // the CDN once, then say so instead of leaving raw source silent.
+    if (s.dataset.fb) { mmNoteUnavailable(); return; }
+    s.dataset.fb = '1';
+    s.src = MM_CDN_SRC;
+  };
   s.onload = run;
+  s.src = MM_LOCAL_SRC;
   document.head.appendChild(s);
+}
+function mmNoteUnavailable() {
+  document.querySelectorAll('.mermaid:not([data-mm-na])').forEach(node => {
+    if (node.querySelector('svg')) return;
+    node.setAttribute('data-mm-na', '1');
+    const note = document.createElement('div');
+    note.className = 'mm-na-note';
+    note.textContent =
+      'Diagram library unavailable (offline?). Source kept as text.';
+    node.parentElement && node.parentElement.insertBefore(note, node);
+  });
 }
 /* ===== MERMAID-THEME:END ===== */
 
@@ -9447,10 +9489,29 @@ function mgrRenderPlan() {
       `${['restricted_data', 'confidential_data', 'internal', 'public'].map(e => `<option value="${e}"${(t.exposure || mgrPlan.exposure) === e ? ' selected' : ''}>${e.replace(/_/g, ' ')}</option>`).join('')}</select></label>`
     ).join('') +
     `<div class="std-filters" style="margin-top:10px;">` +
+    `<div style="font-size:12px;color:var(--text2);margin-bottom:6px;">Investigation mix: ` +
+    `${(mgrPlan.plugins || []).map(p =>
+      `<span class="mgr-plugin${p.matched ? ' on' : ''}" title="${escHtml(p.title)} v${escHtml(p.version || '')} — ${escHtml(p.via || '')}">${p.matched ? '✓ ' : ''}${escHtml(p.title)}</span>`
+    ).join(' ') || '<span style="color:var(--text2);">standard lens</span>'}</div>` +
+    `<div style="font-size:12px;margin-bottom:6px;" role="radiogroup" aria-label="Episode depth">` +
+    `${Object.entries(mgrPlan.depths || {}).map(([key, d]) =>
+      `<label style="display:inline-flex;gap:4px;align-items:center;margin-right:10px;" title="${escHtml(d.blurb || '')}"><input type="radio" name="mgrDepth" value="${escHtml(key)}"${key === (mgrPlan.suggested_depth || 'standard') ? ' checked' : ''} onchange="mgrDepthPreset()" /> ${escHtml(d.label || key)}</label>`
+    ).join('')}</div>` +
     `<label style="font-size:12px;display:flex;gap:6px;align-items:center;"><input type="checkbox" id="mgrOptResearch" checked /> Research run</label>` +
     `<label style="font-size:12px;display:flex;gap:6px;align-items:center;"><input type="checkbox" id="mgrOptAssess" checked /> Security assessment</label>` +
     `<button class="btn btn-primary btn-sm" onclick="mgrRun()"><i class="fas fa-play"></i> Run ${mgrPlan.topics.length} investigations + summary</button></div>` +
     `<div class="std-note">Summary: <strong>${escHtml((mgrPlan.summary || {}).title || '')}</strong></div>`;
+}
+
+function mgrDepthPreset() {
+  // Depth presets suggest the run-type mix; the checkboxes keep the final
+  // say and travel with the run options either way.
+  const sel = document.querySelector('input[name="mgrDepth"]:checked');
+  const research = document.getElementById('mgrOptResearch');
+  const assess = document.getElementById('mgrOptAssess');
+  if (!sel || !research || !assess) return;
+  if (sel.value === 'scout') { research.checked = true; assess.checked = false; }
+  else { research.checked = true; assess.checked = true; }
 }
 
 async function mgrRun() {
@@ -9465,7 +9526,11 @@ async function mgrRun() {
   });
   if (!keep.length) { showNotif('Keep at least one topic', 'error'); return; }
   const plan = { ...mgrPlan, topics: keep };
-  const options = { research: document.getElementById('mgrOptResearch').checked, assessment: document.getElementById('mgrOptAssess').checked };
+  const depthSel = document.querySelector('input[name="mgrDepth"]:checked');
+  const depth = depthSel ? depthSel.value : (mgrPlan.suggested_depth || 'standard');
+  const spec = (mgrPlan.depths || {})[depth] || {};
+  const options = { research: document.getElementById('mgrOptResearch').checked, assessment: document.getElementById('mgrOptAssess').checked, depth,
+    max_items: spec.max_items, max_rounds: spec.max_rounds };
   if (!options.research && !options.assessment) { showNotif('Launch at least one run type', 'error'); return; }
   const command = document.getElementById('mgrCommand').value.trim();
   try {
