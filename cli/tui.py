@@ -30,6 +30,8 @@ from cli.mermaid import diagram_kind, extract_fences, render_ascii, save_mmd
 
 REFRESH_S = 8.0
 LOG_TAIL_LINES = 15
+LIST_WINDOW = 12
+DIAGRAM_MAX_LINES = 18
 
 
 def _cell(value: object, n: int = 48) -> str:
@@ -38,6 +40,16 @@ def _cell(value: object, n: int = 48) -> str:
         return "–"
     s = str(value)
     return s if len(s) <= n else s[: n - 1] + "…"
+
+
+def _d(value: object) -> dict:
+    """Coerce an API payload to a dict: a bad shape must never crash a
+    frame, it only empties the section."""
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, list):
+        return {"items": value}
+    return {}
 
 
 def _table(title: str, cols: list[tuple[str, int]],
@@ -88,14 +100,14 @@ class Dashboard:
             inv = self._selected_inv(d)
             if inv is not None:
                 iid = inv.get("id")
-                d["summary"] = self.client.investigation_summary(iid)
-                d["yields"] = self.client.query_yields(iid)
+                d["summary"] = _d(self.client.investigation_summary(iid))
+                d["yields"] = _d(self.client.query_yields(iid))
                 d["assessments"] = self.client.list_assessments(iid)
             if self.mgr_id is not None:
                 try:
-                    d["mgr"] = self.client.manager_get(self.mgr_id)
-                    d["mgr_tl"] = self.client.manager_timeline(
-                        self.mgr_id)
+                    d["mgr"] = _d(self.client.manager_get(self.mgr_id))
+                    d["mgr_tl"] = _d(self.client.manager_timeline(
+                        self.mgr_id))
                 except ApiError as e:
                     self.error = str(e)
                     self.mgr_id = None
@@ -141,22 +153,35 @@ class Dashboard:
         return r + " " + o + "  [dim](shares the web app's database)[/dim]"
 
     def _footer(self) -> str:
+        if self.console.width >= 100:
+            if self.tab == "research":
+                return ("1/2 tabs · ↑↓ select · l launch · n new · "
+                        "d diagram · s save · r refresh · q quit")
+            return ("1/2 tabs · j/k scroll · m run · c compile · "
+                    "r refresh · q quit")
         if self.tab == "research":
-            return ("1/2 tabs · ↑↓ select · l launch · n new · "
-                    "d diagram · s save · r refresh · q quit")
-        return ("1/2 tabs · j/k scroll · m run · c compile · "
-                "r refresh · q quit")
+            return ("1/2 · ↑↓ move · l launch · n new · d dia · "
+                    "s save · r refr · q quit")
+        return "1/2 · j/k scroll · m run · c comp · r refr · q quit"
 
     # -- research tab ----------------------------------------------------
     def _research_body(self) -> Group:
         rows = self.data.get("investigations", [])
         w = self.console.width
+        total = len(rows)
+        # Window the list around the selection: a 155-row table would
+        # otherwise blow the frame out of the visible screen.
+        start = max(0, min(self.inv_idx - LIST_WINDOW // 2,
+                           max(0, total - LIST_WINDOW)))
+        view = rows[start:start + LIST_WINDOW]
         inv_rows = [[_cell(r.get("id"), 6), _cell(r.get("title"), w - 30),
-                     _cell(r.get("status"), 10)] for r in rows]
-        left = _table(f"investigations ({len(rows)})",
+                     _cell(r.get("status"), 10)] for r in view]
+        left = _table(f"investigations ({total})",
                       [("id", 6), ("title", max(20, w - 30)),
                        ("status", 10)],
-                      inv_rows, highlight=self.inv_idx)
+                      inv_rows, highlight=self.inv_idx - start)
+        left.caption = (f"row {self.inv_idx + 1}/{total} (↑↓)"
+                        if total else None)
         inv = self._selected_inv()
         if inv is None:
             return Group(left, Panel("no investigations yet (n)"))
@@ -168,8 +193,9 @@ class Dashboard:
         summ = self.data.get("summary", {})
         assess = self.data.get("assessments", [])
         parts: list = [
+            left,
             Panel(f"[bold]#{iid} {_cell(inv.get('title'), w - 12)}"
-                  f"[/bold]\n{_cell(summ.get('summary') or summ, 500)}",
+                  f"[/bold]\n{_cell(summ.get('summary') or summ, 400)}",
                   title="detail"),
             _table(f"research runs ({len(run_rows)})",
                    [("id", 6), ("trigger", 24), ("status", 12)], run_rows),
@@ -182,15 +208,20 @@ class Dashboard:
                     for a in assess[:8]]),
             self._diagram_panel(),
         ]
-        return Group(left, *parts)
+        return Group(*parts)
 
     def _diagram_sources(self) -> list[tuple[str, str]]:
         out: list[tuple[str, str]] = []
         for a in self.data.get("assessments", []):
+            if not isinstance(a, dict):
+                continue
             stored = a.get("diagrams") or {}
             if isinstance(stored, dict):
-                out.extend((str(k), str(v)) for k, v in stored.items())
-            out.extend(extract_fences(a.get("markdown") or ""))
+                out.extend((str(k), v) for k, v in stored.items()
+                           if isinstance(v, str))
+            md = a.get("markdown") or ""
+            if isinstance(md, str):
+                out.extend(extract_fences(md))
         return out
 
     def _diagram_panel(self) -> Panel:
@@ -209,36 +240,24 @@ class Dashboard:
             return Panel(Group(head, Syntax(src[:3000], "text",
                                             word_wrap=True)),
                          title="diagram")
-        lines = [ln[:w] for ln in art.splitlines()][:40]
+        lines = [ln[:w] for ln in art.splitlines()][
+            :DIAGRAM_MAX_LINES]
         return Panel(head + "\n" + "\n".join(lines), title="diagram")
 
     # -- ops tab ----------------------------------------------------------
-    def _ops_body(self) -> Group:
+    def _ops_sections(self) -> Group:
         llm = (self.data.get("health", {}) or {}).get("llm", {})
         llm_rows = [[k, _cell(llm.get(k), 56)] for k in
                     ("preferred_url", "served_by", "reachable",
                      "preferred_reachable", "fallback_active", "notice",
                      "model", "fallback_uses", "last_fallback_at")]
-        sections = [
+        return Group(
             _table("LLM gateway", [("key", 20), ("value", 56)], llm_rows),
             self._swarm_panel(),
             self._manager_panel(),
             self._activity_panel(),
             self._searches_panel(),
-            self._logs_panel(),
-        ]
-        joined: list[str] = []
-        for p in sections:
-            with self.console.capture() as cap:
-                self.console.print(p)
-            joined.extend(cap.get().splitlines())
-        page = max(10, self.console.height - 8)
-        total = len(joined)
-        self.scroll = max(0, min(self.scroll, max(0, total - page)))
-        window = joined[self.scroll:self.scroll + page]
-        pos = (f"lines {self.scroll + 1}-{self.scroll + len(window)} "
-               f"of {total} (j/k)" if total > page else f"{total} lines")
-        return Group("\n".join(window), f"[dim]{pos}[/dim]")
+            self._logs_panel())
 
     def _swarm_panel(self) -> Table:
         rows = self.data.get("runs", [])[:12]
@@ -266,9 +285,9 @@ class Dashboard:
                     ("command", 52)],
                    table_rows)
         mgr = self.data.get("mgr")
-        if mgr is not None:
+        if isinstance(mgr, dict) and mgr:
             flow = " > ".join(str(f) for f in
-                               (self.data.get("mgr_tl", {}).get("flow")
+                               (_d(self.data.get("mgr_tl")).get("flow")
                                 or []))
             t.caption = (f"run #{mgr.get('id')} "
                          f"{mgr.get('status')}/{mgr.get('compiled')}: "
@@ -287,7 +306,7 @@ class Dashboard:
                         _cell(r.get("verdict"), 8)] for r in rows])
 
     def _searches_panel(self) -> Table:
-        yields = self.data.get("yields", {}) or {}
+        yields = _d(self.data.get("yields"))
         shapes = yields.get("shapes") or yields.get("items") or []
         return _table("web-search history (query shapes)",
                       [("shape", 50), ("att", 5), ("found", 6),
@@ -320,10 +339,34 @@ class Dashboard:
 
     # -- frame + input -----------------------------------------------------
     def frame(self) -> Group:
+        """Fitted frame: body sliced/padded to the exact visible height.
+
+        The list is windowed around the selection (research) or scrolled
+        (ops), then padded with blanks so every frame has a constant
+        shape. Constant shape lets rich redraw in place instead of
+        flooding scrollback, and no frame ever overflows the screen.
+        """
         self.note = ""
-        body = self._research_body() if self.tab == "research" \
-            else self._ops_body()
-        return Group(self._header(), self._tabs(), body, self._footer())
+        chrome = 5  # header panel (3) + tabs (1) + footer (1)
+        budget = max(6, self.console.height - chrome)
+        with self.console.capture() as cap:
+            self.console.print(
+                self._research_body() if self.tab == "research"
+                else self._ops_sections())
+        lines = cap.get().splitlines()
+        if self.tab == "ops":
+            total = len(lines)
+            self.scroll = max(0, min(self.scroll, max(0, total - budget)))
+            view = lines[self.scroll:self.scroll + budget]
+            pos = (f"  [dim]lines {self.scroll + 1}-"
+                   f"{self.scroll + len(view)} of {total} (j/k)[/dim]"
+                   if total > budget else "")
+        else:
+            view = lines[:budget]
+            pos = ""
+        view = view + [""] * (budget - len(view))
+        return Group(self._header(), self._tabs(), "\n".join(view),
+                     self._footer() + pos)
 
     def _prompt(self, live, text: str) -> str:
         live.stop()
@@ -429,7 +472,7 @@ class Dashboard:
         self.refresh(force=True)
         try:
             tty.setraw(fd)
-            with Live(self.frame(), console=self.console, screen=True,
+            with Live(self.frame(), console=self.console,
                       refresh_per_second=2) as live:
                 while True:
                     if time.time() - self.last_fetch > REFRESH_S:
