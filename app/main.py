@@ -5225,6 +5225,49 @@ def post_adoption_advice(data: AdoptionAdviceRequest, request: Request,
     return pack
 
 
+@app.get("/api/plugins")
+def list_plugins():
+    """The five investigation-type plugins: routing and reading back."""
+    from . import plugins as _plugins
+    return {"plugins": [
+        {"key": p.key, "title": p.title, "version": p.version,
+         "seats": list(p.seats), "fingerprint": p.fingerprint()}
+        for p in _plugins.PLUGINS.values()]}
+
+
+@app.post("/api/investigations/{inv_id}/scenarios")
+def post_scenarios(inv_id: int, request: Request,
+                   db: Session = Depends(get_db)):
+    """Enumerate inherent and derived scenarios from stored evidence.
+
+    Deterministic: every scenario cites its provenance, unknowns stay
+    unknown, and an empty collection returns insufficient_evidence.
+    Idempotent per investigation.
+    """
+    from . import hypothesiser as _hy
+    resolved = _landscape_inv(inv_id, db)
+    stored = _hy.store_scenarios(db, resolved)
+    pack = stored.get("pack") or {}
+    ledger_api.human_action(
+        request, "hypothesis_scenarios.stored",
+        {"investigation": resolved,
+         "artifact_id": stored.get("artifact_id"),
+         "verdict": (pack.get("verdict") or {}).get("key"),
+         "inherent": (pack.get("counts") or {}).get("inherent", 0),
+         "derived": (pack.get("counts") or {}).get("derived", 0)})
+    return {"artifact_id": stored.get("artifact_id"),
+            "existing": stored.get("existing", False),
+            "pack": pack}
+
+
+@app.get("/api/investigations/{inv_id}/scenarios")
+def get_scenarios(inv_id: int, db: Session = Depends(get_db)):
+    """Latest scenario enumeration, re-derived (no write)."""
+    from . import hypothesiser as _hy
+    resolved = _landscape_inv(inv_id, db)
+    return {"pack": _hy.enumerate_scenarios(db, resolved)}
+
+
 @app.post("/api/investigations/{inv_id}/incident-analysis")
 def post_incident_analysis(inv_id: int, request: Request,
                            db: Session = Depends(get_db)):

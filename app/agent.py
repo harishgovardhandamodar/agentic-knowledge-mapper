@@ -15,7 +15,7 @@ from datetime import UTC, datetime
 from sqlalchemy.orm import Session
 
 from . import ledger as L
-from . import llm
+from . import llm, research_council
 from . import search as providers
 from . import yield_ as yld
 from .database import SessionLocal
@@ -118,7 +118,10 @@ def _plan_queries(inv: Investigation) -> dict:
         except Exception:
             plan = None
     if plan is None:
-        return _deterministic_plan()
+        # Deterministic fallback flows through the same ensurers and
+        # council review as a model plan: a keyword-derived plan is a
+        # serviceable start, and the seats still cover what it misses.
+        plan = _deterministic_plan()
     queries = (plan.get("queries") or [])[:6]
     clean = []
     for q in queries:
@@ -130,8 +133,11 @@ def _plan_queries(inv: Investigation) -> dict:
     _ensure_model_queries(inv, clean, enabled)
     _ensure_provider_posture_queries(inv, clean, enabled)
     _ensure_incident_queries(inv, clean, enabled)
-    return {"rationale": plan.get("rationale", ""), "queries": clean or
-            [{"text": inv.keywords.split(",")[0].strip() or inv.title, "sources": list(enabled)}]}
+    reviewed, record = research_council.review(inv, clean, enabled)
+    return {"rationale": plan.get("rationale", ""), "queries": reviewed or
+            [{"text": inv.keywords.split(",")[0].strip() or inv.title,
+              "sources": list(enabled), "seat": "fallback"}],
+            "council": record}
 
 
 _MODEL_FAMILY_HINTS = (
@@ -184,29 +190,36 @@ def _ensure_model_queries(inv: Investigation, clean: list[dict],
             r"memorization|membership inference|extraction|poisoning|"
             r"adversarial", blob):
         clean.append({"text": f"{subject} memorization membership "
-                              f"inference extraction"[:120], "sources": srcs})
+                              f"inference extraction"[:120], "sources": srcs,
+                     "seat": "papers"})
     if len(clean) < 6 and not re.search(
             r"model card|huggingface|weights|checkpoint|red.?team|"
             r"benchmark", blob):
         clean.append({"text": f"{subject} model card weights "
-                              f"limitations"[:120], "sources": srcs})
+                              f"limitations"[:120], "sources": srcs,
+                     "seat": "papers"})
     if len(clean) < 6 and not re.search(
             r"differential privacy|unlearning|watermark|robustness|"
             r"mitigat", blob):
         clean.append({"text": f"differential privacy unlearning "
                               f"watermarking {subject}"[:120],
-                      "sources": srcs})
+                      "sources": srcs, "seat": "papers"})
     # RLHF / preference memorization pack (Spec §8) — when focus mentions
     # rlhf/preference/reward model or memorization, or provider posture already asks it,
     # include the RLHF memorization family alongside general queries.
     focus_blob = " ".join((inv.keywords or "").split(",")) + " " + brief
     if re.search(r"rlhf|preference|reward model|thumbs|feedback memorization|alignment data", focus_blob, re.I):
         if len(clean) < 6 and "rlhf memorization" not in blob:
-            clean.append({"text": f"RLHF memorization preference data {subject}"[:120], "sources": srcs})
+            clean.append({"text": f"RLHF memorization preference data "
+                             f"{subject}"[:120],
+                     "sources": srcs, "seat": "papers"})
         if len(clean) < 6 and "reward model membership" not in blob:
-            clean.append({"text": f"reward model membership inference {subject}"[:120], "sources": srcs})
+            clean.append({"text": f"reward model membership inference "
+                             f"{subject}"[:120],
+                     "sources": srcs, "seat": "papers"})
         if len(clean) < 6 and "canary preference" not in blob:
-            clean.append({"text": f"canary preference dataset RLHF {subject}"[:120], "sources": srcs})
+            clean.append({"text": f"canary preference dataset RLHF {subject}"[:120],
+                     "sources": srcs, "seat": "papers"})
 
 
 def _vendor_terms(inv: Investigation) -> list[str]:
@@ -247,7 +260,8 @@ def _ensure_vendor_doc_query(inv: Investigation, clean: list[dict],
     if not srcs:
         return
     clean.append({"text": f"{' '.join(vendors)} security architecture "
-                          "data flow"[:120], "sources": srcs})
+                          "data flow"[:120], "sources": srcs,
+                     "seat": "official"})
 
 
 def _provider_prompt_hint() -> str:
@@ -314,7 +328,8 @@ def _ensure_provider_posture_queries(inv: Investigation, clean: list[dict],
             return
         if text.lower() in have:
             continue
-        clean.append({"text": text[:120], "sources": srcs})
+        clean.append({"text": text[:120], "sources": srcs,
+                      "seat": "incident"})
         have += " " + text.lower()
 
 
@@ -354,7 +369,7 @@ def _ensure_incident_queries(inv: Investigation, clean: list[dict],
             return
         if text.lower() in have:
             continue
-        clean.append({"text": text[:120], "sources": srcs})
+        clean.append({"text": text[:120], "sources": srcs, "seat": "provider"})
         have += " " + text.lower()
 
 
@@ -747,7 +762,8 @@ def run_investigation_agent(investigation_id: int, max_items: int = 25,
             shapes = yld.shape_stats(db, inv.id)
             stats = {"rounds": rounds, "artifacts_kept": total_kept,
                      "relationships": total_rels, "llm_calls": llm_calls_spent,
-                     "query_shapes": len(shapes)}
+                     "query_shapes": len(shapes),
+                     "council": plan.get("council")}
             run.stats = json.dumps(stats)
             run.status = "done"
             run.finished_at = datetime.now(UTC)

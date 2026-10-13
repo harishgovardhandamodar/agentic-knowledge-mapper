@@ -257,6 +257,13 @@ def parse_command(command: str) -> dict[str, Any]:
     except Exception:
         pass
     try:
+        from . import plugins as _plugins
+        template = _plugins.plan_for(command)
+        if template is not None:
+            return validate_plan(template)
+    except Exception:
+        pass
+    try:
         return validate_plan(_llm_parse(command))
     except Exception:
         pass
@@ -298,6 +305,8 @@ def validate_plan(plan: dict[str, Any]) -> dict[str, Any]:
     out = {"domain": str(plan.get("domain") or "")[:200],
            "exposure": exposure,
            "incident": bool(plan.get("incident")),
+           "plugin": plan.get("plugin") if isinstance(plan.get("plugin"),
+                                                      str) else None,
            "topics": topics,
            "summary": {"title": str(summary.get("title") or
                                    f"Summary: {topics[0]['title']} +{len(topics) - 1}")[:300],

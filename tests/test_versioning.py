@@ -15,6 +15,7 @@ os.environ["AKM_DATABASE_URL"] = os.environ.get("AKM_TEST_DB") or (
 
 from app import adoption_advice as aa  # noqa: E402
 from app import database as _db  # noqa: E402
+from app import hypothesiser as hy  # noqa: E402
 from app import incident as inc  # noqa: E402
 from app import model_eval as me  # noqa: E402
 from app import models as _models  # noqa: E402,F401 -- registers tables
@@ -61,6 +62,16 @@ class TestIncidentCatalog(unittest.TestCase):
         for level in ("major", "minor", "patch", "version"):
             self.assertTrue(inc.CHANGE_POLICY[level], level)
         self.assertEqual(inc.CHANGE_POLICY["version"], inc.INCIDENT_VERSION)
+
+
+class TestHypothesiserCatalog(unittest.TestCase):
+    def test_hypothesis_fingerprint_pinned(self):
+        self.assertEqual(hy.hypothesis_fingerprint(), "78e1de9c4ae5")
+
+    def test_hypothesis_policy_names_all_bump_levels(self):
+        for level in ("major", "minor", "patch", "version"):
+            self.assertTrue(hy.CHANGE_POLICY[level], level)
+        self.assertEqual(hy.CHANGE_POLICY["version"], hy.HYPOTHESIS_VERSION)
 
 
 class TestChangePolicy(unittest.TestCase):
