@@ -56,6 +56,10 @@ export function useHealth() {
     queryKey: qk.health(),
     queryFn: () => getParsed(zHealth, '/health', { lenient: true }),
     retry: false,
+    // Poll so the fallback banner appears when the preferred Axiom gateway
+    // drops and clears once it returns. The endpoint probes the gateway, so
+    // keep the interval infrequent.
+    refetchInterval: 30_000,
   });
 }
 

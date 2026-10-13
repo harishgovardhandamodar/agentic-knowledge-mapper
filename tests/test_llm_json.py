@@ -68,6 +68,31 @@ class TestLenientJson(unittest.TestCase):
             _parse_json_lenient("")
 
 
+class ConnectTimeoutCase(unittest.TestCase):
+    def test_post_uses_a_short_connect_timeout(self):
+        """A blackholed primary must fail over in seconds, not the full
+        generate budget: the connect timeout is its own, smaller value."""
+        from unittest import mock
+
+        import app.llm as llm
+
+        resp = mock.Mock(status_code=200)
+        resp.headers = {}
+        resp.json.return_value = {"choices": [{"message": {"content": "x"}}]}
+        client = mock.MagicMock()
+        client.__enter__.return_value.post.return_value = resp
+        with mock.patch("app.llm.httpx.Client", return_value=client) as Client:
+            llm._post("http://gw:8210/v1", {"model": "x"})
+        timeout = Client.call_args.kwargs["timeout"]
+        self.assertEqual(timeout.connect, llm.CONNECT_TIMEOUT_S)
+        self.assertLess(timeout.connect, timeout.read)
+
+    def test_connect_timeout_sits_below_the_generate_timeout(self):
+        import app.llm as llm
+        self.assertLess(llm.CONNECT_TIMEOUT_S, llm.TIMEOUT_S)
+        self.assertLessEqual(llm.CONNECT_TIMEOUT_S, 10)
+
+
 class PostErrorCase(unittest.TestCase):
     def test_http_error_surfaces_the_gateway_body(self):
         # A bare "400 Bad Request" hides whether the fault is the prompt, the

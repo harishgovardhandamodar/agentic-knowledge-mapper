@@ -11,17 +11,22 @@ services:
     ports:
       - "8204:8204"
     environment:
-      # LLM inference routes to the fox-services gateway over Tailscale. All
-      # nodes are on the tailnet, so MagicDNS names are used rather than a LAN
-      # IP that only resolves on one segment: axiom (the 2x RTX 5080 peer)
-      # is primary, axiom-dgx (this host) the fallback. The chain is only
-      # walked when the primary raises, so a healthy axiom always serves.
+      # LLM inference routes to the fox-services gateway. Axiom (the 2x RTX
+      # 5080 peer) is primary, axiom-dgx (this host) the fallback. The primary
+      # uses axiom's LAN address because its tailnet path
+      # (axiom.tailb61a66.ts.net, 100.101.3.115) is currently firewalled at the
+      # peer and blackholes TCP: revert to the MagicDNS name once axiom
+      # accepts tailscale0. The chain is only walked when the primary raises,
+      # so a healthy axiom always serves.
       # Direct web fetches go through the local broker's OpenShell sandbox.
-      - LLM_BASE_URL=${LLM_BASE_URL:-http://axiom.tailb61a66.ts.net:8210/v1}
+      - LLM_BASE_URL=${LLM_BASE_URL:-http://192.168.1.173:8210/v1}
       - LLM_FALLBACK_URL=${LLM_FALLBACK_URL:-http://axiom-dgx.tailb61a66.ts.net:8210/v1}
       - LLM_MODEL=${LLM_MODEL:-qwen3.8:27b}
       - LLM_FALLBACK_MODEL=${LLM_FALLBACK_MODEL:-qwen3.8:27b}
       - LLM_TIMEOUT_S=${LLM_TIMEOUT_S:-180}
+      # Connect-only budget; the primary is a mesh peer, so a blackholed peer
+      # must fail over to the fallback in seconds, not the full generate timeout.
+      - LLM_CONNECT_TIMEOUT_S=${LLM_CONNECT_TIMEOUT_S:-5}
       # OpenShell protection: agent tool fetches run inside a managed sandbox
       # via the fox-services broker; unreachable broker/gateway degrades to
       # direct fetch and the assessment records which path served each page.

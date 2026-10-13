@@ -31,16 +31,23 @@ LLM_BASE_URL=http://localhost:8210/v1 python -m uvicorn app.main:app --port 8204
 
 | Env var | Default | Meaning |
 |---|---|---|
-| `LLM_BASE_URL` | `http://host.docker.internal:8210/v1` (compose: mesh peer `100.101.3.115:11434/v1`) | primary OpenAI-compatible backend |
+| `LLM_BASE_URL` | `http://host.docker.internal:8210/v1` (compose: axiom LAN `192.168.1.173:8210/v1`; the tailnet name is unusable while the peer firewall blackholes it) | primary OpenAI-compatible backend |
 | `LLM_FALLBACK_URL` | `http://host.docker.internal:8210/v1` | second backend |
 | `LLM_MODEL` / `LLM_FALLBACK_MODEL` | `qwen3.8:latest` / `qwen3.8:27b` | model names per backend |
 | `LLM_TIMEOUT_S` | `180` | per-request timeout |
+| `LLM_CONNECT_TIMEOUT_S` | `5` | connect-only timeout; a blackholed primary base fails over to the next in seconds instead of burning the full `LLM_TIMEOUT_S` |
 | `AKM_CHROMIUM_BIN` | auto-detected (`chromium`, `chromium-browser`, `google-chrome`) | browser used to draw mermaid figures for PDF/bundle export; empty means no binary and exports fall back to source text |
 | `AKM_MERMAID_JS` | `static/vendor/mermaid.min.js` | figure renderer; falls back to the pinned CDN when the vendored file is absent |
 | `AKM_MERMAID_CACHE` | `data/mermaid_png/` (inside the `akm_data` volume) | rendered pictures, keyed by source hash; survives rebuilds, so repeat exports skip the browser |
 
 `GET /api/health` reports gateway reachability and the model inventory
-(`model_available` flag) — the header shows a green/amber/red dot.
+(`model_available` flag) — the header shows a green/amber/red dot. It also
+carries the preferred/fallback signal the UI branches on: `preferred_url`
+(always Axiom, first in the chain), `served_by`, `preferred_reachable`,
+`fallback_active`, and a ready-to-show `notice`. When `fallback_active` is
+true the Fluid UI shows an amber banner naming both the serving and the
+preferred gateway, so a call served by a fallback is never mistaken for the
+preferred one. The banner clears on its own once Axiom answers again.
 
 ## LLM failover (UML sequence)
 

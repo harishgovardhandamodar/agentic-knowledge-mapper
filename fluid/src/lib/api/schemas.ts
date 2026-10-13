@@ -30,10 +30,31 @@ export const zInvestigationList = z
   })
   .passthrough();
 
+/** The LLM gateway block on GET /api/health (see app.llm.health). */
+export const zLlmHealth = z
+  .object({
+    base_url: z.string().optional(),
+    preferred_url: z.string().optional(),
+    fallback_url: z.string().nullish(),
+    served_by: z.string().optional(),
+    reachable: z.boolean().optional(),
+    preferred_reachable: z.boolean().optional(),
+    fallback_active: z.boolean().optional(),
+    model: z.string().optional(),
+    fallback_model: z.string().optional(),
+    model_available: z.boolean().optional(),
+    notice: z.string().nullish(),
+    fallback_uses: z.number().optional(),
+    last_fallback_at: z.string().nullish(),
+  })
+  .passthrough();
+export type LlmHealth = z.infer<typeof zLlmHealth>;
+
 /** GET /api/security/health and friends. */
 export const zHealth = z
   .object({
     status: z.string().optional(),
+    llm: zLlmHealth.optional(),
   })
   .passthrough();
 export type Health = z.infer<typeof zHealth>;

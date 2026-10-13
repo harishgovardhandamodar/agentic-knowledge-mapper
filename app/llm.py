@@ -3,9 +3,11 @@
 Identified by header X-Service-Name for attribution. Works both from inside
 docker (host.docker.internal) and local dev (localhost) via fallback.
 """
+import datetime
 import json
 import os
 import re
+import threading
 import time
 
 import httpx
@@ -21,6 +23,12 @@ MODEL = os.environ.get("LLM_MODEL", "qwen3.8:27b")
 # e.g. qwen3.8:latest on axiom vs qwen3.8:27b locally). Defaults to MODEL.
 FALLBACK_MODEL = os.environ.get("LLM_FALLBACK_MODEL", MODEL)
 TIMEOUT_S = float(os.environ.get("LLM_TIMEOUT_S", "180"))
+# Connect-only timeout, deliberately shorter than TIMEOUT_S. The chain in
+# `_bases()` is walked in order, and a primary that *accepts* the TCP connection
+# but never answers needs the full generate timeout -- whereas a primary that is
+# blackholed (dropped, not refused) must not burn the whole budget before the
+# fallback is tried. Keep this small so a dead primary fails over fast.
+CONNECT_TIMEOUT_S = float(os.environ.get("LLM_CONNECT_TIMEOUT_S", "5"))
 
 
 def _bases() -> list:
@@ -37,6 +45,32 @@ def _bases() -> list:
         if alt != b and alt not in chain:
             chain.append(alt)
     return chain
+
+
+def _host(url: str) -> str:
+    """Host[:port] of a base URL, for human-facing notices."""
+    try:
+        from urllib.parse import urlparse
+        return urlparse(url).netloc or url
+    except Exception:
+        return url
+
+
+# The preferred gateway is always BASE_URL (Axiom): it is first in `_bases()`
+# and every other base is a fallback. `_fallback_state` records when a call was
+# *actually* served by one, so the UI can warn that the preferred gateway was
+# bypassed even if a later reachability probe says it is back. Process-local and
+# advisory only -- `health()`'s live probe is the source of truth for "now".
+_fallback_lock = threading.Lock()
+_fallback_state = {"uses": 0, "last_at": None, "last_base": None}
+
+
+def _record_fallback(base: str) -> None:
+    with _fallback_lock:
+        _fallback_state["uses"] += 1
+        _fallback_state["last_at"] = datetime.datetime.now(
+            datetime.UTC).isoformat()
+        _fallback_state["last_base"] = base
 
 
 class LLMError(Exception):
@@ -87,7 +121,8 @@ def _report_proof(payload: dict) -> None:
 def _post(base: str, payload: dict, extra_headers: dict | None = None) -> tuple[dict, dict]:
     url = base + "/chat/completions"
     try:
-        with httpx.Client(timeout=TIMEOUT_S) as client:
+        with httpx.Client(
+                timeout=httpx.Timeout(TIMEOUT_S, connect=CONNECT_TIMEOUT_S)) as client:
             resp = client.post(url, json=payload,
                                headers={"X-Service-Name": SERVICE_NAME, **(extra_headers or {})})
     except Exception as e:
@@ -160,6 +195,11 @@ def chat(messages: list, model: str = MODEL, temperature: float = 0.2,
         try:
             data, raw_headers = _post(base, payload, ledger_headers)
             response_headers = {str(k).lower(): v for k, v in (raw_headers or {}).items()}
+            if i > 0:
+                # Served by a non-preferred base: Axiom was unreachable and the
+                # fallback answered. Record it so the UI's warning is about a
+                # call that really happened, not just a transient probe.
+                _record_fallback(base)
             break
         except LLMError as e:
             errors.append(str(e))
@@ -283,19 +323,43 @@ def chat_json(messages: list, model: str = MODEL, temperature: float = 0.2,
 
 
 def health() -> dict:
-    """Gateway reachability + model inventory (best effort)."""
+    """Gateway reachability + model inventory (best effort).
+
+    The UI branches on ``fallback_active`` to warn *before* LLM calls are served
+    by the fallback: ``preferred_url`` (Axiom) is always tried first, and
+    ``served_by``/``fallback_active`` say whether the answer actually came from
+    it or from a fallback base. ``notice`` is a ready-to-show sentence.
+    """
     out = {"base_url": BASE_URL, "fallback_url": FALLBACK_URL or None,
+           "preferred_url": BASE_URL,
            "model": MODEL, "fallback_model": FALLBACK_MODEL,
-           "reachable": False, "models": []}
+           "reachable": False, "models": [],
+           "preferred_reachable": False, "fallback_active": False,
+           "notice": None}
     for base in _bases():
         try:
-            with httpx.Client(timeout=10) as client:
+            with httpx.Client(
+                    timeout=httpx.Timeout(10, connect=CONNECT_TIMEOUT_S)) as client:
                 r = client.get(base + "/models", headers={"X-Service-Name": SERVICE_NAME})
                 if r.status_code == 200:
                     ids = [m.get("id") for m in r.json().get("data", [])]
-                    out.update(reachable=True, via=base, models=ids[:30],
-                               model_available=(MODEL in ids))
-                    return out
+                    preferred_ok = (base == BASE_URL)
+                    out.update(reachable=True, via=base, served_by=base,
+                               models=ids[:30], model_available=(MODEL in ids),
+                               preferred_reachable=preferred_ok,
+                               fallback_active=not preferred_ok)
+                    break
         except Exception:
             continue
+    if not out["reachable"]:
+        out["notice"] = "No LLM gateway is reachable."
+    elif out["fallback_active"]:
+        out["notice"] = (
+            f"LLM calls are being served by the fallback gateway "
+            f"{_host(out['served_by'])}; the preferred gateway "
+            f"{_host(BASE_URL)} is unreachable.")
+    with _fallback_lock:
+        out["fallback_uses"] = _fallback_state["uses"]
+        out["last_fallback_at"] = _fallback_state["last_at"]
+        out["last_fallback_base"] = _fallback_state["last_base"]
     return out

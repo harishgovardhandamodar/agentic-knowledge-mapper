@@ -867,7 +867,9 @@ curl http://localhost:8204/api/health  # app + which LLM backend is active
 ```
 
 Config via env: `LLM_BASE_URL`, `LLM_FALLBACK_URL`, `LLM_MODEL`,
-`LLM_FALLBACK_MODEL`, `LLM_TIMEOUT_S` (default 180), optional `FOX_TELEMETRY_URL`
+`LLM_FALLBACK_MODEL`, `LLM_TIMEOUT_S` (default 180), `LLM_CONNECT_TIMEOUT_S`
+(default 5; connect-only, so a blackholed primary fails over fast), optional
+`FOX_TELEMETRY_URL`
 for digest-only gateway proof linkage on direct-backend calls. Local dev
 (without Docker):
 

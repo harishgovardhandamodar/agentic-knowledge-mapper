@@ -211,6 +211,7 @@ Everything the app reads from the environment, in one place. See
 | `LLM_FALLBACK_URL` | *(empty)* | no mesh peer fallback; local model only (was `http://host.docker.internal:8210/v1`) |
 | `LLM_MODEL` / `LLM_FALLBACK_MODEL` | `qwen3.8:27b` | local model via fox-services (mesh `qwen3.8:27b` no longer used) |
 | `LLM_TIMEOUT_S` | `180` | per-request timeout |
+| `LLM_CONNECT_TIMEOUT_S` | `5` | connect-only timeout; a dropped (blackholed) primary base fails over fast |
 | `RISK_CONSOLE_ENABLED` | `1` | `0` hides `/console` and Classic header pill |
 | `FOX_TELEMETRY_URL` | *(unset)* | digest-only gateway proof linkage on direct backends |
 | `LEDGER_CAPTURE_PAYLOADS` | `0` | `1` stores prompts and args verbatim; off means hashed + redacted |
