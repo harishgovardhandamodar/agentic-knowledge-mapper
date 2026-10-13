@@ -492,6 +492,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .diagram-wrap div.mermaid svg, .diagram-wrap pre.mermaid svg { max-width: 100%; height: auto; }
 .diagram-wrap .mermaid .labelBkg { background: transparent !important; }
 .mm-na-note { font-size: 11px; color: var(--warn, #d29922); margin: 4px 0; }
+.mm-err-note { font-size: 11px; color: var(--warn, #d29922); margin: 4px 0; }
 /* Follow-ups + threads */
 .fu-row { display: flex; gap: 6px; margin: 14px 0 4px; }
 .fu-row input { flex: 1; padding: 7px 12px; background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-size: 12px; }
@@ -4615,6 +4616,16 @@ function mmRender(nodes) {
       if (svg) {
         const r = mmFixContrast(svg);
         if (r.fixed) console.info(`mermaid: recoloured ${r.fixed}/${r.checked} labels for contrast`);
+      } else {
+        // Parse failed: mermaid leaves its error banner in the node.
+        // Restore the source and say so plainly instead.
+        if (src) node.textContent = src;
+        if (!node.parentElement.querySelector('.mm-err-note')) {
+          const note = document.createElement('div');
+          note.className = 'mm-err-note';
+          note.textContent = 'Diagram failed to render — source kept as text.';
+          node.parentElement.insertBefore(note, node);
+        }
       }
     }
   }).catch(e => console.warn('mermaid render failed', e));

@@ -1135,6 +1135,19 @@ DIAGRAM_TYPES = {"flowchart", "sequenceDiagram", "graph", "mindmap", "timeline",
                  "gantt", "quadrantChart", "gitGraph", "xychart", "block-beta", "kanban"}
 
 
+_MERMAID_BARE_AMP = re.compile(r"&(?![a-zA-Z]+;)")
+
+
+def _sanitize_mermaid(code: str) -> str:
+    """Make generated sources parser-safe without changing meaning.
+
+    A bare & breaks several diagram grammars (timeline events hit it
+    first); the entity renders as & in SVG text, so nothing visible
+    changes.
+    """
+    return _MERMAID_BARE_AMP.sub("&amp;", code)
+
+
 def _validate_mermaid(code: str) -> str | None:
     if not code:
         return None
@@ -1142,10 +1155,44 @@ def _validate_mermaid(code: str) -> str | None:
     code = re.sub(r"^```(?:mermaid)?\s*|\s*```$", "", code, flags=re.IGNORECASE).strip()
     if len(code) > 2500 or "<script" in code.lower() or "javascript:" in code.lower():
         return None
+    if "`" in code:
+        return None
     first = (re.split(r"[\s{:]", code, 1)[0] or "").strip()
     if first not in DIAGRAM_TYPES:
         return None
-    return code
+    lines = code.splitlines()
+    if first == "timeline":
+        # Event lines are `period : event [: event]`; section/title lines
+        # carry no colon. Anything else is model drift, not a diagram,
+        # and would render as a syntax-error banner, so drop it.
+        fixed = []
+        for ln in lines[1:]:
+            s = ln.strip()
+            if not s or s.startswith("%%"):
+                continue
+            if s.startswith("section") or s.startswith("title"):
+                fixed.append(s)
+                continue
+            if ":" not in s:
+                return None
+            period, _, rest = s.partition(":")
+            fixed.append(f"{period.strip()} : "
+                         f"{rest.strip().replace(';', ',')}")
+        if not [ln for ln in fixed
+                if ":" in ln and not ln.startswith(("section", "title"))]:
+            return None
+        code = lines[0] + "\n" + "\n".join(fixed) + "\n"
+    else:
+        # Balanced brackets keep flowcharts/graphs parseable; stray angle
+        # brackets (outside <br/>) break strict mode the same way.
+        for a, b in ("[]", "()", "{}"):
+            if code.count(a) != code.count(b):
+                return None
+        if re.search(r"<(?!br\s*/?>)", code, re.IGNORECASE):
+            return None
+    # Entities last: the timeline comma-fix above must not see the
+    # semicolon inside &amp;.
+    return _sanitize_mermaid(code)
 
 
 def _short_text(text: str, limit: int) -> str:
@@ -1183,10 +1230,13 @@ def _gen_diagram(question: str, pages: list, mode: str, depth: str) -> dict | No
                          "Say \"none\" if a diagram adds nothing.\n"
                          "Reply JSON: {\"diagram_type\": \"none|flowchart|sequenceDiagram|graph|"
                          "mindmap|timeline|erDiagram\", "
-                         "\"mermaid\": str (valid Mermaid source, no code fences, nodes the core "
-                         "concepts/steps, keep under 45 nodes/lines with short labels, and use no "
-                         "style/classDef colour directives -- the app supplies a high-contrast "
-                         "theme for both of its themes and a hard-coded light fill is unreadable "
+                         "\"mermaid\": str (valid Mermaid source, no code fences, "
+                         "nodes the core concepts/steps, keep under 45 "
+                         "nodes/lines with short labels, plain words only "
+                         "(no raw & < > # { } ; characters, no style/"
+                         "classDef colour directives) -- the app supplies "
+                         "a high-contrast theme for both of its themes "
+                         "and a hard-coded light fill is unreadable "
                          "against the theme's label colour), "
                          "\"title\": str, \"caption\": str (1 sentence), "
                          "\"references\": [int source indices]}")}],
