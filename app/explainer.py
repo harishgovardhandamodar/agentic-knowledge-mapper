@@ -1158,6 +1158,7 @@ def _validate_mermaid(code: str) -> str | None:
     if "`" in code:
         return None
     first = (re.split(r"[\s{:]", code, 1)[0] or "").strip()
+    first = first.split("-")[0]
     if first not in DIAGRAM_TYPES:
         return None
     lines = code.splitlines()

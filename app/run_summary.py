@@ -17,7 +17,15 @@ from datetime import UTC, datetime
 from typing import Any
 
 from . import dossier as _dossier
-from .models import Artifact, Investigation, ManagerRun, SecurityAssessment
+from .models import (
+    AgentRun,
+    Artifact,
+    Explanation,
+    Investigation,
+    ManagerRun,
+    Relationship,
+    SecurityAssessment,
+)
 
 
 def _now_iso() -> str:
@@ -260,6 +268,198 @@ def _diagrams_for(rec) -> list[dict[str, str]]:
     return _dossier._assessment_diagrams(rec)
 
 
+def _latest_explanations(db, inv_id: int, limit: int = 3) -> list:
+    try:
+        return (db.query(Explanation)
+                .filter(Explanation.investigation_id == inv_id)
+                .order_by(Explanation.id.desc()).limit(limit).all())
+    except Exception:
+        return []
+
+
+def _writeup_section(db, inv_id: int) -> list[str]:
+    """The detailed write-up: latest explanations with their summaries,
+    key points, and provenance. The report leads with prose here, not
+    scores: for a write-up investigation this section IS the summary."""
+    out: list[str] = []
+    for exp in _latest_explanations(db, inv_id):
+        ans = _loads(getattr(exp, "answer", None), {}) or {}
+        if not isinstance(ans, dict):
+            ans = {}
+        trace = _loads(getattr(exp, "trace", None), {}) or {}
+        if not isinstance(trace, dict):
+            trace = {}
+        out.append(f"**Q: {getattr(exp, 'question', '')}** "
+                   f"({getattr(exp, 'mode', '')}/"
+                   f"{getattr(exp, 'depth', '')} · "
+                   f"{getattr(exp, 'status', '')})")
+        out.append("")
+        if ans.get("summary"):
+            out.append(str(ans["summary"]))
+            out.append("")
+        for kp in (ans.get("key_points") or [])[:8]:
+            out.append(f"- {kp}")
+        if ans.get("key_points"):
+            out.append("")
+        queries = trace.get("queries") or []
+        hits = trace.get("hits") or []
+        fetched = trace.get("fetched") or []
+        if queries or hits or fetched:
+            out.append(f"_Provenance: {len(queries)} queries, "
+                       f"{len(hits)} hits, {len(fetched)} pages "
+                       f"fetched._")
+            out.append("")
+    return out
+
+
+def _writeup_diagrams(db, inv_id: int) -> list[dict[str, str]]:
+    """Explainer figures (answer diagram, maps, prose fences)."""
+    out: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for exp in _latest_explanations(db, inv_id, limit=3):
+        for d in _dossier._explainer_diagrams(exp):
+            src = str(d.get("source") or "").strip()
+            if not src or src in seen:
+                continue
+            seen.add(src)
+            d = dict(d)
+            d["origin"] = f"write-up #{exp.id}"
+            out.append(d)
+            if len(out) >= 6:
+                return out
+    return out
+
+
+def _day(value) -> str:
+    try:
+        return value.date().isoformat() if hasattr(value, "date") \
+            else str(value)[:10]
+    except Exception:
+        return "undated"
+
+
+def _process_figures(db, inv_id: int) -> list[dict[str, str]]:
+    """Workflow, activity, and interaction figures from stored rows.
+
+    All three derive from what actually ran (no model involved): stage
+    readiness, action counts, and dated actor exchanges. Labels carry
+    counts and dates only, never free text, so the figures stay inside
+    the parser-safe subset.
+    """
+    try:
+        runs = (db.query(AgentRun)
+                .filter(AgentRun.investigation_id == inv_id).all())
+    except Exception:
+        runs = []
+    research = [r for r in runs if (r.trigger or "manual") != "security"]
+    r_done = sum(1 for r in research if r.status == "done")
+    try:
+        assessments = (db.query(SecurityAssessment)
+                       .filter(SecurityAssessment.investigation_id
+                               == inv_id)
+                       .order_by(SecurityAssessment.id.desc()).all())
+    except Exception:
+        assessments = []
+    try:
+        exps = (db.query(Explanation)
+                .filter(Explanation.investigation_id == inv_id).all())
+    except Exception:
+        exps = []
+    e_done = sum(1 for e in exps if e.status == "done")
+    decided = [a for a in assessments if getattr(a, "assurance_decision",
+                                                 None)]
+    latest = assessments[0] if assessments else None
+    a_state = ("none yet" if not assessments
+               else f"scored {latest.residual_pct}"
+               if latest.residual_pct is not None else "running")
+    r_state = ("not started" if not research
+               else f"{r_done}/{len(research)} done")
+    w_state = ("none yet" if not exps else f"{e_done} answer(s)")
+    v_state = (f"decided ({decided[0].assurance_decision})" if decided
+               else "open")
+    workflow = ("\n".join([
+        "flowchart LR",
+        f'    R["research: {r_state}"]',
+        f'    A["assessment: {a_state}"]',
+        f'    W["write-up: {w_state}"]',
+        f'    V["review: {v_state}"]',
+        "    R --> A --> W --> V"]) + "\n")
+    rounds = 0
+    kept = 0
+    for r in research:
+        try:
+            stats = json.loads(r.stats or "{}") or {}
+        except Exception:
+            stats = {}
+        if isinstance(stats, dict):
+            rounds += int(stats.get("rounds") or 0)
+            kept += int(stats.get("artifacts_kept") or 0)
+    try:
+        rels = db.query(Relationship).filter(
+            Relationship.investigation_id == inv_id).count()
+    except Exception:
+        rels = 0
+    activity = ("\n".join([
+        "stateDiagram-v2",
+        "    [*] --> Research",
+        f"    Research --> Assessment : {rounds} rounds, {kept} kept",
+        f"    Assessment --> Writeup : {len(assessments)} assessment(s)",
+        f"    Writeup --> Review : {len(exps)} write-up(s)",
+        f"    Review --> [*] : {rels} relationships mapped"]) + "\n")
+    msgs = []
+    try:
+        inv = db.query(Investigation).filter(
+            Investigation.id == inv_id).first()
+    except Exception:
+        inv = None
+    if inv is not None and getattr(inv, "created_at", None) is not None:
+        msgs.append((getattr(inv, "created_at", None),
+                     "User->>Research: brief opened"))
+    for r in sorted(research,
+                    key=lambda r: getattr(r, "started_at", None) or "")[:4]:
+        if getattr(r, "started_at", None) is not None:
+            msgs.append((r.started_at,
+                         f"Research->>Research: round results "
+                         f"({r.status})"))
+    for a in assessments[:2]:
+        if getattr(a, "created_at", None) is not None:
+            msgs.append((a.created_at, "Research->>Security: assess"))
+    for e in sorted(exps, key=lambda e: e.id)[:3]:
+        if getattr(e, "created_at", None) is not None:
+            msgs.append((e.created_at, "User->>Explainer: question asked"))
+            if e.status == "done":
+                msgs.append((getattr(e, "finished_at", None)
+                             or e.created_at,
+                             "Explainer->>User: answer delivered"))
+    seq = []
+    for d, m in sorted(
+            [(d, m) for d, m in msgs if d is not None],
+            key=lambda t: str(t[0]))[:8]:
+        # Dates ride inside the message text: a second colon would split
+        # the statement, so the day goes in parentheses.
+        head, _, tail = m.partition(": ")
+        seq.append(f"{head}: {tail} ({_day(d)})" if tail
+                   else f"{m} ({_day(d)})")
+    lines = ["sequenceDiagram",
+             "    participant User",
+             "    participant Research",
+             "    participant Security",
+             "    participant Explainer"]
+    for m in seq:
+        lines.append(f"    {m}")
+    if not seq:
+        lines.append("    Note over User,Explainer: no exchanges recorded yet")
+    interaction = "\n".join(lines) + "\n"
+    return [
+        {"key": "workflow", "caption": "Investigation workflow",
+         "source": workflow, "origin": "process"},
+        {"key": "activity", "caption": "Agent activity",
+         "source": activity, "origin": "process"},
+        {"key": "interaction", "caption": "Actor interactions",
+         "source": interaction, "origin": "process"},
+    ]
+
+
 def _diagrams_section(diagrams: list[dict[str, str]]) -> list[str]:
     """Every stored mermaid figure, embedded so the report renders diagrams."""
     out: list[str] = []
@@ -310,6 +510,10 @@ def _inv_section(db, inv_id: int) -> dict[str, Any]:
     inv = db.query(Investigation).filter(Investigation.id == inv_id).first()
     rec = latest_assessment(db, inv_id) if inv_id else None
     diagrams = _diagrams_for(rec) if rec is not None else []
+    writeup = _writeup_section(db, inv_id) if inv_id else []
+    if inv_id:
+        diagrams = (list(diagrams) + _writeup_diagrams(db, inv_id)
+                    + _process_figures(db, inv_id))
     scoring = _loads(getattr(rec, "scoring_json", None), {}) or {}
     path = (scoring.get("assessment_path") or "standard") \
         if isinstance(scoring, dict) else "standard"
@@ -326,6 +530,7 @@ def _inv_section(db, inv_id: int) -> dict[str, Any]:
         "experiments": _experiments_section(rec) if rec is not None else [],
         "hypotheses": _hypotheses_section(rec) if rec is not None else [],
         "council": _council_section(db, inv_id),
+        "writeup": writeup,
         "diagrams": diagrams,
         "artifacts": _artifacts_for(db, inv_id),
     }
@@ -368,6 +573,7 @@ def investigation_report(db, inv_id: int) -> dict[str, Any]:
     _sec("Experiments", sec["experiments"])
     _sec("Hypotheses", sec["hypotheses"])
     _sec("Council review", sec["council"])
+    _sec("Write-up", sec["writeup"])
     _sec("Diagrams", _diagrams_section(sec["diagrams"]))
     _sec("Collected artifacts", _artifacts_section(sec["artifacts"]))
     markdown = "\n".join(L).strip() + "\n"
@@ -384,6 +590,7 @@ def investigation_report(db, inv_id: int) -> dict[str, Any]:
             "findings": 0,
             "experiments": len(sec["experiments"]) - 2 if sec["experiments"] else 0,
             "hypotheses": len(sec["hypotheses"]) - 2 if sec["hypotheses"] else 0,
+            "writeups": len(sec["writeup"]) - 2 if sec["writeup"] else 0,
             "diagrams": len(sec["diagrams"]),
             "artifacts": len(sec["artifacts"]),
         },
