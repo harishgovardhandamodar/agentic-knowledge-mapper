@@ -20,7 +20,7 @@ from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session
 
-from . import approvals, jobqueue, obs, threatpack
+from . import approvals, jobqueue, llm, obs, threatpack
 from . import security as sec_engine
 from .database import SessionLocal
 from .models import AgentEvent, AgentRun, Investigation, SecurityAssessment
@@ -44,13 +44,19 @@ def _handle_security_job(job, payload) -> bool:
     outlives the request that created it and is executed by the worker thread,
     whose context is the worker's own. Copying the context at claim time used to
     be enough when the job *was* the request's thread, and silently stopped
-    being true the moment a queue got involved.
+    being true the moment a queue got involved. The originating frontend label
+    ("tui") travels the same way so gateway attribution survives the queue;
+    it is reset afterwards so it cannot leak into the next job.
     """
     run_id = payload.get("run_id")
     if not run_id:
         return False
-    with obs.trace_scope(payload.get("trace")):
-        run_security_assessment(run_id, payload.get("params") or {})
+    token = llm.set_client_label(payload.get("client"))
+    try:
+        with obs.trace_scope(payload.get("trace")):
+            run_security_assessment(run_id, payload.get("params") or {})
+    finally:
+        llm.reset_client_label(token)
     return True
 
 
@@ -894,7 +900,9 @@ def launch_security_assessment(investigation_id: int, params: dict,
         # recoverable.
         params = dict(params or {})
         params["requested_by"] = requested_by or approvals.UNKNOWN_ACTOR
-        jobqueue.enqueue(db, KIND_SECURITY, {"run_id": run_id, "params": params},
+        jobqueue.enqueue(db, KIND_SECURITY,
+                         {"run_id": run_id, "params": params,
+                          "client": llm.current_client_label()},
                          key=f"security:{run_id}", run_id=run_id)
     finally:
         db.close()
