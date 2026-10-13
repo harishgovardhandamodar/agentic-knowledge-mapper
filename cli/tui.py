@@ -83,15 +83,21 @@ class Dashboard:
         self.note = ""
         self.data: dict = {}
         self.last_fetch = 0.0
+        # Research tab is filter-first: the investigations list is only
+        # fetched (and only shown) on request, never by auto-refresh.
+        self.filter_text = ""
+        self._term_old = None
 
     # -- data ---------------------------------------------------------
-    def refresh(self, force: bool = False) -> None:
+    def refresh(self, force: bool = False,
+                fetch_list: bool = False) -> None:
         if not force and time.time() - self.last_fetch < 2:
             return
-        d: dict = {}
+        d: dict = dict(self.data)
         try:
             d["health"] = self.client.health()
-            d["investigations"] = self.client.list_investigations()
+            if fetch_list:
+                d["investigations"] = self.client.list_investigations()
             d["runs"] = self.client.list_runs()
             d["manager_runs"] = self.client.manager_runs(20)
             d["ledger"] = self.client.ledger_timeline(40)
@@ -118,11 +124,26 @@ class Dashboard:
         self.last_fetch = time.time()
 
     def _selected_inv(self, d: dict | None = None) -> dict | None:
-        rows = (d or self.data).get("investigations", [])
+        rows = self._filtered(d)
         if not rows:
             return None
         self.inv_idx = max(0, min(self.inv_idx, len(rows) - 1))
         return rows[self.inv_idx]
+
+    def _filtered(self, d: dict | None = None) -> list:
+        """Investigations matching the filter; empty filter shows none.
+
+        The list appears only on request (filter submit / r), so the tab
+        opens on the input box even with hundreds of rows behind it.
+        """
+        rows = (d or self.data).get("investigations", [])
+        f = self.filter_text.strip().lower()
+        if not f:
+            return []
+        return [r for r in rows if f in " ".join(
+            str((r.get(k) if isinstance(r, dict) else "") or "")
+            for k in ("id", "title", "keywords", "description",
+                      "status")).lower()]
 
     # -- header / footer ------------------------------------------------
     def _llm_dot(self) -> str:
@@ -155,36 +176,47 @@ class Dashboard:
     def _footer(self) -> str:
         if self.console.width >= 100:
             if self.tab == "research":
-                return ("1/2 tabs · ↑↓ select · l launch · n new · "
-                        "d diagram · s save · r refresh · q quit")
+                return ("1/2 tabs · / filter · ↑↓ select · l launch · "
+                        "n new · d diagram · s save · r refresh · q quit")
             return ("1/2 tabs · j/k scroll · m run · c compile · "
                     "r refresh · q quit")
         if self.tab == "research":
-            return ("1/2 · ↑↓ move · l launch · n new · d dia · "
-                    "s save · r refr · q quit")
+            return ("1/2 · / filt · ↑↓ move · l launch · n new · "
+                    "d dia · s save · r refr · q quit")
         return "1/2 · j/k scroll · m run · c comp · r refr · q quit"
 
     # -- research tab ----------------------------------------------------
     def _research_body(self) -> Group:
-        rows = self.data.get("investigations", [])
+        rows = self._filtered()
         w = self.console.width
-        total = len(rows)
-        # Window the list around the selection: a 155-row table would
-        # otherwise blow the frame out of the visible screen.
+        total = len(self.data.get("investigations", []))
+        filt = self.filter_text
+        box_line = (f"Filter: [ {filt} ]  ({len(rows)} match"
+                    f"{'' if len(rows) == 1 else 'es'}"
+                    f"{f' of {total}' if total else ''})  "
+                    f"[dim]/ edit · esc clear · r reload list[/dim]")
+        if not filt.strip():
+            return Group(
+                box_line,
+                Panel("Type / and enter text to list matching "
+                      "investigations (id / title / keywords / status). "
+                      "The list loads only on request.",
+                      title="investigations"))
         start = max(0, min(self.inv_idx - LIST_WINDOW // 2,
-                           max(0, total - LIST_WINDOW)))
+                           max(0, len(rows) - LIST_WINDOW)))
         view = rows[start:start + LIST_WINDOW]
         inv_rows = [[_cell(r.get("id"), 6), _cell(r.get("title"), w - 30),
                      _cell(r.get("status"), 10)] for r in view]
-        left = _table(f"investigations ({total})",
+        left = _table(f"matches ({len(rows)})",
                       [("id", 6), ("title", max(20, w - 30)),
                        ("status", 10)],
                       inv_rows, highlight=self.inv_idx - start)
-        left.caption = (f"row {self.inv_idx + 1}/{total} (↑↓)"
-                        if total else None)
+        left.caption = (f"row {self.inv_idx + 1}/{len(rows)} (↑↓)"
+                        if rows else None)
         inv = self._selected_inv()
         if inv is None:
-            return Group(left, Panel("no investigations yet (n)"))
+            return Group(box_line, left,
+                         Panel("no matches — edit the filter (/)"))
         iid = inv.get("id")
         runs = [r for r in self.data.get("runs", [])
                 if r.get("investigation_id") == iid][:8]
@@ -193,6 +225,7 @@ class Dashboard:
         summ = self.data.get("summary", {})
         assess = self.data.get("assessments", [])
         parts: list = [
+            box_line,
             left,
             Panel(f"[bold]#{iid} {_cell(inv.get('title'), w - 12)}"
                   f"[/bold]\n{_cell(summ.get('summary') or summ, 400)}",
@@ -346,7 +379,6 @@ class Dashboard:
         shape. Constant shape lets rich redraw in place instead of
         flooding scrollback, and no frame ever overflows the screen.
         """
-        self.note = ""
         chrome = 5  # header panel (3) + tabs (1) + footer (1)
         budget = max(6, self.console.height - chrome)
         with self.console.capture() as cap:
@@ -368,24 +400,42 @@ class Dashboard:
         return Group(self._header(), self._tabs(), "\n".join(view),
                      self._footer() + pos)
 
+    def _set_raw(self) -> None:
+        import tty
+        tty.setraw(sys.stdin.fileno())
+
+    def _set_cooked(self) -> None:
+        if self._term_old is not None:
+            import termios
+            termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN,
+                              self._term_old)
+
     def _prompt(self, live, text: str) -> str:
+        """Line input with echo: raw mode (no echo, CR instead of LF)
+        would make typing blind, so cook the terminal for the prompt."""
         live.stop()
+        self._set_cooked()
         try:
             self.console.print(text, end="")
             return sys.stdin.readline().rstrip("\n")
         finally:
+            self._set_raw()
             live.start()
 
     def act(self, live, key: str) -> bool:
         """Handle one key; return False to quit."""
         if key in ("q", "\x03"):
             return False
+        self.note = ""  # each keypress retires the previous message
         if key == "1":
             self.tab, self.scroll = "research", 0
         elif key == "2":
             self.tab, self.scroll = "ops", 0
         elif key == "r":
-            self.refresh(force=True)
+            # On research, r also (re)loads the list behind the filter;
+            # auto-refresh never fetches it.
+            self.refresh(force=True,
+                         fetch_list=(self.tab == "research"))
         elif self.tab == "research":
             return self._act_research(live, key)
         else:
@@ -393,12 +443,23 @@ class Dashboard:
         return True
 
     def _act_research(self, live, key: str) -> bool:
-        rows = self.data.get("investigations", [])
+        rows = self._filtered()
         if key == "up":
             self.inv_idx = max(0, self.inv_idx - 1)
             self.diagram_idx = 0
         elif key == "down":
             self.inv_idx = min(max(0, len(rows) - 1), self.inv_idx + 1)
+            self.diagram_idx = 0
+        elif key in ("/", "f"):
+            text = self._prompt(
+                live, "filter (id/title/keywords/status): ")
+            self.filter_text = text.strip()
+            self.inv_idx = 0
+            self.diagram_idx = 0
+            self.refresh(force=True, fetch_list=True)
+        elif key == "esc":
+            self.filter_text = ""
+            self.inv_idx = 0
             self.diagram_idx = 0
         elif key == "d":
             if self._diagram_sources():
@@ -434,7 +495,7 @@ class Dashboard:
                         "(also in the web app)"
                 except (ApiError, Exception) as e:
                     self.error = str(e)[:160]
-                self.refresh(force=True)
+                self.refresh(force=True, fetch_list=True)
         return True
 
     def _act_ops(self, live, key: str) -> bool:
@@ -465,15 +526,15 @@ class Dashboard:
             self.console.print("tui needs a TTY (stdin is not one)")
             return 2
         import termios
-        import tty
         fd = sys.stdin.fileno()
         old = termios.tcgetattr(fd)
+        self._term_old = old
         from rich.live import Live
         self.refresh(force=True)
         try:
-            tty.setraw(fd)
+            self._set_raw()
             with Live(self.frame(), console=self.console,
-                      refresh_per_second=2) as live:
+                      auto_refresh=False, refresh_per_second=2) as live:
                 while True:
                     if time.time() - self.last_fetch > REFRESH_S:
                         self.refresh()

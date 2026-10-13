@@ -221,7 +221,8 @@ class DashboardCase(unittest.TestCase):
         # Tall console: the ops tab pages to terminal height, and the
         # default 25-line fallback would cut later sections off.
         self.dash.console = Console(width=100, height=200)
-        self.dash.refresh(force=True)
+        self.dash.filter_text = "a"  # matches both stub rows
+        self.dash.refresh(force=True, fetch_list=True)
         self.live = _StubLive()
 
     def _text(self):
@@ -254,6 +255,35 @@ class DashboardCase(unittest.TestCase):
 
     def test_quit_returns_false(self):
         self.assertFalse(self.dash.act(self.live, "q"))
+
+    def test_list_loads_only_on_request(self):
+        dash = Dashboard(StubClient())  # type: ignore[arg-type]
+        from rich.console import Console
+        dash.console = Console(width=100, height=200)
+        dash.refresh(force=True)
+        self.assertNotIn("investigations", dash.data)
+        dash.refresh(force=True, fetch_list=True)
+        self.assertEqual(len(dash.data["investigations"]), 2)
+
+    def test_default_view_is_the_filter_box(self):
+        dash = Dashboard(StubClient())  # type: ignore[arg-type]
+        from rich.console import Console
+        dash.console = Console(width=100, height=200)
+        dash.refresh(force=True)
+        with dash.console.capture() as cap:
+            dash.console.print(dash.frame())
+        text = cap.get()
+        self.assertIn("Filter:", text)
+        self.assertIn("Type /", text)
+        self.assertNotIn("Alpha", text)
+
+    def test_filter_narrows_and_esc_clears(self):
+        self.dash.filter_text = "alp"
+        self.assertEqual([r["title"] for r in self.dash._filtered()],
+                         ["Alpha"])
+        self.dash.act(self.live, "esc")
+        self.assertEqual(self.dash.filter_text, "")
+        self.assertEqual(self.dash._filtered(), [])
 
     def test_compile_records_note(self):
         self.dash.act(self.live, "2")

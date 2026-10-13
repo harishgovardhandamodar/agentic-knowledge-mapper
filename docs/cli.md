@@ -58,10 +58,13 @@ Two tabs, auto-refresh every 8 s, banner shows which gateway serves:
 * `2 Ops` — LLM gateway, agent swarm, manager runs (+flow of the
   selected run), activity monitor, web-search history, runtime logs.
 
-Keys: `1`/`2` tabs · `↑`/`↓` select · `j`/`k` scroll ops · `n` new
-investigation · `l` launch run · `d` next diagram · `s` save `.mmd` ·
-`m` select manager run · `c` compile · `r` refresh · `q` quit.
-Needs a TTY.
+Keys: `1`/`2` tabs · `/` filter investigations — the list loads only
+on request (`r` on Research reloads it, `esc` clears) · `↑`/`↓` select ·
+`j`/`k` scroll ops · `n` new investigation · `l` launch run · `d` next
+diagram · `s` save `.mmd` · `m` select manager run · `c` compile ·
+`r` refresh · `q` quit.
+Needs a TTY. Line prompts cook the terminal back temporarily so typing
+echoes and edits normally.
 
 ## Mermaid in the terminal
 
