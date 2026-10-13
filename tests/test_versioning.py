@@ -13,6 +13,7 @@ from unittest import mock
 os.environ["AKM_DATABASE_URL"] = os.environ.get("AKM_TEST_DB") or (
     "sqlite:///" + os.path.join(tempfile.mkdtemp(prefix="akm-versioning-"), "test.db"))
 
+from app import adoption_advice as aa  # noqa: E402
 from app import database as _db  # noqa: E402
 from app import model_eval as me  # noqa: E402
 from app import models as _models  # noqa: E402,F401 -- registers tables
@@ -39,6 +40,16 @@ class TestPinnedFingerprints(unittest.TestCase):
                        "akm-model-mitigations": me.MITIGATION_VERSION,
                        "akm-experiment-plan": me.EXPERIMENT_VERSION}
             self.assertEqual(entry["version"], current[catalog_id], catalog_id)
+
+
+class TestAdoptionAdviceCatalog(unittest.TestCase):
+    def test_adoption_advice_fingerprint_pinned(self):
+        self.assertEqual(aa.adoption_advice_fingerprint(), "f4366d380b87")
+
+    def test_adoption_advice_policy_names_all_bump_levels(self):
+        for level in ("major", "minor", "patch", "version"):
+            self.assertTrue(aa.CHANGE_POLICY[level], level)
+        self.assertEqual(aa.CHANGE_POLICY["version"], aa.ADOPTION_ADVICE_VERSION)
 
 
 class TestChangePolicy(unittest.TestCase):

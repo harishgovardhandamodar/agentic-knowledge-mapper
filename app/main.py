@@ -4758,6 +4758,18 @@ class AdvisorRequest(BaseModel):
     narrative: bool = False
 
 
+class AdoptionAdviceRequest(BaseModel):
+    query: str = ""
+    investigation_id: int | None = None
+    product: str | None = None
+    capability: list[str] | None = None
+    exposure: str | None = None
+    # Explicit organisation-nature fields override anything read from the
+    # query: sector, regime(s), systemic, data_sensitivity, jurisdiction,
+    # cross_border, third_party_reliance, obligations.
+    organisation: dict | None = None
+
+
 def _load(raw, default=None):
     """Tolerant JSON read: a column holding a half-written or absent value
     reads as the default rather than raising in the middle of a response."""
@@ -5181,6 +5193,51 @@ def post_advisor(data: AdvisorRequest, request: Request,
          "situation_tags": pack["situation"]["tags"],
          "controls_present": data.controls_present})
     return pack
+
+
+@app.post("/api/adoption-advice")
+def post_adoption_advice(data: AdoptionAdviceRequest, request: Request,
+                         db: Session = Depends(get_db)):
+    """Adoption advice for a request, judged against the organisation's nature.
+
+    The organisation profile is read from the query text and any explicit
+    fields; prior analyses for the product family are discovered and quoted,
+    never re-derived. The verdict is deterministic, and every condition carries
+    the residual limitation that remains when it is in place.
+    """
+    from . import adoption_advice as _aa
+    inv_id = None
+    if data.investigation_id is not None:
+        inv_id = _landscape_inv(data.investigation_id, db)
+    pack = _aa.adoption_advice(
+        db, query=data.query, organisation=data.organisation,
+        product=data.product, capability=data.capability,
+        exposure=data.exposure, investigation_id=inv_id)
+    ledger_api.human_action(
+        request, "adoption_advice.generated",
+        {"target_type": "investigation" if inv_id else "query",
+         "target_id": inv_id, "investigation_id": inv_id,
+         "product": pack.get("product"),
+         "verdict": (pack.get("verdict") or {}).get("key"),
+         "conditions": len(pack.get("conditions") or []),
+         "prior_analyses": len(pack.get("prior_analyses") or []),
+         "scrutiny_band": (pack.get("scrutiny") or {}).get("band")})
+    return pack
+
+
+@app.get("/api/investigations/{inv_id}/adoption-advice")
+def get_investigation_adoption_advice(inv_id: int, product: str | None = None,
+                                      query: str = "",
+                                      db: Session = Depends(get_db)):
+    """Adoption advice scoped to one investigation's collection.
+
+    Reading, not writing: it discovers and cites this investigation's stored
+    analyses for the product family rather than asserting fresh numbers.
+    """
+    from . import adoption_advice as _aa
+    resolved = _landscape_inv(inv_id, db)
+    return _aa.adoption_advice(db, query=query, product=product,
+                               investigation_id=resolved)
 
 
 @app.get("/api/portfolio/intel")
