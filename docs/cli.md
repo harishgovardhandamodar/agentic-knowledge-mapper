@@ -5,6 +5,23 @@ research investigations, mermaid diagrams, the agentic manager, and an
 ops view (runtime logs, LLM gateway, agent swarm, activity, web-search
 history).
 
+## Agent console (`python -m cli chat`, or `./startup.sh`)
+
+An opencode-style chat TUI: scrollable transcript on top, line editor
+with history at the bottom, insert mode by default, `Esc` for
+navigation (`j`/`k` scroll, `i` to type, `q` to quit). Free text asks
+the selected investigation (explainer answers land in the transcript
+when ready); slash commands drive the rest:
+
+`/use <id>` · `/research [filter]` · `/new <title>` · `/launch` ·
+`/ask <q>` · `/dia` · `/dia-next` · `/mgr` · `/mgr-launch <command…>` ·
+`/timeline <id>` · `/compile <id>` · `/report <id> [path]` · `/ops` ·
+`/health` · `/clear` · `/help` · `/quit`
+
+Slow work runs in background threads with `◌`/`●` markers. Needs a TTY.
+
+## Scriptable commands (`python -m cli ...`)
+
 ## Architecture: shared backend, web-visible by construction
 
 The CLI holds **no state of its own**. It is a thin client of the running

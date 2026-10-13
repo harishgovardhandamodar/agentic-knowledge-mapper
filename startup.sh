@@ -1,10 +1,11 @@
 #!/bin/bash
-# Start the AKM agentic-workflows TUI (Research + Ops tabs).
+# Start the AKM agent console (chat-style TUI).
 #
-#   ./startup.sh [--log-file FILE]
+#   ./startup.sh
 #
-# Uses the project venv (.venv, created with uv). Everything the TUI
-# does goes through the web app's API, so CLI work is visible in the GUI.
+# Uses the project venv (.venv, created with uv). Everything the console
+# does goes through the web app's API, so its work is visible in the GUI.
+# (The older tabbed dashboard is still available: .venv/bin/python -m cli tui)
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -32,4 +33,4 @@ then
   echo "  first (docker compose up -d, or uvicorn app.main:app)" >&2
 fi
 
-exec .venv/bin/python -m cli tui "$@"
+exec .venv/bin/python -m cli chat "$@"

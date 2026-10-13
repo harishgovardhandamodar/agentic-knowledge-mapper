@@ -24,11 +24,17 @@ def entry(argv: list[str] | None = None) -> int:
         api = os.environ.get("AKM_API_URL")
         return Dashboard(AkMClient(base_url=api),
                          log_file=log_file).run()
+    if args[:1] == ["chat"]:
+        from cli.chat import Chat
+        api = os.environ.get("AKM_API_URL")
+        return Chat(AkMClient(base_url=api)).run()
     try:
         commands.main(args, standalone_mode=False)
     except click.ClickException as e:
         e.show()
         return 1
+    except click.exceptions.Exit as e:
+        return e.exit_code
     return 0
 
 
