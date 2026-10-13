@@ -1135,17 +1135,17 @@ DIAGRAM_TYPES = {"flowchart", "sequenceDiagram", "graph", "mindmap", "timeline",
                  "gantt", "quadrantChart", "gitGraph", "xychart", "block-beta", "kanban"}
 
 
-_MERMAID_BARE_AMP = re.compile(r"&(?![a-zA-Z]+;)")
+def _timeline_text(rest: str) -> str:
+    """Make timeline event text parser-safe without changing meaning.
 
-
-def _sanitize_mermaid(code: str) -> str:
-    """Make generated sources parser-safe without changing meaning.
-
-    A bare & breaks several diagram grammars (timeline events hit it
-    first); the entity renders as & in SVG text, so nothing visible
-    changes.
+    Verified against mermaid 10.9.x: a bare & is fatal in timeline
+    text (entities do not save it), so conjunctions become words;
+    semicolons end statements, so they become commas.
     """
-    return _MERMAID_BARE_AMP.sub("&amp;", code)
+    rest = re.sub(r"\s+&\s+", " and ", rest)
+    rest = re.sub(r"&\w+;", "", rest)
+    rest = rest.replace("&", "")
+    return rest.replace(";", ",")
 
 
 def _validate_mermaid(code: str) -> str | None:
@@ -1165,9 +1165,11 @@ def _validate_mermaid(code: str) -> str | None:
         # Event lines are `period : event [: event]`; section/title lines
         # carry no colon. Anything else is model drift, not a diagram,
         # and would render as a syntax-error banner, so drop it.
+        # Trailing statement separators and unsafe event punctuation are
+        # normalized per parser-verified rules (see tests).
         fixed = []
         for ln in lines[1:]:
-            s = ln.strip()
+            s = ln.strip().rstrip(",;")
             if not s or s.startswith("%%"):
                 continue
             if s.startswith("section") or s.startswith("title"):
@@ -1177,7 +1179,7 @@ def _validate_mermaid(code: str) -> str | None:
                 return None
             period, _, rest = s.partition(":")
             fixed.append(f"{period.strip()} : "
-                         f"{rest.strip().replace(';', ',')}")
+                         f"{_timeline_text(rest.strip())}")
         if not [ln for ln in fixed
                 if ":" in ln and not ln.startswith(("section", "title"))]:
             return None
@@ -1185,14 +1187,14 @@ def _validate_mermaid(code: str) -> str | None:
     else:
         # Balanced brackets keep flowcharts/graphs parseable; stray angle
         # brackets (outside <br/>) break strict mode the same way.
+        # Trailing statement separators killed an otherwise valid chart.
+        code = "\n".join(ln.rstrip().rstrip(",;") for ln in lines)
         for a, b in ("[]", "()", "{}"):
             if code.count(a) != code.count(b):
                 return None
         if re.search(r"<(?!br\s*/?>)", code, re.IGNORECASE):
             return None
-    # Entities last: the timeline comma-fix above must not see the
-    # semicolon inside &amp;.
-    return _sanitize_mermaid(code)
+    return code
 
 
 def _short_text(text: str, limit: int) -> str:

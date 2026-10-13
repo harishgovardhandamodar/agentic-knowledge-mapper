@@ -13,7 +13,7 @@ os.environ["AKM_DATABASE_URL"] = os.environ.get("AKM_TEST_DB") or (
     "sqlite:///" + os.path.join(tempfile.mkdtemp(prefix="akm-mmvalid-"),
                                 "test.db"))
 
-from app.explainer import _sanitize_mermaid, _validate_mermaid  # noqa: E402
+from app.explainer import _validate_mermaid  # noqa: E402
 
 SEQ = ("sequenceDiagram\n"
        "    participant A as Agent\n"
@@ -40,13 +40,13 @@ class GateCase(unittest.TestCase):
             self.assertIsNotNone(out, src.splitlines()[0])
             self.assertIn(src.splitlines()[0], out)
 
-    def test_bare_ampersand_sanitized_not_dropped(self):
+    def test_bare_ampersand_becomes_words(self):
         src = ("timeline\n    title T\n    section S\n"
                "    2026-01-01 : Buckmaster & Alpoege begin work\n")
         out = _validate_mermaid(src)
         self.assertIsNotNone(out)
-        self.assertIn("&amp;", out)
-        self.assertNotIn(" & ", out)
+        self.assertIn(" and ", out)
+        self.assertNotIn("&", out)
 
     def test_timeline_semicolon_becomes_comma(self):
         out = _validate_mermaid(TIMELINE)
@@ -75,9 +75,12 @@ class GateCase(unittest.TestCase):
         self.assertIsNone(
             _validate_mermaid("timeline\n    title T\n    just prose here"))
 
-    def test_sanitize_leaves_entities_alone(self):
-        self.assertIn("&amp;",
-                      _sanitize_mermaid("A &amp; B and C & D"))
+    def test_trailing_comma_no_longer_kills_flowcharts(self):
+        src = ("flowchart TD\n"
+               '    A["x"] --> B["y"],\n')
+        out = _validate_mermaid(src)
+        self.assertIsNotNone(out)
+        self.assertFalse(out.rstrip().endswith(","))
 
 
 if __name__ == "__main__":
