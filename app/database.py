@@ -161,6 +161,12 @@ _MIGRATIONS = [
     # Acceptance decisions are time-bounded: an exception must expire, and
     # expiry is what triggers re-evaluation.
     ("security_assessments", "assurance_decision_expires_at", "DATETIME"),
+    # Risk questionnaire (app/risk_questionnaire.py): who is expected to
+    # answer a question, and which AI-standards controls its answer
+    # evidences. Nullable -- a question from an older catalog has neither,
+    # and inventing an owner would route it to the wrong team.
+    ("evaluation_questions", "answerer_role", "VARCHAR(60)"),
+    ("evaluation_questions", "framework_tags_json", "TEXT"),
 ]
 
 

@@ -33,8 +33,13 @@ services:
       - OPENSHELL_ENABLED=${OPENSHELL_ENABLED:-1}
       - OPENSHELL_BROKER_URL=${OPENSHELL_BROKER_URL:-http://host.docker.internal:8210}
       - OPENSHELL_TIMEOUT_S=${OPENSHELL_TIMEOUT_S:-25}
+      # AI Agents tab: the sibling AI-Agents-Patterns checkout, served
+      # same-origin at /patterns/. Absent on hosts without the checkout --
+      # the tab then reports the reason instead of a broken frame.
+      - AKM_PATTERNS_DIR=${AKM_PATTERNS_DIR:-/patterns-kb}
     volumes:
       - akm_data:/app/data
+      - ${AI_AGENTS_PATTERNS_DIR:-../AI-Agents-Patterns}:/patterns-kb:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:

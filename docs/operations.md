@@ -39,6 +39,8 @@ LLM_BASE_URL=http://localhost:8210/v1 python -m uvicorn app.main:app --port 8204
 | `AKM_CHROMIUM_BIN` | auto-detected (`chromium`, `chromium-browser`, `google-chrome`) | browser used to draw mermaid figures for PDF/bundle export; empty means no binary and exports fall back to source text |
 | `AKM_MERMAID_JS` | `static/vendor/mermaid.min.js` | figure renderer; falls back to the pinned CDN when the vendored file is absent |
 | `AKM_MERMAID_CACHE` | `data/mermaid_png/` (inside the `akm_data` volume) | rendered pictures, keyed by source hash; survives rebuilds, so repeat exports skip the browser |
+| `AKM_PATTERNS_DIR` | `<repo>/../AI-Agents-Patterns` | sibling checkout served same-origin at `/patterns/` for the AI Agents tab; when absent the tab reports the reason instead of a broken frame |
+| `AI_AGENTS_PATTERNS_DIR` | `../AI-Agents-Patterns` (compose only) | host path bind-mounted read-only to `/patterns-kb` for the mapper container; override when the checkout lives elsewhere |
 
 `GET /api/health` reports gateway reachability and the model inventory
 (`model_available` flag) — the header shows a green/amber/red dot. It also

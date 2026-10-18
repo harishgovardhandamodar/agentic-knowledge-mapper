@@ -161,5 +161,101 @@ class AdapterCase(unittest.TestCase):
         self.assertTrue(pack["fingerprint"])
 
 
+class SelectionCase(unittest.TestCase):
+    """select() is what gives the plan card's chips their effect.
+
+    A selection is told apart from a parse roster by the ``selected``
+    flag, so the CLI (which posts the roster verbatim) keeps detection
+    instead of silently turning on all five lenses.
+    """
+
+    CVE_CMD = "list known CVEs affecting FooBar"
+
+    def test_nothing_sent_falls_back_to_detection(self):
+        got = [p["key"] for p in pg.select(self.CVE_CMD)]
+        self.assertIn("vulnerability", got)
+        self.assertIn("security", got)
+
+    def test_a_roster_is_not_a_selection(self):
+        roster = pg.match_command(self.CVE_CMD)  # five entries, no 'selected'
+        self.assertEqual([p["key"] for p in pg.select(self.CVE_CMD, roster)],
+                         [p["key"] for p in pg.select(self.CVE_CMD)])
+        self.assertNotEqual(len(roster), len(pg.select(self.CVE_CMD, roster)))
+
+    def test_selection_overrides_detection_both_ways(self):
+        picked = [{"key": "vulnerability", "selected": True},
+                  {"key": "hypothesis", "selected": True}]
+        got = [p["key"] for p in pg.select(self.CVE_CMD, picked)]
+        self.assertEqual(got, ["vulnerability", "hypothesis"])
+        # ...and can drop one detection matched.
+        self.assertNotIn("security",
+                         [p["key"] for p in pg.select(self.CVE_CMD, picked)])
+
+    def test_the_flag_decides_not_the_presence_of_an_entry(self):
+        # A card may post its whole roster with the unticked chips off;
+        # those must come back off.
+        roster = [dict(p, selected=p["key"] == "vulnerability")
+                  for p in pg.match_command(self.CVE_CMD)]
+        self.assertEqual([p["key"] for p in pg.select(self.CVE_CMD, roster)],
+                         ["vulnerability"])
+
+    def test_empty_selection_is_honoured(self):
+        self.assertEqual(pg.select(self.CVE_CMD, []), [])
+
+    def test_unknown_keys_dropped_deduped_registry_ordered(self):
+        picked = [{"key": "writeup", "selected": True},
+                  {"key": "retired-plugin", "selected": True},
+                  {"key": "adoption", "selected": True},
+                  {"key": "writeup", "selected": True}]
+        got = [p["key"] for p in pg.select(self.CVE_CMD, picked)]
+        self.assertEqual(got, ["adoption", "writeup"])
+
+    def test_result_is_annotated_for_the_card(self):
+        got = pg.select(self.CVE_CMD, [{"key": "vulnerability",
+                                        "selected": True}])[0]
+        self.assertTrue(got["selected"])
+        self.assertEqual(got["title"], pg.PLUGINS["vulnerability"].title)
+        self.assertEqual(got["version"],
+                         pg.PLUGINS["vulnerability"].version)
+        self.assertTrue(got["via"])
+
+
+class SummaryCase(unittest.TestCase):
+    """pack_summary is deterministic, so it can live in the artifact."""
+
+    def test_gap_wins_over_a_count(self):
+        line = pg.pack_summary(
+            "vulnerability",
+            {"cve_artifacts": 0, "findings": 0, "gap": "no CVE artifacts yet"})
+        self.assertIn("no CVE artifacts yet", line)
+        self.assertNotIn("0 CVE artifact(s)", line)
+
+    def test_each_plugin_reads_its_own_fields(self):
+        self.assertIn("3 CVE artifact(s)",
+                      pg.pack_summary("vulnerability",
+                                      {"cve_artifacts": 3, "findings": 2}))
+        self.assertIn("2 inherent + 5 derived",
+                      pg.pack_summary("hypothesis",
+                                      {"counts": {"inherent": 2,
+                                                  "derived": 5}}))
+        self.assertIn("residual 40/100",
+                      pg.pack_summary("security",
+                                      {"residual_pct": 40,
+                                       "assessment_path": "model_engineering"}))
+        self.assertIn("write-up #7",
+                      pg.pack_summary("writeup",
+                                      {"explanation_id": 7, "status": "done",
+                                       "diagrams": 2}))
+        self.assertIn("roll out",
+                      pg.pack_summary(
+                          "adoption",
+                          {"verdict": {"key": "adopt",
+                                       "label": "roll out on one team"}}))
+
+    def test_absent_score_reads_as_not_applicable(self):
+        self.assertIn("residual n/a",
+                      pg.pack_summary("security", {"residual_pct": None}))
+
+
 if __name__ == "__main__":
     unittest.main()

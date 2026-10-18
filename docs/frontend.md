@@ -9,9 +9,9 @@ Related: [architecture](architecture.md) · [agent-loop](agent-loop.md) ·
 
 ## View map
 
-`switchApp()` selects one of **seven apps** (Mapper, AI Security, Executive brief — Security & Privacy, Risk Console, Manager, Standards, Design); `switchView()` selects one of the
+`switchApp()` selects one of **eight apps** (Mapper, AI Security, Executive brief — Security & Privacy, Risk Console, Manager, Standards, Agent Patterns & Advisor, Design); `switchView()` selects one of the
 **nine Mapper views**. This is the distinction that trips people up: AI
-Security, Agentic Manager, AI Standards and Design & Architecture are sibling
+Security, Agentic Manager, AI Standards, Agent Patterns & Advisor and Design & Architecture are sibling
 *apps*, not tabs inside the Mapper, and the Mapper's own view list does not
 include them.
 
@@ -24,6 +24,7 @@ flowchart TB
     APPS --> CONS["console — Risk Console<br/>persona presets · Risk Cards · Report Reader<br/>/console route, same REST"]
     APPS --> MGR["manager — Agentic Manager"]
     APPS --> STD["standards — AI Standards<br/>(iframed service :5173)"]
+    APPS --> AGT["agents — Agent Patterns & Advisor<br/>(iframed sibling /patterns/)"]
     APPS --> DSG["design — Design & Architecture<br/>design/ Markdown read live<br/>10 docs inc. risk-console"]
     AKM --> TABS
     subgraph TABS["Mapper views (switchView)"]
@@ -173,7 +174,7 @@ buttons, not as a spinner — a blocked run is visibly blocked.
 
 ## Design & Architecture app
 
-The fifth app reads `design/` over `GET /api/design/docs` and renders it in the
+The Design & Architecture app reads `design/` over `GET /api/design/docs` and renders it in the
 page. The point is that the diagrams people read are the ones in the repo: a
 screenshot of a diagram that has since changed cannot be distinguished from a
 correct one, so the viewer renders the Markdown and hands the Mermaid to the
@@ -216,6 +217,28 @@ not serve, so they render as a visible path reference (`.design-ref`) rather
 than an anchor that 404s. `app/design_docs.py` resolves a document only by
 looking its id up in a fixed index — a traversal attempt is a 404, exactly like
 an unknown id.
+
+## Agent Patterns & Advisor tab
+
+The Agent Patterns & Advisor app iframes the sibling **AI-Agents-Patterns** SPA
+same-origin at `/patterns/` (`#agentsFrame`, lazy-loaded on first visit,
+sized like the Standards frame, deep-linkable via `#agents`). Above the
+frame, `agentsLoadFallback()` renders an advice header from
+`GET /api/patterns/summary` — live catalog counts (patterns, scenarios,
+cascades, mock traces) — so the tab says something useful before the SPA
+finishes loading, and states the exact reason when the sibling checkout is
+absent instead of showing a blank frame. The tab badge carries the total
+catalog entries.
+
+`app/patterns_kb.py` is the read-only index behind the header:
+`GET /api/patterns/status` (mounted? where?), `GET /api/patterns/summary`
+(counts + severity/cascade-class breakdowns + per-file health), and
+`GET /api/patterns/search?q=&kind=&limit=` (lexical search over patterns,
+scenarios and cascades; hits name kind + id so the tab links back to the
+owning SPA view). Same contract as `app/design_docs.py`: no
+caller-supplied path, missing sibling or bad file degrades to
+`available: false` rather than a 500. Full detail:
+[ai-agents-patterns](ai-agents-patterns.md).
 
 ## Screens
 

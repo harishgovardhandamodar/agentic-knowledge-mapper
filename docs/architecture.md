@@ -33,18 +33,19 @@ failing), and the standards dashboard is a read-only consumer source that
 returns 503 with a reason when unreachable. Neither is on the critical path of
 collecting or answering.
 
-## Seven applications, one subject
+## Eight applications, one subject
 
 ![fox-services gateway, the LLM dependency](screenshots/06-fox-services.png)
 
-The word "mapper" undersells what is deployed. Seven applications are involved,
+The word "mapper" undersells what is deployed. Eight applications are involved,
 and they are not layers of one thing — they are peers with different jobs:
 
 | App | Port | Route | Role | Talks to |
 |---|---|---|---|
-| **Agentic Knowledge Mapper** | 8204 | `/` (`static/index.html`) | investigations, graph, explainer, security | fox-services, standards dashboard, OpenShell, web |
+| **Agentic Knowledge Mapper** | 8204 | `/` (`static/index.html`) | investigations, graph, explainer, security | fox-services, standards dashboard, patterns catalog, OpenShell, web |
 | **Risk Console** | 8204 | `/console` (`static/console/index.html`) | risk-first alternative GUI, same REST | same backend as Mapper (no fork) |
 | **Executive brief — Security & Privacy** | 8204 | `#dashboard` (pane) | assurance board, coverage + distribution, portfolio register, fox-services nodes, knowledge graph | executive, scheduler |
+| **Agent Patterns & Advisor** | 8204 (same) | `#agents` (pane) + `/patterns/` | advice-first catalog: patterns, scenarios, cascades, deployment planner, guardrail lab | sibling checkout's `data/*.json` via `app/patterns_kb.py` |
 | **fox-services** | 8210 | `/v1/chat/completions` | LLM gateway (OpenAI-compatible) | local Ollama, mesh peers, OpenShell broker |
 | **AI Standards dashboard** | 5173 | `/` | browsable standards taxonomy | its own `data.json` |
 | **OpenShell broker** | 8210 (in fox-services) | `/broker/fetch` | sandboxed fetch, egress policy | Mapper's fetch requests |
@@ -60,12 +61,15 @@ the Classic `security_agent` path, with the ledger recording which core served
 each run.
 
 Do not confuse containers with **app tabs** in the mapper's own UI. AI
-Standards is a separate container that the Mapper *iframes*; the other six
+Standards is a separate container that the Mapper *iframes*; the other seven
 tabs — Mapper, AI Security, **Executive brief — Security & Privacy**, **Risk Console** (also at
-`/console`), Agentic Manager, and Design & Architecture — are pane switches
+`/console`), Agentic Manager, Agent Patterns & Advisor, and Design & Architecture — are pane switches
 inside `static/index.html` (Risk Console also served as a standalone shell at
-`/console` for the toggle). Design & Architecture additionally has no service of
-its own: it reads `design/` through `app/design_docs.py`.
+`/console` for the toggle). Design & Architecture has no service of
+its own: it reads `design/` through `app/design_docs.py`. Agent Patterns & Advisor likewise
+has no service of its own: it iframes the sibling `../AI-Agents-Patterns`
+checkout served same-origin at `/patterns/`, indexed through
+`app/patterns_kb.py` (see [ai-agents-patterns](ai-agents-patterns.md)).
 
 ![The standalone standards dashboard](screenshots/24-standards-dashboard.png)
 
@@ -127,9 +131,10 @@ flowchart TB
 
 | Container / module | Responsibility |
 |---|---|
-| `static/index.html` | Classic GUI: 7 apps (Mapper 9 views, Security 9 sub-tabs, Executive brief — Security & Privacy with four sub-tabs, Risk Console shell, Manager, Standards, Design & Architecture), sidebar, overlays, polling, mermaid + vis-network |
+| `static/index.html` | Classic GUI: 8 apps (Mapper 9 views, Security 9 sub-tabs, Executive brief — Security & Privacy with four sub-tabs, Risk Console shell, Manager, Standards, Agent Patterns & Advisor, Design & Architecture), sidebar, overlays, polling, mermaid + vis-network |
 | `static/console/index.html` | Risk Console shell: persona presets, 10 areas, Risk Cards, Report Reader, charts (Chart.js), graphs (lite/risk/pathway), search suggest, saved views, master–detail, drawers |
 | `app/design_docs.py` | Fixed index over `design/`; serves a design document by id for the Design & Architecture tab |
+| `app/patterns_kb.py` | Read-only index over the sibling AI-Agents-Patterns catalog; summary + lexical search for the AI Agents tab |
 | `app/main.py` | FastAPI routes (~110 paths), request schemas, JSON serializers, `/console` + `/api/console/*` + `/api/search` |
 | `app/agent.py` | Collection loop: plan → search → analyze → map → refine (background thread); provider posture + RLHF + memorization query packs |
 | `app/explainer.py` | Question answering: graph-first research → compose → ground → critique → diagram; investigation_summary now carries `manager_synthesis` |

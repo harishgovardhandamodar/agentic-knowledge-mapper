@@ -88,6 +88,99 @@ def match_command(command: str) -> list[dict]:
     return out
 
 
+def _is_selection(chosen: Any) -> bool:
+    """True when ``chosen`` is a card selection rather than a parse roster.
+
+    The two are told apart by the ``selected`` flag every chip carries. The
+    roster from :func:`match_command` annotates ``matched`` instead: it is
+    "these five exist, these ones match", not a choice. ``[]`` is a
+    selection -- every chip unticked -- and ``None`` is not a selection.
+    """
+    if not isinstance(chosen, list):
+        return False
+    return all(isinstance(e, dict) and "selected" in e for e in chosen)
+
+
+def select(command: str, chosen: Any = None) -> list[dict[str, Any]]:
+    """The investigation mix for a run: the operator's choice, else detection.
+
+    This is what makes the plan card's chips mean something. ``chosen`` is
+    the selection the card (or an API caller) sent; the result is stored on
+    the plan and is the only thing that decides which read-back adapters
+    run at compile time. An explicit selection wins even when it is empty:
+    unticking every chip means run the investigations and read nothing
+    back, which is a legitimate ask, not a fallback to detection.
+
+    A selection is a list of keys; the parse payload's ``plugins`` roster
+    is not one, so posting that verbatim -- which is exactly what the CLI
+    does -- falls back to detection rather than silently selecting all
+    five. Unknown keys are dropped rather than fatal: a plugin can be
+    retired between parse and run, and that must not fail the run.
+
+    Output is in registry order and annotated with ``selected`` so the card
+    can render a stored plan without re-parsing it.
+    """
+    detected = {p["key"]: p for p in match_command(command)}
+    if not _is_selection(chosen):
+        return [dict(detected[key], selected=True)
+                for key in PLUGINS if detected[key]["matched"]]
+    wanted = []
+    for entry in chosen:
+        # The flag decides, not the presence of the entry: a card that
+        # posts its whole roster with unticked chips off must get exactly
+        # the ticked ones back.
+        if not entry.get("selected"):
+            continue
+        key = str(entry.get("key") or "").strip()
+        if key in PLUGINS and key not in wanted:
+            wanted.append(key)
+    out = []
+    for key in PLUGINS:
+        if key not in wanted:
+            continue
+        base = detected.get(key) or {}
+        out.append({"key": key, "title": PLUGINS[key].title,
+                    "version": PLUGINS[key].version,
+                    "matched": bool(base.get("matched")),
+                    "via": base.get("via") or "operator selection",
+                    "selected": True})
+    return out
+
+
+def pack_summary(key: str, pack: dict[str, Any]) -> str:
+    """One deterministic line describing a read-back pack.
+
+    The packs are shaped per plugin -- a CVE count is not a verdict is not
+    a residual -- so each reads its own fields. A non-empty ``gap`` always
+    wins: the adapters use it to say "nothing stored yet", which is the
+    honest line for a synthesis that must not imply coverage it lacks.
+    """
+    title = PLUGINS[key].title if key in PLUGINS else key
+    gap = str(pack.get("gap") or "").strip()
+    if gap:
+        return f"{title}: {gap}"
+    if key == "vulnerability":
+        return (f"{title}: {pack.get('cve_artifacts', 0)} CVE artifact(s), "
+                f"{pack.get('findings', 0)} finding(s)")
+    if key == "hypothesis":
+        counts = pack.get("counts") or {}
+        return (f"{title}: {counts.get('inherent', 0)} inherent + "
+                f"{counts.get('derived', 0)} derived scenario(s)")
+    if key == "writeup":
+        return (f"{title}: write-up #{pack.get('explanation_id')} "
+                f"({pack.get('status') or 'status unknown'}), "
+                f"{pack.get('diagrams', 0)} diagram(s)")
+    if key == "security":
+        residual = pack.get("residual_pct")
+        score = "n/a" if residual is None else f"{residual}/100"
+        return (f"{title}: residual {score} "
+                f"({pack.get('assessment_path') or 'standard'})")
+    # adoption, and anything registered after it: its own verdict label.
+    verdict = pack.get("verdict") or {}
+    label = verdict.get("label") if isinstance(verdict, dict) else None
+    return f"{title}: {label or 'no findings'}"
+
+
 def _clean_vuln_subject(command: str) -> str:
     text = re.sub(r"\s+", " ", (command or "")).strip().rstrip(".?")
     text = re.sub(r"^(list|show|find|search|what are)\b\s+", "", text,

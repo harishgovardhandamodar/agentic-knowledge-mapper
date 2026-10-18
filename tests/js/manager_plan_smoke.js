@@ -9,7 +9,9 @@
  *   2. the three depth radios render with blurbs and the suggested one
  *      checked;
  *   3. mgrDepthPreset maps scout -> research-only, deep -> both on;
- *   4. a legacy plan without plugins/depths still renders.
+ *   4. a legacy plan without plugins/depths still renders;
+ *   5. the chips are real inputs -- a stored selection drives them, so an
+ *      override survives Edit & run instead of reverting to detection.
  *
  * Usage: node manager_plan_smoke.js
  */
@@ -32,7 +34,7 @@ function grab(name) {
   return html.slice(start, i + 1);
 }
 
-const lib = ['escHtml', 'mgrRenderPlan', 'mgrDepthPreset'].map(grab)
+const lib = ['escHtml', 'mgrRenderPlan', 'mgrPluginToggle', 'mgrDepthPreset'].map(grab)
   .join('\n');
 
 function makeDoc() {
@@ -116,5 +118,58 @@ factory(legacy, doc, eval('(' + grab('escHtml').replace('function escHtml', 'fun
 check('legacy plan renders',
   doc.els.mgrPlanBody.innerHTML.includes('>T<') &&
   !doc.els.mgrPlanBody.innerHTML.includes('undefined'));
+
+// 5: the chips are inputs, not badges. A parse roster pre-ticks the
+// matched ones; a stored selection drives them instead, which is what
+// keeps an untick alive across Edit & run.
+doc = makeDoc();
+factory(plan, doc, eval('(' + grab('escHtml').replace('function escHtml', 'function') + ')'));
+const detected = doc.els.mgrPlanBody.innerHTML;
+check('chips are checkboxes',
+  (detected.match(/type="checkbox" data-mgr-plugin="/g) || []).length === 5);
+check('matched pre-ticked',
+  /data-mgr-plugin="security" checked/.test(detected) &&
+  /data-mgr-plugin="writeup" checked/.test(detected) &&
+  /data-mgr-plugin="vulnerability"(?! checked)/.test(detected));
+
+const stored = {
+  ...plan,
+  plugins: [
+    { key: 'vulnerability', title: 'Known vulnerability search and landscape', version: '1', matched: false, via: 'operator selection', selected: true },
+    { key: 'adoption', title: 'Adoption advice', version: '1', matched: false, via: 'operator selection', selected: false },
+  ],
+};
+doc = makeDoc();
+factory(stored, doc, eval('(' + grab('escHtml').replace('function escHtml', 'function') + ')'));
+const overridden = doc.els.mgrPlanBody.innerHTML;
+check('stored selection drives the chips',
+  /data-mgr-plugin="vulnerability" checked/.test(overridden) &&
+  /data-mgr-plugin="adoption"(?! checked)/.test(overridden));
+
+// 6: ticking a chip updates its own pill. Without the handler the pill
+// highlight goes stale on click and the chip feels dead, even though the
+// checkbox itself toggled.
+check('chips wire a toggle handler',
+  (detected.match(/onchange="mgrPluginToggle\(this\)"/g) || []).length === 5);
+const toggleFn = new Function('box',
+  grab('mgrPluginToggle') + '\nreturn mgrPluginToggle(box);');
+function fakePill(checked, initiallyOn) {
+  const classes = new Set(initiallyOn ? ['mgr-plugin', 'on'] : ['mgr-plugin']);
+  return {
+    checked,
+    closest: () => ({
+      classList: { toggle: (cls, force) => {
+        if (force) classes.add(cls); else classes.delete(cls);
+      } },
+    }),
+    _classes: classes,
+  };
+}
+const off = fakePill(false, true);
+toggleFn(off);
+check('unticking drops the on class', !off._classes.has('on'));
+const on = fakePill(true, false);
+toggleFn(on);
+check('ticking adds the on class', on._classes.has('on'));
 
 process.exit(fails ? 1 : 0);

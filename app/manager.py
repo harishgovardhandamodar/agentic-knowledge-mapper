@@ -319,11 +319,18 @@ def validate_plan(plan: dict[str, Any]) -> dict[str, Any]:
     if exposure not in EXPOSURE_META:
         exposure = "confidential_data"
     summary = plan.get("summary") or {}
+    # Passed through as sent and resolved in run_plan, which is the only
+    # place that knows the command: detection needs it to fall back to, and
+    # a roster has to be told apart from a selection. None stays None so
+    # "not sent" is distinguishable from "sent empty".
+    raw_plugins = plan.get("plugins")
     out = {"domain": str(plan.get("domain") or "")[:200],
            "exposure": exposure,
            "incident": bool(plan.get("incident")),
            "plugin": plan.get("plugin") if isinstance(plan.get("plugin"),
                                                       str) else None,
+           "plugins": (raw_plugins if isinstance(raw_plugins, list)
+                       else None),
            "topics": topics,
            "summary": {"title": str(summary.get("title") or
                                    f"Summary: {topics[0]['title']} +{len(topics) - 1}")[:300],
@@ -395,17 +402,31 @@ def _run_row(db, run) -> dict[str, Any]:
             # Echoed so a run can be edited-and-relaunched or retriggered
             # as a new run: the stored plan (minus investigation_id links,
             # which validate_plan drops) re-validates cleanly into run_plan.
+            # plugins is the resolved mix, so a re-run keeps the operator's
+            # override instead of re-deriving one from the command; depths
+            # travels with it because the card needs the catalog to render
+            # the depth radios for a stored plan.
             "domain": plan.get("domain") or "",
             "exposure": plan.get("exposure") or "confidential_data",
             "summary": plan.get("summary") or {},
+            "plugins": plan.get("plugins") or [],
+            "depths": {key: {"label": spec["label"], "blurb": spec["blurb"],
+                             "max_items": spec["max_items"],
+                             "max_rounds": spec["max_rounds"]}
+                       for key, spec in DEPTHS.items()},
             "options": plan.get("options") or {}}
 
 
 def run_plan(db, plan: dict[str, Any], options: dict[str, Any] | None = None,
              command: str = "") -> dict[str, Any]:
     """Create investigations, launch research + assessments, link a summary."""
+    from . import plugins as _plugins
     from .models import ManagerRun
     plan = validate_plan(plan)
+    # Resolved here, once, and stored on the plan: the selection is what
+    # compile_run reads back at the end of the run, and what Edit & run /
+    # Re-run hand to the card again so an override survives a re-run.
+    plan["plugins"] = _plugins.select(command or "", plan.get("plugins"))
     options = {"research": True, "assessment": True, "depth": "standard",
                **(options or {})}
     depth = options.get("depth") or "standard"
@@ -613,12 +634,20 @@ def compile_run(db, run_id: int) -> dict[str, Any]:
     briefs = []
     topics_risks: list[tuple[str, list[dict[str, Any]]]] = []
     topic_gaps: list[tuple[str, list[str]]] = []
+    plugin_rows: list[tuple[str, list[str]]] = []
     plan = {}
     try:
         plan = json.loads(run.plan_json or "{}")
     except Exception:
         plan = {}
     plan_incident = bool(plan.get("incident"))
+    # The run's stored mix, and the only thing that decides which adapters
+    # read the children back. A run stored before the mix was selectable
+    # has no plugins at all and reads nothing back, exactly as it did.
+    from . import plugins as _plugins
+    selected = [str(p.get("key") or "") for p in (plan.get("plugins") or [])
+                if isinstance(p, dict)
+                and str(p.get("key") or "") in _plugins.PLUGINS]
     for c in row["children"]:
         inv = db.query(Investigation).filter(
             Investigation.id == c["investigation_id"]).first()
@@ -658,6 +687,25 @@ def compile_run(db, run_id: int) -> dict[str, Any]:
                                f"({_nd} dated events).")
             except Exception:
                 pass
+        # Read the child back through each selected plugin. This is the
+        # point of the mix: an unchecked plugin contributes nothing, so the
+        # synthesis cannot claim a lens nobody asked for. Deterministic
+        # adapters, so a failure is one missing line, never a failed
+        # compile -- an adapter that raises must not lose the run.
+        readback = []
+        for key in selected:
+            try:
+                pack = _plugins.PLUGINS[key].analyze(
+                    db, c["investigation_id"])
+            except Exception:
+                continue
+            line = _plugins.pack_summary(
+                key, pack if isinstance(pack, dict) else {})
+            if line:
+                readback.append(line)
+        if readback:
+            plugin_rows.append((c["title"], readback))
+            briefs[-1] += "\nInvestigation mix: " + "; ".join(readback) + "."
     overlaps = find_overlaps(topics_risks)
     lapses = find_lapses(topics_risks)
     tables = render_summary_tables(topics_risks, overlaps, lapses)
@@ -689,7 +737,25 @@ def compile_run(db, run_id: int) -> dict[str, Any]:
                         + "".join(f"### {title}\n"
                                   + "".join(f"- {g}\n" for g in gaps)
                                   for title, gaps in topic_gaps))
-    markdown = (tables + gaps_section + _provider_section(db, plan, row)
+    # Stored, not generated: the mix is computed, so it belongs in the
+    # artifact itself rather than in the LLM's prose, for the same reason
+    # the gaps do. An unchecked plugin has no line here, which is how a
+    # reader sees the override was honoured rather than silently dropped.
+    mix_section = ""
+    if plugin_rows:
+        mix_section = ("\n## Investigation mix by topic\n\n"
+                       "What each selected investigation-type plugin read off "
+                       "the stored evidence. Deterministic, not generated; "
+                       "unchecked plugins read nothing back.\n\n"
+                       + "".join(f"### {title}\n"
+                                 + "".join(f"- {line}\n" for line in lines)
+                                 for title, lines in plugin_rows))
+    elif selected:
+        mix_section = ("\n## Investigation mix by topic\n\n"
+                       "No selected plugin found anything to read back on "
+                       "any topic.\n")
+    markdown = (tables + gaps_section + mix_section
+                + _provider_section(db, plan, row)
                 + _incident_section(db, plan, row)
                 + "\n## Synthesis\n\n" + (text or "").strip() + "\n")
     art = Artifact(investigation_id=summary_id,
@@ -707,7 +773,7 @@ def compile_run(db, run_id: int) -> dict[str, Any]:
     db.commit()
     db.refresh(art)
     return {"artifact_id": art.id, "summary_investigation_id": summary_id,
-            "markdown": markdown, "existing": False}
+            "markdown": markdown, "plugins": selected, "existing": False}
 
 
 class PendingChildren(Exception):

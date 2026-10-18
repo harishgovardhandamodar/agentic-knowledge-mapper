@@ -19,6 +19,31 @@ grant a time-bounded exception — which is itself a ledger event.
 
 ![Knowledge graph of the "frontier model" investigation, with legend](docs/screenshots/01-knowledge-graph.png)
 
+## What's new — Agent Patterns & Advisor tab: patterns, scenarios, guardrails
+
+The app switcher gains a sixth app, **Agent Patterns & Advisor**,
+which embeds the sibling **AI-Agents-Patterns** knowledge base: 107 design
+patterns, 43 failure scenarios, 180 composition cascades, 39 replayable mock
+traces, plus a deployment planner, blueprint builder and guardrail lab. The
+Security agent says what *your* product's residual is from stored rows; this
+tab says what the field has learned about the failure mode in general — the
+advice to read before writing a control plan.
+
+- **Same-origin, no second port.** The sibling checkout is served at
+  `/patterns/` (overridable via `AKM_PATTERNS_DIR`), so the tab is an
+  iframe with no CORS and no extra service. A missing checkout is a state,
+  not a crash: the pane states the reason instead of showing a broken frame.
+- **A read-only index, not a paraphrase.** `GET /api/patterns/summary`
+  (live counts) and `GET /api/patterns/search` (lexical search; hits name
+  kind + id) let this app's surfaces cite the catalog without re-authoring
+  it. Search is deliberately lexical — the catalog is the authority.
+- **Guardrail Lab + Deployment Plan included.** Type an agent idea and get a
+  risk score, guardrail architecture, cascade-aware rules and a replayable
+  mock run (blocked attack vs approved legitimate path) — the mock to run
+  before the control plan is written.
+
+Full detail: [docs/ai-agents-patterns.md](docs/ai-agents-patterns.md).
+
 ## What's new — assurance-grade evaluation
 
 This work turned the AI Security evaluation from a research instrument into a
@@ -170,6 +195,7 @@ control catalogue, and the assurance closed loop.
 | [docs/group-research.md](docs/group-research.md) | How a group shares the tool: reviewer identity, measured agreement, dataset export, gap lifecycle, scenario-to-probe loop — class, sequence, activity and state diagrams |
 | [docs/threatpack.md](docs/threatpack.md) | The versioned scoring catalog: 12 threats, 15 controls, exposure tiers, evalkit |
 | [docs/agentic-manager.md](docs/agentic-manager.md) | Command parsing, fan-out, timeline, summary compilation, nesting |
+| [docs/ai-agents-patterns.md](docs/ai-agents-patterns.md) | Agent Patterns & Advisor tab: sibling patterns/scenarios/cascades catalog, deployment planner, guardrail lab |
 | [docs/standards-coverage.md](docs/standards-coverage.md) | 34 frameworks × 10 pillars, score matrix, Findings grading, dashboard |
 | [docs/data-model.md](docs/data-model.md) | ER diagram, tables, review lifecycle, migrations |
 | [docs/ledger.md](docs/ledger.md) | The hash chain, mandates, approvals, proofs, sessions, offline verification, the assurance ledger |
@@ -213,10 +239,13 @@ Details: [agent-loop](docs/agent-loop.md).
 Components, UML diagrams, and data flows: [architecture](docs/architecture.md)
 and [design/01-system-context.md](design/01-system-context.md).
 
-**Five apps in one page.** The app switcher opens *Mapper* (collect, map,
+**Six apps in one page.** The app switcher opens *Mapper* (collect, map,
 review, explain), *AI Security* (assess, score, control), *Agentic Manager*
 (one command → N investigations + a summary), *AI Standards* (34
-frameworks × 10 pillars), and *Design & Architecture* (the eleven Mermaid
+frameworks × 10 pillars), *Agent Patterns & Advisor* (107 design patterns, 43 failure
+scenarios, 180 composition cascades, deployment planner, guardrail lab —
+the advice-first knowledge base in [docs/ai-agents-patterns.md](docs/ai-agents-patterns.md)),
+and *Design & Architecture* (the eleven Mermaid
 design documents, rendered live rather than screenshotted). Mapper has nine
 views; Security has nine sub-tabs plus the **Executive brief — Security &
 Privacy** layer (Assurance board · Portfolio register · Fox services nodes ·
@@ -599,6 +628,19 @@ run. The finished topics nest under the summary in the mapper sidebar.
 
 ![Manager run with per-lane timeline and the compiled summary](docs/screenshots/18-manager-summary.png)
 
+### Agent Patterns & Advisor
+
+Advice-first where the Security agent is evidence-first: the Agent Patterns & Advisor tab
+embeds the sibling **AI-Agents-Patterns** catalog (same-origin at
+`/patterns/`, deep-linkable as `#agents`) — 107 design patterns, 43 failure
+scenarios, 180 composition cascades, 39 replayable mock traces, a deployment
+planner, a blueprint builder with per-blueprint threat model, and a guardrail
+lab that turns your own agent idea into a risk score, guardrail architecture
+and mock run. The tab header cites live catalog counts from
+`GET /api/patterns/summary`, and `GET /api/patterns/search` indexes the
+catalog lexically so this app's surfaces can link into it without
+re-authoring it. See [docs/ai-agents-patterns.md](docs/ai-agents-patterns.md).
+
 GUI map and flows: [frontend](docs/frontend.md), [design/ui-interaction.md](design/ui-interaction.md).
 
 ## Proofs
@@ -695,7 +737,7 @@ an action are provable afterwards:
 
 ## API (selection)
 
-187 paths; `GET /openapi.json` lists them all.
+238 paths; `GET /openapi.json` lists them all.
 
 | Method | Path | Description |
 |---|---|---|
@@ -747,6 +789,8 @@ an action are provable afterwards:
 | GET | `/api/agents/cards`, `/.well-known/agents` | A2A agent registry (fifteen cards) |
 | GET | `/api/standards/score-matrix?assessment_id=` | Relevance-ranked framework matrix for an assessment |
 | GET | `/api/design/docs`, `/api/design/docs/{id}` | The design set: index with diagram counts / one document as Markdown |
+| GET | `/api/patterns/status`, `/api/patterns/summary` | Sibling catalog availability + live counts (patterns, scenarios, cascades, traces) |
+| GET | `/api/patterns/search?q=&kind=&limit=` | Lexical search over the catalog; hits name kind + id for the tab to link to |
 | POST | `/api/manager/parse`, `/api/manager/run` | Understand a command (no side effects) / fan out |
 | GET | `/api/manager/runs`, `/api/manager/runs/{id}` | Run status list / one run |
 | POST | `/api/manager/runs/{id}/compile` | Synthesise the summary (409 while a child runs) |

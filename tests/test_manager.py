@@ -19,6 +19,7 @@ os.environ["AKM_DATABASE_URL"] = os.environ.get("AKM_TEST_DB") or (
 from app import agent as agent_mod  # noqa: E402
 from app import database  # noqa: E402
 from app import manager as mgr  # noqa: E402
+from app import plugins as plugins_mod  # noqa: E402
 from app.database import SessionLocal  # noqa: E402
 from app.models import (  # noqa: E402
     AgentEvent,
@@ -255,15 +256,15 @@ class TestCompile(unittest.TestCase):
         from app import main as main_mod
         cls.client = TestClient(main_mod.app)
 
-    def _ready_run(self):
+    def _ready_run(self, plan=None, command=""):
         db = _db()
         try:
             with mock.patch.object(mgr, "launch_run"), \
                  mock.patch.object(mgr, "launch_security_assessment"):
-                row = mgr.run_plan(db, _plan(1), None)
-            plan = json.loads(db.query(ManagerRun).filter(
+                row = mgr.run_plan(db, plan or _plan(1), None, command)
+            plan_json = json.loads(db.query(ManagerRun).filter(
                 ManagerRun.id == row["id"]).first().plan_json)
-            inv_id = plan["topics"][0]["investigation_id"]
+            inv_id = plan_json["topics"][0]["investigation_id"]
             inv = db.query(Investigation).filter(
                 Investigation.id == inv_id).first()
             inv.status = "ready"
@@ -379,6 +380,121 @@ class TestCompile(unittest.TestCase):
             mc2.assert_not_called()
         finally:
             db.close()
+
+
+class TestPluginOverride(unittest.TestCase):
+    """The plan card's mix is the operator's choice, and it has to land.
+
+    Plugins never gate execution (launches live in their home modules), so
+    the selection's whole effect is the read-back at compile time. These
+    pin that an override reaches the stored synthesis, and that a run with
+    no selection reads back nothing rather than everything.
+    """
+
+    def _run(self, plan=None, command=""):
+        db = _db()
+        try:
+            with mock.patch.object(mgr, "launch_run"), \
+                 mock.patch.object(mgr, "launch_security_assessment"):
+                # No assessment: the children are done once research is, and
+                # the lenses under test all read something other than one.
+                row = mgr.run_plan(db, plan or _plan(1),
+                                   {"research": True, "assessment": False},
+                                   command)
+            stored = json.loads(db.query(ManagerRun).filter(
+                ManagerRun.id == row["id"]).first().plan_json)
+            inv = db.query(Investigation).filter(
+                Investigation.id
+                == stored["topics"][0]["investigation_id"]).first()
+            inv.status = "ready"
+            # No assessment and no artifacts, so every adapter reports a
+            # gap: what a reader sees is the selection, not the evidence.
+            db.commit()
+            return row["id"], [p["key"] for p in stored["plugins"]]
+        finally:
+            db.close()
+
+    def _compile(self, rid):
+        db = _db()
+        try:
+            with mock.patch.object(mgr.llm, "chat", return_value="# synth"):
+                return mgr.compile_run(db, rid)
+        finally:
+            db.close()
+
+    def test_selection_is_stored_and_echoed(self):
+        rid, keys = self._run({"plugins": [{"key": "vulnerability",
+                                            "selected": True}],
+                               **_plan(1)})
+        self.assertEqual(keys, ["vulnerability"])
+        db = _db()
+        try:
+            row = mgr._run_row(db, db.query(ManagerRun).filter(
+                ManagerRun.id == rid).first())
+        finally:
+            db.close()
+        # Echoed so Edit & run keeps the override instead of re-detecting.
+        self.assertEqual([p["key"] for p in row["plugins"]],
+                         ["vulnerability"])
+        self.assertEqual(row["plugins"][0]["selected"], True)
+        self.assertTrue(row["depths"], "the card needs the depth catalog")
+
+    def test_only_the_selected_lens_reads_back(self):
+        rid, _ = self._run({"plugins": [{"key": "vulnerability",
+                                         "selected": True},
+                                        {"key": "writeup", "selected": True}],
+                            **_plan(1)})
+        out = self._compile(rid)
+        md = out["markdown"]
+        self.assertEqual(out["plugins"], ["vulnerability", "writeup"])
+        self.assertIn("## Investigation mix by topic", md)
+        self.assertIn("Known vulnerability search and landscape", md)
+        self.assertIn("Write-up / explainer", md)
+        # The unselected three contributed no line at all.
+        self.assertNotIn("Adoption advice", md)
+        self.assertNotIn("Hypothesiser", md)
+        self.assertNotIn("Security and privacy assessment", md)
+        # ...and the gap is stated rather than dressed up as coverage.
+        self.assertIn("no CVE artifacts collected yet", md)
+        self.assertIn("no write-up yet", md)
+
+    def test_no_selection_reads_nothing_back(self):
+        rid, keys = self._run()
+        # Detection: security always matches, so that is the only lens.
+        self.assertEqual(keys, ["security"])
+        md = self._compile(rid)["markdown"]
+        self.assertIn("Security and privacy assessment", md)
+        self.assertNotIn("Known vulnerability search and landscape", md)
+
+    def test_empty_selection_reads_nothing_at_all(self):
+        rid, keys = self._run({"plugins": [], **_plan(1)})
+        self.assertEqual(keys, [])
+        md = self._compile(rid)["markdown"]
+        self.assertNotIn("## Investigation mix by topic", md)
+        self.assertNotIn("Security and privacy assessment", md)
+
+    def test_a_raising_adapter_loses_one_line_not_the_compile(self):
+        rid, _ = self._run({"plugins": [{"key": "vulnerability",
+                                         "selected": True},
+                                        {"key": "writeup", "selected": True}],
+                            **_plan(1)})
+        db = _db()
+        try:
+            boom = mock.Mock(side_effect=RuntimeError("adapter exploded"))
+            real = plugins_mod.PLUGINS["vulnerability"]
+            with mock.patch.dict(plugins_mod.PLUGINS, {"vulnerability": mock.Mock(
+                    key="vulnerability", title=real.title,
+                    version=real.version, seats=real.seats,
+                    detect_command=real.detect_command,
+                    plan_topics=real.plan_topics, analyze=boom,
+                    fingerprint=real.fingerprint)}):
+                with mock.patch.object(mgr.llm, "chat", return_value="# synth"):
+                    out = mgr.compile_run(db, rid)
+        finally:
+            db.close()
+        self.assertIn("Write-up / explainer", out["markdown"])
+        self.assertNotIn("Known vulnerability search and landscape",
+                         out["markdown"])
 
 
 class TestSubagentMap(unittest.TestCase):

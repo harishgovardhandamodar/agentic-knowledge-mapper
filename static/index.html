@@ -54,6 +54,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 #securityPane.visible { display: flex; flex-direction: column; }
 #standardsPane { grid-column: 1 / -1; min-height: 0; overflow: auto; display: none; }
 #standardsPane.visible { display: flex; flex-direction: column; }
+#agentsPane { grid-column: 1 / -1; min-height: 0; overflow: auto; display: none; }
+#agentsPane.visible { display: flex; flex-direction: column; }
 #dashboardPane { grid-column: 1 / -1; min-height: 0; overflow: hidden; display: none; }
 #dashboardPane.visible { display: flex; flex-direction: column; }
 #dashboardPane .sec-shell { overflow-y: auto; }
@@ -143,8 +145,19 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .mgr-topic:last-child { border-bottom: none; }
 .mgr-topic input[type="checkbox"] { margin-top: 3px; }
 .mgr-topic .grow { flex: 1; min-width: 0; }
-.mgr-plugin { display: inline-block; font-size: 11px; padding: 2px 8px; border: 1px solid var(--border); border-radius: 10px; color: var(--text2); }
+.mgr-plugin { display: inline-flex; gap: 5px; align-items: center; cursor: pointer; font-size: 11px; padding: 2px 8px; border: 1px solid var(--border); border-radius: 10px; color: var(--text2); }
 .mgr-plugin.on { border-color: var(--accent); color: var(--text); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+/* Its own container, deliberately not `.std-filters`: that class stretches
+ * every input inside it to a text field's width, which turns a chip's
+ * checkbox into an empty box that looks disabled. */
+.mgr-mix { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 12px; }
+.mgr-mix > div:first-child { flex-basis: 100%; }
+/* The chip's own checkbox. This selector is deliberately more specific
+ * than `.std-filters input` (two attributes vs one class): that rule
+ * stretches every input it finds to `flex: 1; min-width: 160px` with a
+ * field background, which renders a raw checkbox as a wide empty box
+ * that reads as a disabled control. The chips can sit anywhere then. */
+.mgr-plugin input[type="checkbox"] { flex: none; min-width: 0; width: 13px; height: 13px; margin: 0; padding: 0; background: none; border: none; border-radius: 0; cursor: pointer; accent-color: var(--accent); }
 .mgr-child { display: flex; gap: 10px; align-items: center; padding: 7px 4px; border-bottom: 1px solid var(--border); font-size: 12px; flex-wrap: wrap; }
 .mgr-child:last-child { border-bottom: none; }
 .mgr-child .grow { flex: 1; min-width: 180px; }
@@ -181,6 +194,12 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .mgr-md pre { background: var(--bg3); border-radius: 6px; padding: 8px 10px; overflow-x: auto; font-size: 11.5px; }
 .mgr-md code { background: var(--bg3); border-radius: 4px; padding: 0 5px; font-size: 11.5px; }
 #standardsFrame { flex: 1 1 auto; min-height: 0; min-height: min(70vh, 600px); width: 100%; border: none; background: var(--bg); display: block; }
+#agentsFrame { flex: 1 1 auto; min-height: 0; min-height: min(70vh, 600px); width: 100%; border: none; background: var(--bg); display: block; }
+.agents-fallback { padding: 18px 22px; font-size: 12.5px; color: var(--text2); }
+.agents-fallback[hidden] { display: none; }
+.agents-fallback .agents-counts { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0; }
+.agents-count { border: 1px solid var(--border); border-radius: 8px; padding: 6px 12px; background: var(--bg2); font-size: 12px; }
+.agents-count b { font-size: 15px; display: block; }
 .sidebar { background: var(--bg2); border-right: 1px solid var(--border); padding: 16px; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; }
 .llm-dot { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text2); }
 .llm-dot .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--orange); }
@@ -1143,6 +1162,11 @@ body.pane-sec-top-collapsed .sec-topbar-sub { display: none; }
       <i class="fas fa-scale-balanced"></i> AI Standards &amp; Regulations
       <span class="app-tab-sub">frameworks · coverage · advisor</span>
     </button>
+    <button class="app-tab" data-app="agents" onclick="switchApp('agents')" role="tab">
+      <i class="fas fa-shapes"></i> Agent Patterns &amp; Advisor
+      <span class="app-tab-sub">patterns · scenarios · guardrails</span>
+      <span class="app-tab-badge" id="agentsTabBadge" style="display:none;"></span>
+    </button>
     <button class="app-tab" data-app="design" onclick="switchApp('design')" role="tab">
       <i class="fas fa-compass-drafting"></i> Design &amp; Architecture
       <span class="app-tab-sub">diagrams · data model · privacy</span>
@@ -1223,6 +1247,7 @@ body.pane-sec-top-collapsed .sec-topbar-sub { display: none; }
   <div class="main">
     <div class="main-tabs">
       <div class="main-tab active" data-view="graph" onclick="switchView('graph')"><i class="fas fa-project-diagram"></i> Knowledge graph</div>
+      <div class="main-tab" data-view="control" onclick="switchView('control')"><i class="fas fa-sliders"></i> Investigation control</div>
       <div class="main-tab" data-view="artifacts" onclick="switchView('artifacts')"><i class="fas fa-list-check"></i> Review <span id="pendingCount"></span></div>
       <div class="main-tab" data-view="collection" onclick="switchView('collection')"><i class="fas fa-box-archive"></i> Artifacts</div>
       <div class="main-tab" data-view="cves" onclick="switchView('cves')"><i class="fas fa-bug"></i> Known issues <span id="cveCount"></span></div>
@@ -1353,6 +1378,54 @@ body.pane-sec-top-collapsed .sec-topbar-sub { display: none; }
         </div>
         <div id="planBox"></div>
         <div class="console-log" id="consoleLog"></div>
+      </div>
+
+      <div class="view" id="controlView">
+        <div class="sec-card">
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+            <div style="flex:1;min-width:220px;">
+              <div style="font-size:12px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text2);font-weight:600;">Investigation control</div>
+              <div style="font-size:11.5px;color:var(--text3);">Re-run the investigation in focus in full or part by part. Every part reports its own outcome.</div>
+            </div>
+            <button class="btn btn-ghost btn-sm" onclick="icLoadState()"><i class="fas fa-rotate"></i> Refresh</button>
+          </div>
+          <div id="icTarget" style="font-size:12px;color:var(--text2);margin-top:8px;"></div>
+          <div id="icCounts" style="font-size:11.5px;color:var(--text3);margin-top:4px;"></div>
+        </div>
+        <div class="sec-card">
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px;">
+            <div style="flex:1;font-size:12px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text2);font-weight:600;">Parts <span id="icPartsCount" class="sec-subtab-n"></span></div>
+            <button class="btn btn-ghost btn-sm" onclick="icSelectAllParts(true)">All</button>
+            <button class="btn btn-ghost btn-sm" onclick="icSelectAllParts(false)">None</button>
+            <button class="btn btn-ghost btn-sm" onclick="icSelectAllParts(true)" title="Tick only the parts that can run right now; unavailable parts are never ticked">Available only</button>
+            <button class="btn btn-primary btn-sm" onclick="icRunSelected(this)" title="Re-run only the ticked parts"><i class="fas fa-play"></i> Re-run selected</button>
+            <button class="btn btn-primary btn-sm" onclick="icRunAll(this)" title="Re-run every part that is available, in dependency order"><i class="fas fa-rotate"></i> Re-run everything</button>
+          </div>
+          <div id="icParts"></div>
+        </div>
+        <div class="sec-card" id="icResultCard" hidden>
+          <div style="font-size:12px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text2);font-weight:600;margin-bottom:8px;">Last trigger</div>
+          <div id="icResult"></div>
+        </div>
+        <div class="sec-card">
+          <div style="font-size:12px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text2);font-weight:600;margin-bottom:4px;">Security risk questionnaire</div>
+          <div style="font-size:11.5px;color:var(--text3);margin-bottom:8px;">
+            Frames a questionnaire from your description, for the product and
+            services teams to fill in, covering AI security standards and
+            compliance. Every question is routed to the team that owns it and
+            tagged to the standard it evidences; an invented control is dropped
+            rather than counted as coverage.
+          </div>
+          <div class="form-group" style="margin-bottom:8px;">
+            <label for="icRqQuery">Describe the AI system</label>
+            <textarea id="icRqQuery" style="min-height:76px;" placeholder="What the system does, who it acts for, what it may decide alone, what data it handles, and which regimes you must evidence."></textarea>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+            <button class="btn btn-ghost btn-sm" onclick="icRqPrefill()" title="Fill the description from the investigation in focus"><i class="fas fa-wand-magic-sparkles"></i> Use this investigation</button>
+            <button class="btn btn-primary btn-sm" onclick="icRqGenerate(this)"><i class="fas fa-file-lines"></i> Generate questionnaire</button>
+          </div>
+          <div id="icRqResult" style="margin-top:10px;"></div>
+        </div>
       </div>
 
       <div class="view" id="auditView">
@@ -1804,6 +1877,14 @@ body.pane-sec-top-collapsed .sec-topbar-sub { display: none; }
   <div id="standardsPane">
     <iframe id="standardsFrame" title="AI Standards &amp; Regulations Dashboard" loading="lazy"></iframe>
   </div>
+  <div id="agentsPane">
+    <div class="agents-fallback" id="agentsFallback" hidden>
+      <b style="color:var(--text)">Agent Patterns &amp; Advisor knowledge base</b>
+      <div id="agentsFallbackBody">Checking availability…</div>
+      <div class="agents-counts" id="agentsCounts"></div>
+    </div>
+    <iframe id="agentsFrame" title="AI Agent Patterns &amp; Guardrails" loading="lazy"></iframe>
+  </div>
   <div id="designPane">
     <div class="design-rail">
       <div class="design-rail-head">
@@ -2146,6 +2227,10 @@ async function selectInvestigation(id) {
   if (typeof updateSecInvName === 'function') updateSecInvName();
   clusterCache = { category: null, similarity: null };
   clusterMode = 'off'; updateClusterButtons();
+  // The control view acts on whatever the sidebar has in focus, so a change
+  // of investigation has to refresh it or it would show the previous one's
+  // parts -- a panel that looks right and acts on the wrong target.
+  if (typeof icLoadState === 'function') icLoadState();
   stopPolling(); stopExpPoll();
   refreshCveBadge(0);
   fetch(`${API}/investigations/${id}/cves`).then(r => r.json()).then(d => {
@@ -5430,11 +5515,20 @@ const APP_TITLES = {
   dashboard: 'Executive brief — Security & Privacy',
   manager: 'Agentic Manager',
   standards: 'AI Standards & Regulations',
+  agents: 'Agent Patterns & Advisor',
   design: 'Design & Architecture',
 };
 
 function standardsUrl() {
   return 'http://' + (window.location.hostname || 'localhost') + ':5173/';
+}
+
+function patternsUrl() {
+  // Same-origin mount of the sibling ../AI-Agents-Patterns SPA (see the
+  // /patterns mount in app/main.py): no second port, no CORS. The API
+  // reports available:false when the sibling checkout is absent, and the
+  // pane then shows that reason instead of a broken frame.
+  return '/patterns/';
 }
 
 function sizeStandardsFrame() {
@@ -5450,7 +5544,55 @@ function sizeStandardsFrame() {
   frame.style.height = h + 'px';
 }
 
-window.addEventListener('resize', () => { sizeStandardsFrame(); });
+function sizeAgentsFrame() {
+  const pane = document.getElementById('agentsPane');
+  const frame = document.getElementById('agentsFrame');
+  if (!pane || !frame || currentApp !== 'agents') return;
+  const host = pane.parentElement;
+  const w = Math.max(320, Math.floor(host && host.clientWidth ? host.clientWidth : window.innerWidth));
+  const h = Math.max(320, Math.floor(window.innerHeight - pane.getBoundingClientRect().top));
+  pane.style.width = w + 'px';
+  frame.style.width = w + 'px';
+  pane.style.height = h + 'px';
+  frame.style.height = h + 'px';
+}
+
+async function agentsLoadFallback() {
+  // Advice-first summary above the frame: what the catalog holds, so the tab
+  // is useful even before the SPA below it finishes loading -- and the exact
+  // reason when the sibling checkout is absent instead of a blank iframe.
+  const body = document.getElementById('agentsFallbackBody');
+  const counts = document.getElementById('agentsCounts');
+  const badge = document.getElementById('agentsTabBadge');
+  let status = null, summary = null;
+  try {
+    const r = await fetch(API + '/patterns/status');
+    if (r.ok) status = await r.json();
+  } catch (e) { /* offline backend: leave the loading text */ }
+  try {
+    const r = await fetch(API + '/patterns/summary');
+    if (r.ok) summary = await r.json();
+  } catch (e) { /* summary is nice-to-have */ }
+  const fb = document.getElementById('agentsFallback');
+  if (fb) fb.hidden = false;
+  if (!status || !status.available) {
+    if (body) body.textContent = (status && status.reason) ||
+      'The patterns catalog is not mounted on this server (sibling ../AI-Agents-Patterns not found).';
+    const frame = document.getElementById('agentsFrame');
+    if (frame) frame.style.display = 'none';
+    return;
+  }
+  const c = (summary && summary.counts) || {};
+  if (body) body.textContent = 'Design patterns, failure scenarios, composition cascades and replayable mock traces for AI agents — plus a deployment planner, blueprint builder and guardrail lab. Served same-origin from the sibling catalog.';
+  if (counts) counts.innerHTML = [
+    ['patterns', c.patterns], ['scenarios', c.scenarios],
+    ['cascades', c.cascades], ['mock traces', c.traces],
+  ].map(([k, v]) => `<span class="agents-count"><b>${v == null ? '–' : v}</b>${k}</span>`).join('');
+  const total = (c.patterns || 0) + (c.scenarios || 0) + (c.cascades || 0);
+  if (badge && total) { badge.style.display = ''; badge.textContent = total + ' entries'; }
+}
+
+window.addEventListener('resize', () => { sizeStandardsFrame(); sizeAgentsFrame(); });
 
 function switchApp(app) {
   if (!APP_TITLES[app]) app = 'akm';
@@ -5466,12 +5608,14 @@ function switchApp(app) {
   const dash = document.getElementById('dashboardPane');
   const mgr = document.getElementById('managerPane');
   const std = document.getElementById('standardsPane');
+  const agt = document.getElementById('agentsPane');
   const dsn = document.getElementById('designPane');
   akm.classList.toggle('hidden', app !== 'akm');
   sec.classList.toggle('visible', app === 'security');
   if (dash) dash.classList.toggle('visible', app === 'dashboard');
   if (mgr) mgr.classList.toggle('visible', app === 'manager');
   if (std) std.classList.toggle('visible', app === 'standards');
+  if (agt) agt.classList.toggle('visible', app === 'agents');
   if (dsn) dsn.classList.toggle('visible', app === 'design');
   document.getElementById('searchInput').style.display = (app === 'akm') ? '' : 'none';
   const title = document.getElementById('appTitle');
@@ -5505,6 +5649,12 @@ function switchApp(app) {
     if (frame && !frame.src) frame.src = standardsUrl();
     setTimeout(sizeStandardsFrame, 0);
     setTimeout(sizeStandardsFrame, 150);
+  } else if (app === 'agents') {
+    const frame = document.getElementById('agentsFrame');
+    if (frame && !frame.src) frame.src = patternsUrl();
+    agentsLoadFallback();
+    setTimeout(sizeAgentsFrame, 0);
+    setTimeout(sizeAgentsFrame, 150);
   } else if (app === 'design') {
     designOpenApp();
   } else if (network) {
@@ -5581,6 +5731,7 @@ function switchView(view) {
   if (view === 'collection') loadCollection();
   if (view === 'cves') loadCvesView();
   if (view === 'artifacts' && typeof loadArtifacts === 'function' && currentInv) loadArtifacts();
+  if (view === 'control' && typeof icInit === 'function') icInit();
 }
 
 
@@ -6989,7 +7140,7 @@ if (location.hash.startsWith('#design')) {
   const want = decodeURIComponent(location.hash.split('/')[1] || '');
   if (want) designDocId = want;
   switchApp('design');
-} else if (['#security', '#dashboard', '#manager', '#standards'].includes(location.hash)) switchApp(location.hash.slice(1));
+} else if (['#security', '#dashboard', '#manager', '#standards', '#agents'].includes(location.hash)) switchApp(location.hash.slice(1));
 
 /* Following a link that only changes the fragment does not reload the page, so
    the boot code above never runs again. Without this, pasting #design/privacy
@@ -9500,11 +9651,13 @@ function mgrRenderPlan() {
       `<select data-mgr-exp="${i}" aria-label="Exposure for ${escHtml(t.title)}" title="Exposure tier for this topic" onclick="event.stopPropagation();" style="background:var(--bg2);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:11px;padding:3px 6px;flex-shrink:0;">` +
       `${['restricted_data', 'confidential_data', 'internal', 'public'].map(e => `<option value="${e}"${(t.exposure || mgrPlan.exposure) === e ? ' selected' : ''}>${e.replace(/_/g, ' ')}</option>`).join('')}</select></label>`
     ).join('') +
-    `<div class="std-filters" style="margin-top:10px;">` +
-    `<div style="font-size:12px;color:var(--text2);margin-bottom:6px;">Investigation mix: ` +
+    `<div class="mgr-mix">` +
+    `<div style="font-size:12px;color:var(--text2);margin-bottom:6px;">Investigation mix ` +
+    `<span style="color:var(--text2);">(auto-detected — untick to skip a lens' read-back):</span></div>` +
     `${(mgrPlan.plugins || []).map(p =>
-      `<span class="mgr-plugin${p.matched ? ' on' : ''}" title="${escHtml(p.title)} v${escHtml(p.version || '')} — ${escHtml(p.via || '')}">${p.matched ? '✓ ' : ''}${escHtml(p.title)}</span>`
+      `<label class="mgr-plugin${(p.selected != null ? p.selected : p.matched) ? ' on' : ''}" title="${escHtml(p.title)} v${escHtml(p.version || '')} — ${escHtml(p.via || '')}"><input type="checkbox" data-mgr-plugin="${escHtml(p.key)}"${(p.selected != null ? p.selected : p.matched) ? ' checked' : ''} onchange="mgrPluginToggle(this)" /> ${p.matched ? '✓ ' : ''}${escHtml(p.title)}</label>`
     ).join(' ') || '<span style="color:var(--text2);">standard lens</span>'}</div>` +
+    `<div class="std-filters" style="margin-top:10px;">` +
     `<div style="font-size:12px;margin-bottom:6px;" role="radiogroup" aria-label="Episode depth">` +
     `${Object.entries(mgrPlan.depths || {}).map(([key, d]) =>
       `<label style="display:inline-flex;gap:4px;align-items:center;margin-right:10px;" title="${escHtml(d.blurb || '')}"><input type="radio" name="mgrDepth" value="${escHtml(key)}"${key === (mgrPlan.suggested_depth || 'standard') ? ' checked' : ''} onchange="mgrDepthPreset()" /> ${escHtml(d.label || key)}</label>`
@@ -9513,6 +9666,15 @@ function mgrRenderPlan() {
     `<label style="font-size:12px;display:flex;gap:6px;align-items:center;"><input type="checkbox" id="mgrOptAssess" checked /> Security assessment</label>` +
     `<button class="btn btn-primary btn-sm" onclick="mgrRun()"><i class="fas fa-play"></i> Run ${mgrPlan.topics.length} investigations + summary</button></div>` +
     `<div class="std-note">Summary: <strong>${escHtml((mgrPlan.summary || {}).title || '')}</strong></div>`;
+}
+
+function mgrPluginToggle(box) {
+  // Keep the pill highlight in sync with the checkbox: without this the
+  // chip looks dead when ticked/unticked, even though mgrRun reads the
+  // checkbox itself. Walk up to the label rather than trusting a fixed
+  // parent, so re-nesting the row cannot silently break the feedback.
+  const pill = box && box.closest ? box.closest('.mgr-plugin') : null;
+  if (pill) pill.classList.toggle('on', !!box.checked);
 }
 
 function mgrDepthPreset() {
@@ -9537,7 +9699,16 @@ async function mgrRun() {
     }
   });
   if (!keep.length) { showNotif('Keep at least one topic', 'error'); return; }
-  const plan = { ...mgrPlan, topics: keep };
+  // Send the mix as an explicit selection, ticked chips only. Always a
+  // list, even when empty: an empty selection means read nothing back,
+  // which the backend must not mistake for "not sent, detect for me".
+  const chosen = [];
+  document.querySelectorAll('[data-mgr-plugin]').forEach(box => {
+    if (!box.checked) return;
+    const p = (mgrPlan.plugins || []).find(x => x.key === box.getAttribute('data-mgr-plugin'));
+    if (p) chosen.push({ ...p, selected: true });
+  });
+  const plan = { ...mgrPlan, topics: keep, plugins: chosen };
   const depthSel = document.querySelector('input[name="mgrDepth"]:checked');
   const depth = depthSel ? depthSel.value : (mgrPlan.suggested_depth || 'standard');
   const spec = (mgrPlan.depths || {})[depth] || {};
@@ -9574,6 +9745,290 @@ async function mgrLoadRuns() {
     mgrRenderRuns(d.runs || []);
   } catch (e) {
     box.innerHTML = `<p style="color:var(--text2);font-size:12px;">Could not load runs: ${escHtml(e.message)}</p>`;
+  }
+}
+
+/* Investigation control ==================================================
+ * Sits beside the knowledge graph in the AKM pane and acts on the
+ * investigation in focus in the sidebar, so there is no second picker that
+ * can disagree with the first. The rows come from
+ * `/api/investigations/{id}/control`, which owns every guard (see
+ * app/investigation_control.py): the checkbox is only ever a selection, it
+ * never decides whether something may run.
+ *
+ * Deliberately not polling. The runs list polls because children finish on
+ * their own; here the operator drives every action, so a background refresh
+ * would only fight with the state they are editing. Outcomes render from the
+ * POST response and the panel is re-read once at the end of it.
+ */
+const icState = { parts: [], selected: new Set(), busy: false };
+
+function icTargetId() {
+  return typeof currentInv !== 'undefined' ? currentInv : null;
+}
+
+async function icInit() {
+  icRqLoadRoles();
+  if (!icTargetId()) {
+    document.getElementById('icParts').innerHTML =
+      '<p style="color:var(--text2);font-size:12px;">No investigation in focus — pick one in the sidebar.</p>';
+    return;
+  }
+  await icLoadState();
+}
+
+async function icLoadState() {
+  const box = document.getElementById('icParts');
+  const id = icTargetId();
+  if (!id) return icInit();
+  try {
+    const r = await fetch(`${API}/investigations/${id}/control`);
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error((d && typeof d.detail === 'string') ? d.detail : `HTTP ${r.status}`);
+    icRenderState(d);
+  } catch (e) {
+    box.innerHTML = `<p style="color:var(--text2);font-size:12px;">Could not load parts: ${escHtml(e.message)}</p>`;
+  }
+}
+
+function icRenderState(state) {
+  icState.parts = state.parts || [];
+  // Keep only ticks that still exist and are still runnable, so a stale tick
+  // cannot survive into a trigger and come back as an error the operator
+  // did not cause.
+  const runnable = new Set(icState.parts.filter(p => p.available).map(p => p.key));
+  icState.selected = new Set([...icState.selected].filter(k => runnable.has(k)));
+  const inv = (typeof investigations !== 'undefined' ? investigations : [])
+    .find(i => i.id === state.investigation_id);
+  const c = state.counts || {};
+  document.getElementById('icTarget').innerHTML =
+    `<strong>#${state.investigation_id} ${escHtml(inv ? inv.title : 'investigation')}</strong>` +
+    (inv ? ` <span class="status-pill st-${escHtml(inv.status)}">${escHtml(inv.status)}</span>` : '') +
+    ' <span style="color:var(--text3);font-size:11px;">— in focus, chosen in the sidebar</span>';
+  document.getElementById('icCounts').textContent =
+    `${c.artifacts || 0} artifact(s) · ${c.assessments || 0} assessment(s) · ` +
+    `${c.explanations || 0} write-up(s) · ${c.cve_findings || 0} CVE finding(s) · ` +
+    `${c.runs || 0} run(s)`;
+  const available = icState.parts.filter(p => p.available).length;
+  document.getElementById('icPartsCount').textContent =
+    `${available}/${icState.parts.length} available`;
+  document.getElementById('icParts').innerHTML = icState.parts.map(icPartRow).join('');
+}
+
+function icPartRow(p) {
+  const checked = icState.selected.has(p.key) ? ' checked' : '';
+  const last = p.last
+    ? `<span class="status-pill st-${escHtml(p.last.status)}">${escHtml(p.last.status || '—')}</span>` +
+      `<span style="font-size:11px;color:var(--text3);"> #${p.last.id} · ${escHtml(p.last.trigger || '')}` +
+      `${p.last.finished_at ? ' · ' + escHtml(p.last.finished_at.slice(0, 16).replace('T', ' ')) : ''}</span>`
+    : '<span style="font-size:11px;color:var(--text3);">never run</span>';
+  const blocked = p.available ? '' :
+    `<div style="font-size:11px;color:var(--orange);margin-top:3px;">${escHtml(p.blocked_reason || 'not available')}</div>`;
+  return `<label class="mgr-topic" style="cursor:${p.available ? 'pointer' : 'not-allowed'};opacity:${p.available ? 1 : 0.6}">` +
+    `<input type="checkbox" data-ic-part="${escHtml(p.key)}"${checked}${p.available ? '' : ' disabled'} ` +
+    `onchange="icTogglePart('${escHtml(p.key)}', this.checked)" />` +
+    `<span class="grow"><strong>${escHtml(p.label)}</strong>` +
+    `<br/><span style="color:var(--text2);">${escHtml(p.blurb)}</span>` +
+    `<div style="font-size:11px;color:var(--text3);margin-top:3px;"><code>${escHtml(p.endpoint)}</code></div>` +
+    blocked + `</span>${last}</label>`;
+}
+
+function icTogglePart(key, on) {
+  if (on) icState.selected.add(key); else icState.selected.delete(key);
+}
+
+function icSelectAllParts(on) {
+  icState.selected = new Set(on
+    ? icState.parts.filter(p => p.available).map(p => p.key) : []);
+  icRenderCheckboxes();
+}
+
+function icRenderCheckboxes() {
+  icState.parts.forEach(p => {
+    const box = document.querySelector(`[data-ic-part="${p.key}"]`);
+    if (box) box.checked = icState.selected.has(p.key);
+  });
+}
+
+async function icRun(parts, btn) {
+  if (icState.busy) return;
+  const id = icTargetId();
+  if (!id) { showNotif('Pick an investigation in the sidebar first', 'error'); return; }
+  if (!parts.length) { showNotif('Tick at least one part', 'error'); return; }
+  icState.busy = true;
+  const label = btn ? btn.innerHTML : '';
+  if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner spin"></i> Triggering…'; }
+  try {
+    const r = await fetch(`${API}/investigations/${id}/control`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ parts }),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error((d && typeof d.detail === 'string') ? d.detail : `HTTP ${r.status}`);
+    icRenderOutcomes(d);
+    icState.selected.clear();
+    if (d.state) icRenderState(d.state);
+  } catch (e) {
+    showNotif(`Could not trigger: ${e.message}`, 'error');
+  } finally {
+    icState.busy = false;
+    if (btn) { btn.disabled = false; btn.innerHTML = label; }
+  }
+}
+
+function icRunSelected(btn) { icRun([...icState.selected], btn); }
+function icRunAll(btn) { icRun(['*'], btn); }
+
+/* Security risk questionnaire ============================================
+ * Writes the questionnaire the product and services teams fill in. It is
+ * not a "part" of an investigation's work -- it frames a new instrument
+ * rather than re-running something -- so it lives beside the parts list
+ * instead of inside it.
+ *
+ * Prefilled from the investigation in focus, because a questionnaire
+ * scoped to a different system than the one open would be a trap: the
+ * answers would be collected, scored, and reported against the wrong
+ * target without anything looking wrong.
+ */
+const icRq = { draft: null, busy: false, roleLabels: {} };
+
+// Role titles come from the API rather than a copy in JS: the questionnaire
+// routes questions by role, and a stale label here would tell a team they
+// own questions they were never asked.
+async function icRqLoadRoles() {
+  if (Object.keys(icRq.roleLabels).length) return;
+  try {
+    const r = await fetch(`${API}/risk-questionnaire/frameworks`);
+    if (!r.ok) return;
+    const d = await r.json();
+    icRq.roleLabels = Object.fromEntries(
+      (d.roles || []).map(x => [x.key, x.title || x.key]));
+  } catch (e) { /* labels are cosmetic; the keys still render */ }
+}
+
+function icRqPrefill() {
+  const id = icTargetId();
+  const inv = (typeof investigations !== 'undefined' ? investigations : [])
+    .find(i => i.id === id);
+  const box = document.getElementById('icRqQuery');
+  if (!box) return;
+  if (!inv) { showNotif('No investigation in focus to describe', 'error'); return; }
+  const bits = [
+    inv.title,
+    inv.keywords ? `Keywords: ${inv.keywords}.` : '',
+    // The manager footer is bookkeeping, not part of what the system does.
+    (inv.description || '').replace(/\n\s*Part of manager run #\d+\.?\s*$/i, '').trim(),
+  ].filter(Boolean);
+  box.value = bits.join(' ');
+  showNotif('Prefilled from investigation #' + inv.id, 'success');
+}
+
+async function icRqGenerate(btn) {
+  if (icRq.busy) return;
+  const box = document.getElementById('icRqQuery');
+  const query = (box && box.value || '').trim();
+  if (!query) { showNotif('Describe the AI system first', 'error'); return; }
+  icRq.busy = true;
+  const label = btn ? btn.innerHTML : '';
+  if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner spin"></i> Framing…'; }
+  try {
+    const r = await fetch(`${API}/risk-questionnaire/generate`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query, depth: 'standard' }),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error((d && typeof d.detail === 'string') ? d.detail : `HTTP ${r.status}`);
+    icRq.draft = d;
+    icRqRender();
+    const q = d.quality || {};
+    showNotif(`Questionnaire framed: ${q.questions || 0} questions across ` +
+              `${q.sections || 0} sections`, 'success');
+  } catch (e) {
+    showNotif(`Could not frame the questionnaire: ${e.message}`, 'error');
+  } finally {
+    icRq.busy = false;
+    if (btn) { btn.disabled = false; btn.innerHTML = label; }
+  }
+}
+
+function icRqRender() {
+  const host = document.getElementById('icRqResult');
+  const d = icRq.draft;
+  if (!host) return;
+  if (!d) { host.innerHTML = ''; return; }
+  const draft = d.draft || {}, q = d.quality || {}, frame = d.frame || {};
+  const slices = d.role_slices || {};
+  const teams = Object.keys(slices).map(role =>
+    `${icRq.roleLabels[role] || role} (${(slices[role] || []).length})`).join(' · ');
+  host.innerHTML =
+    `<div class="mgr-child"><span class="grow"><strong>Draft #${draft.id} — ${escHtml(draft.target || '')}</strong><br/>` +
+    `<span style="color:var(--text2);">${q.questions || 0} questions · ${q.sections || 0} sections · ` +
+    `${(frame.axes || []).length} security axes · framed by ${escHtml(draft.source || '?')}</span>` +
+    (teams ? `<br/><span style="color:var(--text3);font-size:11px;">Routed to: ${escHtml(teams)}</span>` : '') +
+    `</span></div>` +
+    (q.ok ? '' : `<div style="font-size:11px;color:var(--orange);margin-top:4px;">Quality pass flagged this set; review it before circulating.</div>`) +
+    `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">` +
+    `<a class="btn btn-ghost btn-sm" href="${API}/risk-questionnaire/drafts/${draft.id}/report.md" target="_blank" rel="noopener" title="The fillable form: per-team sections, ratings and an evidence line each"><i class="fas fa-file-lines"></i> Open fillable form</a>` +
+    `<a class="btn btn-ghost btn-sm" href="${API}/risk-questionnaire/drafts/${draft.id}/report.md?format=brief" target="_blank" rel="noopener" title="One-page cover note for whoever approves the work"><i class="fas fa-file"></i> Cover note</a>` +
+    `<button class="btn btn-primary btn-sm" onclick="icRqSeed(this)"><i class="fas fa-play"></i> Start the filling run</button>` +
+    `</div><div id="icRqSeeded" style="margin-top:8px;"></div>`;
+}
+
+async function icRqSeed(btn) {
+  const d = icRq.draft;
+  if (!d) return;
+  const id = icTargetId();
+  const inv = (typeof investigations !== 'undefined' ? investigations : [])
+    .find(i => i.id === id);
+  // The run's target names the investigation it belongs to, so the filled
+  // answers are traceable back to the system they were collected for.
+  const target = inv ? `#${inv.id} ${inv.title}` : (d.draft.target || 'ai-system');
+  const label = btn ? btn.innerHTML : '';
+  if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner spin"></i> Opening…'; }
+  try {
+    const r = await fetch(`${API}/risk-questionnaire/drafts/${d.draft.id}/seed`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ target, title: `Risk questionnaire — ${target}` }),
+    });
+    const out = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error((out && typeof out.detail === 'string') ? out.detail : `HTTP ${r.status}`);
+    const host = document.getElementById('icRqSeeded');
+    if (host) {
+      host.innerHTML = `<div style="font-size:12px;color:var(--green);margin-bottom:6px;">` +
+        `Run #${out.run_id} open — ${out.questions} questions across ` +
+        `${(d.quality.roles || []).length} teams. Hand each team its section of the form; ` +
+        `answers are scored and coverage reported when you complete the run.</div>` +
+        `<div style="display:flex;gap:8px;flex-wrap:wrap;">` +
+        `<a class="btn btn-ghost btn-sm" href="${API}/risk-questionnaire/runs/${out.run_id}" target="_blank" rel="noopener"><i class="fas fa-list-check"></i> Fill state</a>` +
+        `<a class="btn btn-ghost btn-sm" href="${API}/risk-questionnaire/runs/${out.run_id}/coverage" target="_blank" rel="noopener"><i class="fas fa-scale-balanced"></i> Standards coverage</a>` +
+        `<a class="btn btn-ghost btn-sm" href="${API}/risk-questionnaire/runs/${out.run_id}/report.md" target="_blank" rel="noopener"><i class="fas fa-file-lines"></i> Report</a>` +
+        `</div>`;
+    }
+    showNotif(`Questionnaire run #${out.run_id} opened`, 'success');
+  } catch (e) {
+    showNotif(`Could not open the run: ${e.message}`, 'error');
+    if (btn) { btn.disabled = false; btn.innerHTML = label; }
+  }
+}
+
+function icRenderOutcomes(out) {
+  const card = document.getElementById('icResultCard');
+  card.hidden = false;
+  const counts = out.counts || {};
+  const tone = { launched: 'run', collected: 'run', computed: 'ready',
+                 skipped: 'draft', nothing_to_do: 'draft', failed: 'error' };
+  const rows = (out.outcomes || []).map(o =>
+    `<div class="mgr-child"><span class="grow"><strong>${escHtml(o.label || o.part)}</strong><br/>` +
+    `<span style="color:var(--text2);">${escHtml(o.detail || '')}</span></span>` +
+    `<span class="status-pill st-${tone[o.status] || 'draft'}">${escHtml(o.status)}</span></div>`).join('');
+  document.getElementById('icResult').innerHTML =
+    `<div style="font-size:12px;color:var(--text2);margin-bottom:8px;">` +
+    `${counts.launched || 0} ran · ${counts.skipped || 0} skipped · ` +
+    `${counts.failed || 0} failed · ${counts.nothing_to_do || 0} nothing to do` +
+    (counts.failed ? ' <span style="color:var(--orange);">— one part failing does not stop the others.</span>' : '') +
+    `</div>` + (rows || '<p style="color:var(--text2);font-size:12px;">Nothing to do.</p>');
+  if (out.outcomes && out.outcomes.some(o => o.status === 'launched')) {
+    showNotif('Triggered — parts report their own outcome below', 'success');
   }
 }
 
@@ -9659,6 +10114,13 @@ function mgrPlanFromRun(run) {
     exposure: run.exposure || 'confidential_data',
     topics,
     summary: run.summary || {},
+    // The run's own mix, not a re-detected one: re-running is how an
+    // override gets applied to more topics, so losing it here would make
+    // the untick pointless on the second run.
+    plugins: run.plugins || [],
+    // Same for depth, which the radios need a catalog to render.
+    depths: run.depths || {},
+    suggested_depth: (run.options || {}).depth || 'standard',
     parsed_by: 'rerun',
   };
 }

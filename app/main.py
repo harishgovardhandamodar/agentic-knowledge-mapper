@@ -17,6 +17,7 @@ from . import (
     evalkit,
     ledger_api,
     llm,
+    patterns_kb,
     scheduler,
     security_agent,
     standards_matrix,
@@ -73,6 +74,9 @@ app.include_router(payments_eval_api_mod.router)
 from . import eval_draft_api as eval_draft_api_mod
 
 app.include_router(eval_draft_api_mod.router)
+from . import risk_questionnaire_api as risk_questionnaire_api_mod
+
+app.include_router(risk_questionnaire_api_mod.router)
 RISK_CONSOLE_ENABLED = os.getenv("RISK_CONSOLE_ENABLED", "1") != "0"
 
 app.add_middleware(
@@ -164,6 +168,17 @@ if os.path.isdir(static_dir):
         if os.path.isfile(fluid_index):
             return FileResponse(fluid_index, headers={"Cache-Control": "no-cache"})
         raise HTTPException(404, "Not found")
+
+# AI Agents Patterns knowledge base: the sibling ../AI-Agents-Patterns SPA
+# served same-origin at /patterns/ so the Classic GUI can iframe it without a
+# second port or CORS. Skipped when the sibling checkout is absent (e.g. a
+# minimal image) -- the API then reports available: false and the tab shows
+# the reason instead of a broken frame.
+_patterns_probe = patterns_kb.available()
+if _patterns_probe.get("available"):
+    app.mount("/patterns", StaticFiles(directory=_patterns_probe["directory"],
+                                       html=True),
+              name="patterns-kb")
 
 
 @app.on_event("startup")
@@ -1560,6 +1575,83 @@ def investigation_gaps_run(inv_id: int, data: GapResearchRequest,
                                max_items=data.max_items or 12)
 
 
+# ---------- investigation control: rerun all or parts --------------------
+# One place that answers "what can this investigation still run, what is
+# already running, and what would a re-run do". Each part is dispatched
+# through the endpoint that already owns its guards, so this surface cannot
+# drift from the buttons it mirrors.
+
+
+class InvestigationControlRequest(BaseModel):
+    """Empty parts means every available part -- the "rerun full" trigger."""
+    parts: list[str] | None = None
+    max_items: int = 25
+    max_rounds: int = 2
+    top_n: int = 3
+    product_name: str = ""
+    product_url: str = ""
+    use_case: str = ""
+    exposure: str = "confidential_data"
+    assessment_mode: str = ""
+    allow_partial: bool = True
+    question: str = ""
+    mode: str = "explain"
+    explain_depth: str = "balanced"
+    audience: str = "intermediate"
+    max_pages: int = 6
+    hypothesis_id: str = ""
+
+
+@app.get("/api/investigations/{inv_id}/control")
+def investigation_control_state(inv_id: int, db: Session = Depends(get_db)):
+    """Per-part availability, busy state and last run. No side effects."""
+    from . import investigation_control as ic
+    if not db.query(Investigation).filter(
+            Investigation.id == inv_id).first():
+        raise HTTPException(404, "Investigation not found")
+    return ic.part_state(db, inv_id)
+
+
+@app.post("/api/investigations/{inv_id}/control")
+def investigation_control_run(inv_id: int, data: InvestigationControlRequest,
+                              request: Request, db: Session = Depends(get_db)):
+    """Re-run selected parts, or every available part when none are named."""
+    from . import investigation_control as ic
+    if not db.query(Investigation).filter(
+            Investigation.id == inv_id).first():
+        raise HTTPException(404, "Investigation not found")
+    params = {
+        "max_items": data.max_items, "max_rounds": data.max_rounds,
+        "top_n": data.top_n, "product_name": data.product_name,
+        "product_url": data.product_url, "use_case": data.use_case,
+        "exposure": data.exposure, "assessment_mode": data.assessment_mode,
+        "allow_partial": data.allow_partial, "question": data.question,
+        "mode": data.mode, "explain_depth": data.explain_depth,
+        "audience": data.audience, "max_pages": data.max_pages,
+        "hypothesis_id": data.hypothesis_id,
+    }
+    if data.parts is not None and data.parts and len(data.parts) == 1 and \
+            data.parts[0] in ("*", "all"):
+        data.parts = None
+    try:
+        out = ic.launch(db, inv_id, parts=data.parts, params=params,
+                        request=request, actor=getattr(request.state, "actor",
+                                                       "") or "")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    # One ledger entry for the whole fan-out, plus the per-part detail in the
+    # payload: the operator asked once, so the audit records one action.
+    try:
+        ledger_api.human_action(request, "investigation_control_rerun", {
+            "investigation": inv_id, "requested": out["requested"],
+            "counts": out["counts"],
+            "outcomes": [{k: o.get(k) for k in ("part", "status", "detail")}
+                         for o in out["outcomes"]]})
+    except Exception:
+        pass
+    return out
+
+
 @app.get("/api/investigations/{inv_id}/summary")
 def investigation_summary(inv_id: int, db: Session = Depends(get_db)):
     """Executive summary with supporting artifacts and top findings."""
@@ -2072,6 +2164,34 @@ def design_doc(doc_id: str):
         raise HTTPException(404, "Unknown design document")
     except FileNotFoundError as e:
         raise HTTPException(404, f"Design document not on disk: {e}")
+
+
+# ------------------------------------------------- AI Agents Patterns tab --
+# Read-only index into the sibling AI-Agents-Patterns catalog (advice-first:
+# patterns, failure scenarios, composition cascades). The full SPA is served
+# same-origin at /patterns/ (see the mount above); these endpoints let this
+# app's own surfaces cite catalog counts and entries without loading it.
+
+@app.get("/api/patterns/status")
+def patterns_status():
+    """Is the sibling catalog present, and where is it served from?"""
+    probe = patterns_kb.available()
+    if probe.get("available"):
+        probe["url"] = "/patterns/"
+    return probe
+
+
+@app.get("/api/patterns/summary")
+def patterns_summary():
+    """Catalog counts (patterns, scenarios, cascades, traces + breakdowns)."""
+    return patterns_kb.summary()
+
+
+@app.get("/api/patterns/search")
+def patterns_search(q: str = Query(""), kind: str = Query("all"),
+                    limit: int = Query(20, le=50)):
+    """Lexical search over the catalog; hits link back to the Patterns tab."""
+    return patterns_kb.search(q, kind=kind, limit=limit)
 
 
 @app.post("/api/security/assessments/{assessment_id}/rescore")

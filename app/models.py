@@ -689,6 +689,13 @@ class EvaluationQuestion(Base):
     severity_hint = Column(String(20), nullable=True)  # low|medium|high|critical
     order_index = Column(Integer, nullable=False, default=0)
     is_active = Column(Integer, nullable=False, default=1)
+    # Risk-questionnaire additions (app/risk_questionnaire.py): the team
+    # expected to answer this, and the AI-standards controls its answer
+    # evidences. Both nullable because the payments catalog does not set
+    # them; a defaulted owner would route a question to a team that has
+    # never heard of it, which is worse than no owner at all.
+    answerer_role = Column(String(60), nullable=True)
+    framework_tags_json = Column(Text, nullable=True)
 
     section = relationship("EvaluationSection", back_populates="questions")
 

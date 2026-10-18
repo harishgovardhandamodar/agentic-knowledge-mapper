@@ -1,10 +1,15 @@
 """Manager plan card: plugin mix + episode depth, checked headlessly.
 
 After parsing, the operator must see which investigation-type plugins
-take part and pick a depth before running. This drives the *real*
-mgrRenderPlan/mgrDepthPreset out of static/index.html in Node and the
-parse/run endpoints, so a renamed key or a dropped block fails here
+take part, pick or drop them, and pick a depth before running. This drives
+the *real* mgrRenderPlan/mgrDepthPreset out of static/index.html in Node and
+the parse/run endpoints, so a renamed key or a dropped block fails here
 instead of silently in the browser.
+
+Two Node smokes, because they catch different things: the markup one proves
+the controls are wired to the payload, and the cascade one proves the chip
+checkboxes are not painted as disabled fields by a stylesheet rule that
+applies to every input inside `.std-filters`.
 
 Skipped, not failed, when Node is absent.
 """
@@ -26,6 +31,8 @@ _db.init_db()
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SMOKE = os.path.join(HERE, "js", "manager_plan_smoke.js")
+CSS_SMOKE = os.path.join(HERE, "js", "mgr_plugin_css_smoke.js")
+CONTROL_SMOKE = os.path.join(HERE, "js", "investigation_control_smoke.js")
 
 
 class ManagerPlanCase(unittest.TestCase):
@@ -41,6 +48,41 @@ class ManagerPlanCase(unittest.TestCase):
         self.assertEqual(
             r.returncode, 0,
             f"manager plan smoke did not pass:\n{r.stdout}\n{r.stderr}")
+        self.assertIn("PASS", r.stdout)
+
+    def test_plugin_chips_are_not_styled_like_disabled_fields(self):
+        """The chips must be operable controls, not badges that look dead.
+
+        They once rendered inside `.std-filters`, whose `input` rule
+        stretches every descendant input to `flex: 1; min-width: 160px`
+        with a field background: a checkbox painted as a wide empty box,
+        which an operator reads as disabled. Markup assertions pass for
+        that, so the cascade is checked here too.
+        """
+        if not self.node:
+            self.skipTest("node is not on PATH; the chip CSS is unchecked")
+        r = subprocess.run([self.node, CSS_SMOKE], capture_output=True,
+                           text=True, timeout=120)
+        self.assertEqual(
+            r.returncode, 0,
+            f"manager plugin css smoke did not pass:\n{r.stdout}\n{r.stderr}")
+        self.assertIn("PASS", r.stdout)
+
+    def test_investigation_control_panel_reflects_backend_state(self):
+        """The control sub-tab must not offer a part the backend refuses.
+
+        The panel's rows come from /api/investigations/{id}/control, so the
+        properties that matter are behavioural: an unavailable part renders
+        disabled with its reason, and a tick left over from a state that has
+        since changed is dropped instead of reaching a trigger.
+        """
+        if not self.node:
+            self.skipTest("node is not on PATH; the control panel is unchecked")
+        r = subprocess.run([self.node, CONTROL_SMOKE], capture_output=True,
+                           text=True, timeout=120)
+        self.assertEqual(
+            r.returncode, 0,
+            f"investigation control smoke did not pass:\n{r.stdout}\n{r.stderr}")
         self.assertIn("PASS", r.stdout)
 
     def test_parse_announces_plugins_and_depths(self):

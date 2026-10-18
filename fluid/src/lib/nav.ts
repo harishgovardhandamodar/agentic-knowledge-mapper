@@ -21,6 +21,7 @@ import {
   Compass,
   FileOutput,
   FlaskConical,
+  Shapes,
 } from 'lucide-react';
 
 export interface NavItem {
@@ -47,6 +48,7 @@ export const NAV_ITEMS: NavItem[] = [
   { href: '/report', label: 'Report', icon: FileOutput, hint: 'Exportable research report with its limitations', built: true, group: 'analysis' },
   { href: '/privacy', label: 'Privacy', icon: Lock, hint: 'External-reach budget and erasure', built: true, group: 'analysis' },
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard, hint: 'Cross-investigation metrics', built: false, group: 'analysis' },
+  { href: '/agents', label: 'Agent Patterns & Advisor', icon: Shapes, hint: 'Patterns, scenarios and guardrail advice', built: false, group: 'analysis' },
   { href: '/manager', label: 'Manager', icon: Users, hint: 'Review queue and stewardship', built: false, group: 'system' },
   { href: '/console', label: 'Console', icon: Terminal, hint: 'Runs, logs and reproducibility manifests', built: false, group: 'system' },
   { href: '/design', label: 'Design', icon: Palette, hint: 'Tokens and component gallery', built: true, group: 'system' },
